@@ -1,0 +1,43 @@
+#!/bin/bash
+set -e
+
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# ─── Create dedicated service user (DEFECT-04) ──────────────────
+# MediaMTX and ffmpeg-cam both run as this user. No shell, no home.
+if ! id -u mediamtx >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin \
+            --comment "MediaMTX streaming service" mediamtx
+fi
+
+# ffmpeg needs /dev/video* access; 'video' group grants it.
+usermod -aG video mediamtx
+
+# ─── Ensure persistent config directory exists ──────────────────
+# device.env lives here. This directory ships with the package
+# but we re-enforce ownership on upgrade in case it was touched.
+mkdir -p /etc/hls-livecam
+chown mediamtx:mediamtx /etc/hls-livecam
+chmod 755 /etc/hls-livecam
+
+# /usr/local/etc holds mediamtx.yml after setup writes it.
+# Pre-create and set ownership so setup can write as mediamtx later
+# if ever refactored; harmless if already correct.
+mkdir -p /usr/local/etc
+if [ -f /usr/local/etc/mediamtx.yml ]; then
+    chown mediamtx:mediamtx /usr/local/etc/mediamtx.yml
+fi
+
+echo ""
+echo -e "${GREEN}hls-livecam-server installed.${NC}"
+echo ""
+echo "Run the setup wizard to configure your webcam:"
+echo ""
+echo -e "  ${YELLOW}sudo hls-livecam-setup${NC}"
+echo ""
+echo "This will auto-detect your webcam, configure MediaMTX,"
+echo "and start the stream."
+echo ""

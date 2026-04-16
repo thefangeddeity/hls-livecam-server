@@ -1,0 +1,15 @@
+Package: hls-livecam-server
+Version: 2.1.3
+Section: video
+Priority: optional
+Architecture: amd64
+Depends: ffmpeg, nginx, v4l-utils, python3, python3-psutil, wget, ca-certificates
+Recommends: curl
+Maintainer: hls-livecam-server maintainers <hls-livecam@example.org>
+Description: HLS webcam streaming server with web viewer
+ Streams a USB webcam via HLS using MediaMTX and ffmpeg.
+ Includes an nginx-served web viewer with retro terminal UI.
+ Supports Chrome, Firefox, and Safari.
+ .
+ On first install, run: sudo hls-livecam-setup
+ To repair a broken stream: sudo hls-livecam-repair

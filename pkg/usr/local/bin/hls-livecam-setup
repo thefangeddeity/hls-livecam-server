@@ -1,0 +1,331 @@
+#!/bin/bash
+set -e
+
+YELLOW='\033[1;33m'; GREEN='\033[0;32m'; RED='\033[0;31m'
+CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
+
+MEDIAMTX_VERSION="1.15.2"
+MEDIAMTX_URL="https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/mediamtx_v${MEDIAMTX_VERSION}_linux_amd64.tar.gz"
+# If MEDIAMTX_VERSION is bumped, update this hash in the same commit.
+# Obtain with:
+#   curl -sL https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/checksums.sha256 | grep linux_amd64.tar.gz
+MEDIAMTX_SHA256="8143486d886cc2d5c76f98d687cfb2ee6daf947fd45989c9322c0618057dcf5b"
+
+MEDIAMTX_BIN="/usr/local/bin/mediamtx"
+MEDIAMTX_CONF="/usr/local/etc/mediamtx.yml"
+NGINX_SITE="/etc/nginx/sites-available/hls-livecam"
+WEB_ROOT="/var/www/hls-livecam"
+SHARE_DIR="/usr/share/hls-livecam-server"
+DEVICE_ENV_DIR="/etc/hls-livecam"
+DEVICE_ENV="${DEVICE_ENV_DIR}/device.env"
+FFMPEG_UNIT_TEMPLATE="${SHARE_DIR}/ffmpeg-cam.service"
+FFMPEG_UNIT_DST="/etc/systemd/system/ffmpeg-cam.service"
+MEDIAMTX_UNIT_DST="/etc/systemd/system/mediamtx.service"
+INDEX_TEMPLATE="${SHARE_DIR}/index.html"
+
+echo ""
+echo -e "${CYAN}${BOLD}╔══════════════════════════════════════╗${NC}"
+echo -e "${CYAN}${BOLD}║     hls-livecam-server  setup        ║${NC}"
+echo -e "${CYAN}${BOLD}╚══════════════════════════════════════╝${NC}"
+echo ""
+
+[ "$EUID" -ne 0 ] && { echo -e "${RED}Run as root: sudo hls-livecam-setup${NC}"; exit 1; }
+
+if ! id -u mediamtx >/dev/null 2>&1; then
+  echo -e "${RED}The 'mediamtx' system user is missing.${NC}"
+  echo "This means the package postinst did not run correctly."
+  echo "Try: sudo apt install --reinstall hls-livecam-server"
+  exit 1
+fi
+
+# ── Detect video devices ──────────────────────────────────────
+echo -e "${BOLD}Detecting webcams...${NC}"
+VIDEO_DEVICES=()
+for dev in /dev/video*; do
+  [ -e "$dev" ] || continue
+  if v4l2-ctl --device="$dev" --info 2>/dev/null | grep -q "Video Capture"; then
+    NAME=$(v4l2-ctl --device="$dev" --info 2>/dev/null | grep "Card type" | cut -d: -f2 | xargs)
+    VIDEO_DEVICES+=("$dev ($NAME)")
+    echo "  Found: $dev — $NAME"
+  fi
+done
+
+[ ${#VIDEO_DEVICES[@]} -eq 0 ] && { echo -e "${RED}No webcam found. Try: lsusb, v4l2-ctl --list-devices${NC}"; exit 1; }
+
+if [ ${#VIDEO_DEVICES[@]} -eq 1 ]; then
+  VIDEO_DEV=$(echo "${VIDEO_DEVICES[0]}" | cut -d' ' -f1)
+  echo -e "  ${GREEN}Using: $VIDEO_DEV${NC}"
+else
+  echo ""
+  echo "Multiple webcams found. Which one to use?"
+  select opt in "${VIDEO_DEVICES[@]}"; do
+    VIDEO_DEV=$(echo "$opt" | cut -d' ' -f1); break
+  done
+fi
+
+# ── Resolve stable device ID ──────────────────────────────────
+echo ""
+echo -e "${BOLD}Resolving stable device ID...${NC}"
+STABLE_DEV=""
+if [ -d /dev/v4l/by-id ]; then
+  for symlink in /dev/v4l/by-id/*; do
+    [ -e "$symlink" ] || continue
+    target=$(readlink -f "$symlink")
+    if [ "$target" = "$VIDEO_DEV" ]; then
+      STABLE_DEV="$symlink"
+      break
+    fi
+  done
+fi
+
+if [ -z "$STABLE_DEV" ]; then
+  echo -e "  ${YELLOW}WARNING: No stable /dev/v4l/by-id symlink found for $VIDEO_DEV${NC}"
+  echo -e "  ${YELLOW}Falling back to $VIDEO_DEV — device may not survive reboot.${NC}"
+  STABLE_DEV="$VIDEO_DEV"
+else
+  echo -e "  ${GREEN}Stable path: $STABLE_DEV${NC}"
+fi
+
+# ── Check MJPEG support ──────────────────────────────────────
+echo ""
+echo -e "${BOLD}Checking webcam capabilities...${NC}"
+if v4l2-ctl --device="$VIDEO_DEV" --list-formats-ext 2>/dev/null | grep -qi "mjpg\|mjpeg"; then
+  # INPUT_FMT_ARGS is substituted literally into the unit file's ExecStart.
+  # Note the trailing space — ensures clean token boundary when present.
+  INPUT_FMT_ARGS="-input_format mjpeg "
+  echo -e "  ${GREEN}MJPEG supported — optimal.${NC}"
+else
+  INPUT_FMT_ARGS=""
+  echo -e "  ${YELLOW}MJPEG not available — using default format.${NC}"
+fi
+
+# ── Download and verify MediaMTX ──────────────────────────────
+echo ""
+echo -e "${BOLD}Installing MediaMTX v${MEDIAMTX_VERSION}...${NC}"
+
+TMP_TGZ="/tmp/mediamtx_${MEDIAMTX_VERSION}.tar.gz"
+TMP_EXTRACT="/tmp/mediamtx_${MEDIAMTX_VERSION}_extract"
+
+# Always fetch-and-verify on each setup run. Overwriting mediamtx.yml from
+# the shipped default below is safer than trying to edit an existing one
+# (prior edits can accumulate — that's how we got duplicate runOnInit blocks).
+NEED_DOWNLOAD=1
+if [ -f "$MEDIAMTX_BIN" ] && [ -f "$MEDIAMTX_CONF.default" ]; then
+  NEED_DOWNLOAD=0
+  echo -e "  ${GREEN}Binary and default config already present — skipping download.${NC}"
+fi
+
+if [ "$NEED_DOWNLOAD" -eq 1 ]; then
+  echo "  Downloading ${MEDIAMTX_URL}..."
+  wget -q --show-progress "$MEDIAMTX_URL" -O "$TMP_TGZ"
+
+  echo "  Verifying integrity..."
+  echo "${MEDIAMTX_SHA256}  ${TMP_TGZ}" | sha256sum -c - || {
+    echo -e "  ${RED}ERROR: SHA256 mismatch — tarball is corrupt or tampered.${NC}"
+    echo -e "  ${RED}Expected: ${MEDIAMTX_SHA256}${NC}"
+    rm -f "$TMP_TGZ"
+    exit 1
+  }
+  echo -e "  ${GREEN}Integrity OK.${NC}"
+
+  rm -rf "$TMP_EXTRACT"
+  mkdir -p "$TMP_EXTRACT"
+  tar -xzf "$TMP_TGZ" -C "$TMP_EXTRACT"
+
+  install -m 0755 "$TMP_EXTRACT/mediamtx" "$MEDIAMTX_BIN"
+  # Keep a pristine copy of the upstream default so re-runs of setup
+  # always start from a clean base, regardless of prior edits.
+  mkdir -p "$(dirname "$MEDIAMTX_CONF")"
+  install -m 0644 "$TMP_EXTRACT/mediamtx.yml" "$MEDIAMTX_CONF.default"
+
+  rm -rf "$TMP_EXTRACT"
+  rm -f "$TMP_TGZ"
+  echo -e "  ${GREEN}Binary: $MEDIAMTX_BIN${NC}"
+fi
+
+# ── Write MediaMTX config (overwrite from default, append paths) ──
+# No regex stripping. We always start from the pristine upstream default
+# and append our paths: block. Setup is idempotent by overwrite.
+echo ""
+echo -e "${BOLD}Writing MediaMTX config...${NC}"
+cp "$MEDIAMTX_CONF.default" "$MEDIAMTX_CONF"
+# Strip any lingering paths: section at the tail of the default file,
+# then append our minimal passive-ingest block.
+python3 <<PYEOF
+import re
+p = "$MEDIAMTX_CONF"
+with open(p) as f:
+    content = f.read()
+# Cut everything from a top-level 'paths:' line onward (MediaMTX defaults
+# include an example paths: at the end). We replace it wholesale.
+content = re.sub(r'(?m)^paths:.*\Z', '', content, flags=re.DOTALL)
+content = content.rstrip()
+# Our appended block: passive RTSP ingest only, no runOnInit.
+# The upstream default file contains runOnInit elsewhere as documentation
+# for its default-path-settings section — those are harmless commented-out
+# or empty-value examples. The only thing we actively want to guarantee
+# is that our OWN appended paths: block is free of runOnInit.
+appended = "\n\npaths:\n  cam:\n  all_others:\n"
+content += appended
+with open(p, 'w') as f:
+    f.write(content)
+
+# Sanity: our appended block is what we think it is.
+assert 'runOnInit' not in appended, "FATAL: runOnInit in our appended block"
+# Sanity: the file ends with our block — nothing else has a top-level paths:
+# header after what we just wrote.
+tail = content[content.rfind('\npaths:'):]
+assert 'runOnInit: ' not in tail or all(
+    # allow 'runOnInit:' only as a bare key with no value (harmless)
+    line.strip().startswith('#') or line.strip() in ('runOnInit:', '')
+    for line in tail.split('\n') if 'runOnInit' in line
+), "FATAL: non-empty runOnInit value survives in our paths: section"
+print("  OK: passive paths block appended, no active runOnInit in our section")
+PYEOF
+chown mediamtx:mediamtx "$MEDIAMTX_CONF"
+chmod 0644 "$MEDIAMTX_CONF"
+
+# ── Write persistent device.env (kept for hls-livecam-repair) ─
+# Repair script still reads this to know which device to restart against.
+# The ffmpeg-cam unit no longer uses EnvironmentFile — all values are
+# baked literally into ExecStart below.
+echo ""
+echo -e "${BOLD}Writing ${DEVICE_ENV}...${NC}"
+mkdir -p "$DEVICE_ENV_DIR"
+cat > "$DEVICE_ENV" <<EOF
+# hls-livecam-server — persistent device config
+# Written by hls-livecam-setup. Consumed by hls-livecam-repair.
+# NOTE: ffmpeg-cam.service reads its config from the literal ExecStart
+# line in the unit file, not from this file. This file exists so that
+# hls-livecam-repair knows which device to target when killing stray
+# ffmpeg processes.
+VIDEO_DEVICE=${STABLE_DEV}
+V4L2_INPUT_FMT=${INPUT_FMT_ARGS% }
+VIDEO_SIZE=1280x720
+FRAMERATE=30
+EOF
+chown mediamtx:mediamtx "$DEVICE_ENV_DIR" "$DEVICE_ENV"
+chmod 0755 "$DEVICE_ENV_DIR"
+chmod 0644 "$DEVICE_ENV"
+
+# ── Install mediamtx.service ─────────────────────────────────
+echo ""
+echo -e "${BOLD}Installing mediamtx.service...${NC}"
+cat > "$MEDIAMTX_UNIT_DST" <<EOF
+[Unit]
+Description=MediaMTX streaming server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mediamtx
+Group=mediamtx
+ExecStart=/usr/local/bin/mediamtx ${MEDIAMTX_CONF}
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mediamtx
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 0644 "$MEDIAMTX_UNIT_DST"
+
+# ── Install ffmpeg-cam.service (substitute placeholders) ─────
+# CRITICAL: systemd's ExecStart does NOT do shell-style word splitting
+# on environment variables. A line like "ExecStart=ffmpeg ${X}" where
+# X="-input_format mjpeg" would pass "-input_format mjpeg" to ffmpeg
+# as a SINGLE argv token, which ffmpeg rejects. So we substitute the
+# values into the unit file text BEFORE systemd parses it.
+echo ""
+echo -e "${BOLD}Installing ffmpeg-cam.service...${NC}"
+
+# Build the unit via sed, then validate by grepping for leftover placeholders.
+# Use a delimiter that won't appear in device paths (|).
+sed \
+  -e "s|@INPUT_FMT_ARGS@|${INPUT_FMT_ARGS}|g" \
+  -e "s|@VIDEO_SIZE@|1280x720|g" \
+  -e "s|@FRAMERATE@|30|g" \
+  -e "s|@VIDEO_DEVICE@|${STABLE_DEV}|g" \
+  "$FFMPEG_UNIT_TEMPLATE" > "$FFMPEG_UNIT_DST"
+
+if grep '^ExecStart=' "$FFMPEG_UNIT_DST" | grep -q '@[A-Z_]*@'; then
+  echo -e "  ${RED}ERROR: unsubstituted placeholders in ffmpeg-cam.service ExecStart:${NC}"
+  grep -n '@[A-Z_]*@' "$FFMPEG_UNIT_DST"
+  exit 1
+fi
+chmod 0644 "$FFMPEG_UNIT_DST"
+echo "  ExecStart line:"
+grep '^ExecStart=' "$FFMPEG_UNIT_DST" | sed 's/^/    /' | fold -s -w 78 | sed '2,$s/^/      /'
+
+# ── Activate services ────────────────────────────────────────
+systemctl daemon-reload
+systemctl enable mediamtx ffmpeg-cam
+systemctl restart mediamtx
+# Brief pause so mediamtx binds :8554 before ffmpeg-cam starts.
+# ffmpeg's own RTSP retry handles any residual race.
+sleep 2
+systemctl restart ffmpeg-cam
+echo -e "  ${GREEN}mediamtx + ffmpeg-cam started.${NC}"
+
+# ── nginx ─────────────────────────────────────────────────────
+# Use enable --now to ensure nginx is running before we try to reload it.
+# Fresh Debian/Ubuntu installs ship nginx disabled after `apt install`;
+# v2.0.0's `systemctl restart nginx` masked this because restart starts
+# a stopped unit, but `reload` does not — hence the 2.1.0 bug.
+echo ""
+echo -e "${BOLD}Configuring nginx...${NC}"
+mkdir -p "$WEB_ROOT"
+
+# Substitute @HOSTNAME@ into index.html at install time (no runtime JS).
+HOSTNAME_VAL=$(hostname)
+sed "s|@HOSTNAME@|${HOSTNAME_VAL}|g" "$INDEX_TEMPLATE" > "$WEB_ROOT/index.html"
+chmod 0644 "$WEB_ROOT/index.html"
+
+cat > "$NGINX_SITE" <<EOF
+server {
+    listen 80 default_server;
+    root $WEB_ROOT;
+    index index.html;
+    location / {
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        add_header Pragma "no-cache";
+        expires 0;
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+
+ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/hls-livecam
+rm -f /etc/nginx/sites-enabled/default
+
+nginx -t
+# enable --now: start it if it isn't running, enable on boot either way.
+# Then reload to pick up our new site config.
+systemctl enable --now nginx
+systemctl reload nginx
+echo -e "  ${GREEN}nginx configured and serving.${NC}"
+
+# ── Done ──────────────────────────────────────────────────────
+IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}${BOLD}  hls-livecam-server is running!${NC}"
+echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "  Web viewer:  ${YELLOW}http://$IP${NC}"
+echo -e "  HLS stream:  ${YELLOW}http://$IP:8888/cam/index.m3u8${NC}"
+echo -e "  RTSP (VLC):  ${YELLOW}rtsp://$IP:8554/cam${NC}"
+echo ""
+echo -e "  Video: ${CYAN}$STABLE_DEV${NC}"
+echo -e "  Host:  ${CYAN}${HOSTNAME_VAL}${NC}"
+echo ""
+echo -e "Services:       ${YELLOW}systemctl status mediamtx ffmpeg-cam${NC}"
+echo -e "Logs:           ${YELLOW}journalctl -u ffmpeg-cam -f${NC}"
+echo -e "To repair:      ${YELLOW}sudo hls-livecam-repair${NC}"
+echo -e "To reconfigure: ${YELLOW}sudo hls-livecam-setup${NC}"
+echo ""

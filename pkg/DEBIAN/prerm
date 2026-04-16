@@ -1,0 +1,30 @@
+#!/bin/bash
+set -e
+
+# NOTE: This script intentionally does NOT stop nginx.
+# The v2.0.0 prerm called `systemctl stop nginx`, which tears down
+# the system-wide nginx process and any unrelated sites it serves.
+# We only remove our own site config and reload.
+echo "Removing hls-livecam nginx site..."
+
+rm -f /etc/nginx/sites-enabled/hls-livecam
+rm -f /etc/nginx/sites-available/hls-livecam
+
+# Reload only — never stop. If nginx -t fails for unrelated reasons
+# we still want removal to continue, hence the `|| true`.
+nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
+
+# Stop and disable our own services only.
+systemctl stop ffmpeg-cam 2>/dev/null || true
+systemctl disable ffmpeg-cam 2>/dev/null || true
+systemctl stop mediamtx 2>/dev/null || true
+systemctl disable mediamtx 2>/dev/null || true
+systemctl daemon-reload 2>/dev/null || true
+
+# NOTE: /etc/hls-livecam/ is intentionally NOT removed here.
+# User config (device.env) should survive `dpkg -r` and only
+# be cleared by `dpkg --purge`, which is handled by a postrm
+# purge hook if needed. v2.1.0 does not ship a postrm — the
+# config directory persists across removal/reinstall cycles.
+
+echo "hls-livecam-server removed."

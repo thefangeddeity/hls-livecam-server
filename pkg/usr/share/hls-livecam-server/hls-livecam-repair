@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""
+hls-livecam-repair — restarts the ffmpeg-cam + mediamtx pipeline
+using the persistent device config written by hls-livecam-setup.
+
+Run with: sudo hls-livecam-repair
+
+v2.1.0 model: ffmpeg runs as its own systemd unit (ffmpeg-cam.service),
+independent peer to mediamtx.service. Repair restarts both services
+in dependency-friendly order. The ffmpeg command line and target
+device live in /etc/hls-livecam/device.env — never hardcoded here.
+"""
+import os
+import subprocess
+import sys
+
+DEVICE_ENV = "/etc/hls-livecam/device.env"
+
+# Keys we require from device.env. If any are missing, setup was
+# not completed or the file was tampered with — repair cannot proceed.
+REQUIRED_KEYS = ("VIDEO_DEVICE", "VIDEO_SIZE", "FRAMERATE")
+# V4L2_INPUT_FMT is required as a key but may be empty (cameras
+# without MJPEG). So it's checked separately.
+OPTIONAL_KEYS = ("V4L2_INPUT_FMT",)
+
+
+def run(cmd, check=False):
+    """Run a shell command, stream its output."""
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if r.stdout.strip():
+        print(r.stdout.strip())
+    if r.stderr.strip():
+        print("ERR:", r.stderr.strip())
+    if check and r.returncode != 0:
+        sys.exit(r.returncode)
+    return r
+
+
+def parse_env_file(path):
+    """
+    Parse a shell-sourceable key=value file.
+    Lines starting with # are comments. Values may be quoted.
+    """
+    env = {}
+    with open(path) as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip()
+            # Strip surrounding quotes if present
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                val = val[1:-1]
+            env[key] = val
+    return env
+
+
+def main():
+    print("=" * 50)
+    print("  hls-livecam-repair")
+    print("=" * 50)
+
+    if os.geteuid() != 0:
+        print("Run as root: sudo hls-livecam-repair")
+        sys.exit(1)
+
+    # ── [1] Load persistent device config ─────────────────────
+    # This is the contract surface between setup and repair.
+    # If device.env is absent, fail loud — do NOT fall back to
+    # /dev/video0 (that was the v2.0.0 bug this rewrite fixes).
+    print(f"\n[1] Loading {DEVICE_ENV}...")
+    if not os.path.exists(DEVICE_ENV):
+        print(f"    ERROR: {DEVICE_ENV} not found.")
+        print("    Run sudo hls-livecam-setup first.")
+        sys.exit(2)
+
+    try:
+        env = parse_env_file(DEVICE_ENV)
+    except Exception as e:
+        print(f"    ERROR: could not parse {DEVICE_ENV}: {e}")
+        sys.exit(2)
+
+    missing = [k for k in REQUIRED_KEYS if not env.get(k)]
+    if missing:
+        print(f"    ERROR: {DEVICE_ENV} is missing required keys: "
+              f"{', '.join(missing)}")
+        print("    Run sudo hls-livecam-setup to regenerate it.")
+        sys.exit(2)
+
+    video_device = env["VIDEO_DEVICE"]
+    print(f"    VIDEO_DEVICE = {video_device}")
+    print(f"    VIDEO_SIZE   = {env['VIDEO_SIZE']}")
+    print(f"    FRAMERATE    = {env['FRAMERATE']}")
+    print(f"    V4L2_INPUT_FMT = {env.get('V4L2_INPUT_FMT', '') or '(none)'}")
+
+    if not os.path.exists(video_device):
+        # Warning, not fatal — the device may appear shortly after
+        # a reboot or replug; ffmpeg-cam's retry policy will handle
+        # transient absence. But we surface it for the operator.
+        print(f"    WARNING: {video_device} does not exist right now.")
+        print("    ffmpeg-cam will retry on its own; if the device"
+              " was replugged this is normal.")
+
+    # ── [2] Kill stray ffmpeg processes ───────────────────────
+    # Any ffmpeg still running outside systemd supervision must go,
+    # otherwise they hold /dev/video* open and ffmpeg-cam will fail
+    # to acquire it after restart.
+    print("\n[2] Killing stray ffmpeg processes holding the camera...")
+    run("pkill -f ffmpeg || true")
+    # fuser targets the configured device, not a hardcoded path.
+    run(f"fuser -k {video_device} 2>/dev/null || true")
+    print("    Done.")
+
+    # ── [3] Restart mediamtx (RTSP listener) first ───────────
+    # Order matters on a reconnect: mediamtx's RTSP port needs to
+    # be accepting before ffmpeg attempts to push. ffmpeg-cam has
+    # internal retry anyway, so this is a soft ordering, not hard.
+    print("\n[3] Restarting mediamtx.service...")
+    run("systemctl restart mediamtx", check=False)
+
+    # ── [4] Restart ffmpeg-cam (RTSP producer) ───────────────
+    # This is the producer peer. v2.0.0 restarted mediamtx and
+    # relied on MediaMTX's runOnInit to respawn ffmpeg; now that
+    # runOnInit is gone, we must restart ffmpeg-cam directly.
+    print("\n[4] Restarting ffmpeg-cam.service...")
+    run("systemctl restart ffmpeg-cam", check=False)
+
+    print("    Waiting 15s for pipeline to converge...")
+    run("sleep 15")
+
+    # ── [5] Check HLS endpoint ───────────────────────────────
+    print("\n[5] Checking HLS...")
+    r = subprocess.run(
+        "curl -s -o /dev/null -w '%{http_code}' "
+        "http://localhost:8888/cam/index.m3u8",
+        shell=True, capture_output=True, text=True,
+    )
+    code = r.stdout.strip().replace("'", "")
+    if code == "200":
+        print(f"    HTTP {code} — HLS LIVE!")
+        rc = 0
+    else:
+        print(f"    HTTP {code} — pipeline not up.")
+        print("    Diagnostics:")
+        print("      sudo journalctl -u mediamtx -n 20 --no-pager")
+        print("      sudo journalctl -u ffmpeg-cam -n 20 --no-pager")
+        rc = 1
+
+    print("\n" + "=" * 50 + "\n")
+    sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()
