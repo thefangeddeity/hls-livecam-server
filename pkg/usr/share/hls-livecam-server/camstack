@@ -403,35 +403,84 @@ def draw_dashboard(scr, snap, cur_repair, dim=False):
         except:
             pass
 
-    # DISK / SMART
+    # DISK / SMART — two-column layout
     dx = bw + 2
     box(scr, by, dx, bh, bw, "DISK / SMART", base)
     y = by + 2
-    safe(scr, y, dx + 2, f"WRITE: {disk:.2f} MB/s", base); y += 1
+    col = (bw - 4) // 2  # width of each half-column
+
     with smart_lock:
-        lines = smart_info[: bh - 3]
-    for line in lines:
+        si_raw = list(smart_info)
+    si = {}
+    warn_partial = False
+    for entry in si_raw:
+        if "WARN (partial)" in entry:
+            warn_partial = True
+        if ":" in entry:
+            k, _, v = entry.partition(":")
+            si[k.strip()] = v.strip()
+
+    def sint(key):
+        try:
+            return int(si.get(key, "x"))
+        except:
+            return None
+
+    def sattr(key):
         if dim:
-            attr = curses.A_DIM
-        else:
-            attr = 0
-            if "WARN" in line or "FAIL" in line:
-                attr = curses.color_pair(2) | curses.A_BOLD
-            if line.startswith("REALLOC:"):
-                try:
-                    val = int(line.split(":")[1].strip())
-                    attr = curses.color_pair(
-                        3 if val > 0 else 1
-                    ) | curses.A_BOLD
-                except:
-                    pass
-            if line.startswith("PENDING:") or line.startswith("UNCORR: "):
-                try:
-                    val = int(line.split(":")[1].strip())
-                    attr = curses.color_pair(3 if val > 0 else 1) | curses.A_BOLD
-                except:
-                    pass
-        safe(scr, y, dx + 2, line, attr); y += 1
+            return curses.A_DIM
+        n = sint(key)
+        if n is None:
+            return 0
+        return curses.color_pair(3 if n > 0 else 1) | curses.A_BOLD
+
+    def scell(key, label=None):
+        lbl = label or key
+        val = si.get(key, "?")
+        return f"{lbl}:{val}"[:col]
+
+    # Compute RISK independent of manufacturer HEALTH threshold
+    realloc_n = sint("REALLOC") or 0
+    pending_n = sint("PENDING") or 0
+    uncorr_n  = sint("UNCORR")  or 0
+    if realloc_n > 100 or pending_n > 0 or uncorr_n > 0:
+        risk, risk_attr = "HIGH", curses.color_pair(3) | curses.A_BOLD
+    elif realloc_n > 0:
+        risk, risk_attr = "WARN", curses.color_pair(2) | curses.A_BOLD
+    else:
+        risk, risk_attr = "OK",   curses.color_pair(1) | curses.A_BOLD
+    if dim:
+        risk_attr = curses.A_DIM
+
+    # Row: WRITE | DISK path
+    safe(scr, y, dx + 2,       f"WRITE: {disk:.2f} MB/s", base)
+    safe(scr, y, dx + 2 + col, scell("DISK", "DISK  ")[:col], base)
+    y += 1
+
+    # Row: ASSESS (manufacturer gate) | RISK (our verdict)
+    assess_val  = si.get("HEALTH", "?")
+    assess_attr = curses.A_DIM if dim else (
+        curses.color_pair(1) | curses.A_BOLD if assess_val == "PASSED"
+        else curses.color_pair(3) | curses.A_BOLD
+    )
+    safe(scr, y, dx + 2,       f"ASSESS:{assess_val}"[:col], assess_attr)
+    safe(scr, y, dx + 2 + col, f"RISK:  {risk}"[:col],      risk_attr)
+    y += 1
+
+    if warn_partial:
+        safe(scr, y, dx + 2, "SMART:  WARN (partial)",
+             curses.A_DIM if dim else curses.color_pair(2) | curses.A_BOLD)
+        y += 1
+
+    # Row: REALLOC | PENDING
+    safe(scr, y, dx + 2,       scell("REALLOC"), sattr("REALLOC"))
+    safe(scr, y, dx + 2 + col, scell("PENDING"), sattr("PENDING"))
+    y += 1
+
+    # Row: UNCORR | TEMP
+    safe(scr, y, dx + 2,       scell("UNCORR", "UNCORR "), sattr("UNCORR"))
+    safe(scr, y, dx + 2 + col, scell("TEMP", "TEMP  "), base)
+    y += 1
 
 
 def draw_broadcast_box(scr, editing_buffer=None):
