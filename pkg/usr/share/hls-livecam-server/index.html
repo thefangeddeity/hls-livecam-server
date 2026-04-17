@@ -193,6 +193,45 @@
     color: rgba(255,255,255,0.7);
   }
 
+
+.broadcast-pill {
+    position: absolute;
+    left: 50%;
+    bottom: 24px;
+    transform: translate(-50%, 8px);
+    max-width: min(85%, 1100px);
+    padding: 14px 26px;
+    font-size: clamp(16px, 1.8vw, 24px);
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    color: #fff;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    text-align: center;
+    line-height: 1.35;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s ease, transform 0.35s ease;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .broadcast-pill.visible {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  @media (max-width: 720px) {
+    .broadcast-pill {
+      bottom: 16px;
+      font-size: 13px;
+      padding: 8px 14px;
+      max-width: calc(100% - 32px);
+    }
+  }
+
   .sidebar {
     width: 240px;
     background: var(--panel);
@@ -322,6 +361,8 @@
       <div class="title">Signal lost</div>
       <div class="sub">Retrying…</div>
     </div>
+<!-- Adding broadcast pill element -->
+    <div class="broadcast-pill" id="broadcastPill"></div>
   </div>
 
   <aside class="sidebar">
@@ -515,6 +556,34 @@
       lastCount = count;
     }, 1000);
   })();
+
+<!-- Adding polling logic -->
+// Broadcast poller — fetches /broadcast.txt every 5s and shows it
+  // as a soft pill in the lower third when non-empty. Empty or missing
+  // file hides the pill.
+  (function setupBroadcast() {
+    var pill = document.getElementById('broadcastPill');
+    var current = '';
+    function poll() {
+      fetch('/broadcast.txt', { cache: 'no-store' })
+        .then(function(r) { return r.ok ? r.text() : ''; })
+        .catch(function() { return ''; })
+        .then(function(text) {
+          var msg = (text || '').trim();
+          if (msg === current) return;
+          current = msg;
+          if (msg) {
+            pill.textContent = msg;
+            pill.classList.add('visible');
+          } else {
+            pill.classList.remove('visible');
+          }
+        });
+    }
+    poll();
+    setInterval(poll, 5000);
+  })();
+<!-- End of polling logic add -->
 
   initHLS();
 </script>
