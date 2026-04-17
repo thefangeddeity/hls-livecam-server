@@ -360,7 +360,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False):
 
     # PIPELINE box
     box(scr, top_y, 1, box_h, col_w, "PIPELINE", base)
-    y = top_y + 2
+    y = top_y + 1
     safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
          status_attr('LIVE' if ff else 'DOWN', dim)); y += 1
     safe(scr, y, 3, f"mediamtx: {'LIVE' if mm else 'DOWN'}",
@@ -372,7 +372,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False):
     # SYSTEM box
     rx = col_w + 2
     box(scr, top_y, rx, box_h, col_w, "SYSTEM", base)
-    y = top_y + 2
+    y = top_y + 1
     safe(scr, y, rx + 2, f"CPU   {c:5.1f}%", base); y += 1
     safe(scr, y, rx + 2, bar(c, col_w - 6), led(c, dim)); y += 2
     safe(scr, y, rx + 2, f"MEM   {m:5.1f}%", base); y += 1
@@ -399,14 +399,14 @@ def draw_dashboard(scr, snap, cur_repair, dim=False):
         try:
             name = (p.info['name'] or "")[:20]
             cpuv = p.info['cpu_percent'] or 0.0
-            safe(scr, by + 2 + i, 3, f"{name:<20} {cpuv:5.1f}%", base)
+            safe(scr, by + 1 + i, 3, f"{name:<20} {cpuv:5.1f}%", base)
         except:
             pass
 
     # DISK / SMART — two-column layout
     dx = bw + 2
     box(scr, by, dx, bh, bw, "DISK / SMART", base)
-    y = by + 2
+    y = by + 1
     col = (bw - 4) // 2  # width of each half-column
 
     with smart_lock:
