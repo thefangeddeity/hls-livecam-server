@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
+Version: 2.2.0
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re
@@ -20,6 +21,13 @@ hls_state = "UNKNOWN"
 hls_lock = threading.Lock()
 
 cpu_samples = collections.deque(maxlen=5)
+
+# Broadcast state
+BROADCAST_FILE = "/var/www/hls-livecam/broadcast.txt"
+broadcast_mode = False       # True when user is typing a message
+broadcast_buffer = ""        # in-progress message during edit
+broadcast_current = ""       # last-known file contents (for display)
+broadcast_error = ""         # transient error message (e.g. write failed)
 
 SMARTCTL = "/usr/sbin/smartctl"
 
@@ -155,7 +163,7 @@ def read_smart():
             if not out or len(out.splitlines()) < 5:
                 continue
 
-            health = realloc = temp = "UNKNOWN"
+            health = realloc = temp = pending = uncorr = "UNKNOWN"
             for line in out.splitlines():
                 if "SMART overall-health" in line:
                     health = line.split(":")[-1].strip()
@@ -171,11 +179,21 @@ def read_smart():
                         temp = line.split(":")[-1].strip().split()[0]
                     except:
                         pass
+                if "Current_Pending_Sector" in line:
+                    cols = line.split()
+                    if len(cols) >= 10:
+                        pending = cols[-1]
+                elif "Offline_Uncorrectable" in line:
+                    cols = line.split()
+                    if len(cols) >= 10:
+                        uncorr = cols[-1]
 
             data = [f"DISK:   {disk}", f"HEALTH: {health}"]
             if result.returncode != 0:
                 data.append("SMART:  WARN (partial)")
             data.append(f"REALLOC:{realloc}")
+            data.append(f"PENDING:{pending}")
+            data.append(f"UNCORR: {uncorr}")
             data.append(f"TEMP:   {temp}°C" if temp != "UNKNOWN" else "TEMP:   UNKNOWN")
 
             with smart_lock:
@@ -197,6 +215,29 @@ def smart_worker():
     while True:
         read_smart()
         time.sleep(30)
+
+# ---------- BROADCAST ----------
+def read_broadcast():
+    """Read current broadcast message from disk. Returns '' if missing."""
+    try:
+        with open(BROADCAST_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return ""
+
+
+def write_broadcast(msg):
+    """Write broadcast to disk. Returns '' on success, error string on failure."""
+    try:
+        with open(BROADCAST_FILE, "w") as f:
+            f.write(msg)
+        return ""
+    except PermissionError:
+        return "permission denied"
+    except Exception as e:
+        return str(e)[:40]
 
 # ---------- REPAIR ----------
 def run_repair():
@@ -231,165 +272,359 @@ def safe(scr, y, x, s, a=0):
     except:
         pass
 
-def box(scr, y, x, h, w, title):
-    safe(scr, y, x, "┌" + "─" * (w - 2) + "┐")
-    safe(scr, y, x + 2, f" {title} ")
+def box(scr, y, x, h, w, title, a=0):
+    safe(scr, y, x, "┌" + "─" * (w - 2) + "┐", a)
+    safe(scr, y, x + 2, f" {title} ", a)
     for i in range(1, h - 1):
-        safe(scr, y + i, x, "│")
-        safe(scr, y + i, x + w - 1, "│")
-    safe(scr, y + h - 1, x, "└" + "─" * (w - 2) + "┘")
+        safe(scr, y + i, x, "│", a)
+        safe(scr, y + i, x + w - 1, "│", a)
+    safe(scr, y + h - 1, x, "└" + "─" * (w - 2) + "┘", a)
 
 def bar(val, w):
     filled = int((val / 100.0) * w)
     return "█" * filled + "░" * (w - filled)
 
-def led(val):
+def led(val, dim=False):
+    if dim:
+        return curses.A_DIM
     if val < 50:   return curses.color_pair(1)
     if val < 80:   return curses.color_pair(2) | curses.A_BOLD
     return curses.color_pair(3) | curses.A_BOLD
 
-def status_attr(status):
+def status_attr(status, dim=False):
+    if dim:
+        return curses.A_DIM
     if status in ("LIVE", "OK"):
         return curses.color_pair(1) | curses.A_BOLD
     if status in ("DEGRADED", "RUNNING"):
         return curses.color_pair(2) | curses.A_BOLD
     if status in ("ERROR", "DOWN", "FAIL"):
         return curses.color_pair(3) | curses.A_BOLD
-    # IDLE, UNKNOWN, etc
     return curses.color_pair(4)
 
-def load_attr(l, cores):
+def load_attr(l, cores, dim=False):
+    if dim:
+        return curses.A_DIM
     if l < cores * 0.7:  return curses.color_pair(1)
     if l <= cores:        return curses.color_pair(2) | curses.A_BOLD
     return curses.color_pair(3) | curses.A_BOLD
 
-# ---------- MAIN ----------
-def main(scr):
-    global repair_status
+# ---------- DASHBOARD SNAPSHOT ----------
+def sample_metrics():
+    """One-shot read of everything the dashboard shows."""
+    return {
+        "c": cpu(),
+        "m": mem(),
+        "l": load(),
+        "up": uptime(),
+        "ff": proc("ffmpeg"),
+        "mm": proc("mediamtx"),
+        "usb": usb_power_state(),
+        "hls": get_hls(),
+        "disk": disk_write_mbs(),
+        "cores": psutil.cpu_count(logical=True),
+        "swap": psutil.swap_memory(),
+        "stype": swap_type(),
+        "avail": psutil.virtual_memory().available // (1024 * 1024),
+    }
 
-    threading.Thread(target=smart_worker, daemon=True).start()
-    threading.Thread(target=hls_worker, daemon=True).start()
+def draw_dashboard(scr, snap, cur_repair, dim=False):
+    """Draw header + PIPELINE + SYSTEM + PROCESS + DISK boxes.
+    If dim=True, use A_DIM everywhere (frozen-while-editing look).
+    Does NOT draw the broadcast box or footer — those are drawn separately."""
+    h, w = scr.getmaxyx()
+    base = curses.A_DIM if dim else 0
 
-    curses.curs_set(0)
-    scr.nodelay(True)
-    curses.start_color()
-    curses.use_default_colors()
-    curses.init_pair(1, curses.COLOR_GREEN,  -1)
-    curses.init_pair(2, curses.COLOR_YELLOW, -1)
-    curses.init_pair(3, curses.COLOR_RED,    -1)
-    curses.init_pair(4, curses.COLOR_WHITE,  -1)
+    c = snap["c"]; m = snap["m"]; l = snap["l"]
+    up = snap["up"]; ff = snap["ff"]; mm = snap["mm"]
+    usb = snap["usb"]; hls = snap["hls"]; disk = snap["disk"]
+    cores = snap["cores"]; swap = snap["swap"]; stype = snap["stype"]
+    avail = snap["avail"]
 
-    while True:
-        k = scr.getch()
-        if k in (ord('q'), 3):
-            break
+    base_status = system_status(hls, ff, mm)
+    sys_status = base_status if cur_repair == "IDLE" else cur_repair
 
-        if k == ord('r'):
-            with repair_lock:
-                can_manual = repair_status != "RUNNING"
-            if can_manual:
-                threading.Thread(target=run_repair, daemon=True).start()
+    # ── HEADER ──
+    safe(scr, 0, 2,
+         f"Webcam Server Stack  •  uptime {up // 3600}h {(up % 3600) // 60}m",
+         base)
+    mid = f"• {sys_status}"
+    safe(scr, 0, w // 2 - len(mid) // 2, mid, status_attr(sys_status, dim))
+    load_text = f"Load {l:.2f}/{cores}"
+    safe(scr, 0, w - len(load_text) - 2, load_text, load_attr(l, cores, dim))
 
-        scr.erase()
-        h, w = scr.getmaxyx()
+    # ── LAYOUT ──
+    top_y = 2
+    box_h = 15
+    col_w = w // 2 - 2
 
-        c = cpu(); m = mem(); l = load()
-        up = uptime()
-        ff = proc("ffmpeg"); mm = proc("mediamtx")
-        usb = usb_power_state()
-        hls = get_hls()
-        disk = disk_write_mbs()
-        cores = psutil.cpu_count(logical=True)
-        base_status = system_status(hls, ff, mm)
+    # PIPELINE box
+    box(scr, top_y, 1, box_h, col_w, "PIPELINE", base)
+    y = top_y + 2
+    safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
+         status_attr('LIVE' if ff else 'DOWN', dim)); y += 1
+    safe(scr, y, 3, f"mediamtx: {'LIVE' if mm else 'DOWN'}",
+         status_attr('LIVE' if mm else 'DOWN', dim)); y += 1
+    safe(scr, y, 3, f"HLS:      {hls}", status_attr(hls, dim)); y += 2
+    safe(scr, y, 3, f"repair:   {cur_repair}",
+         status_attr(cur_repair, dim)); y += 2
 
-        with repair_lock:
-            cur_repair = repair_status
+    # SYSTEM box
+    rx = col_w + 2
+    box(scr, top_y, rx, box_h, col_w, "SYSTEM", base)
+    y = top_y + 2
+    safe(scr, y, rx + 2, f"CPU   {c:5.1f}%", base); y += 1
+    safe(scr, y, rx + 2, bar(c, col_w - 6), led(c, dim)); y += 2
+    safe(scr, y, rx + 2, f"MEM   {m:5.1f}%", base); y += 1
+    safe(scr, y, rx + 2, bar(m, col_w - 6), led(m, dim)); y += 2
+    safe(scr, y, rx + 2, f"SWAP  {swap.percent:5.1f}% [{stype}]", base); y += 1
+    safe(scr, y, rx + 2, bar(swap.percent, col_w - 6),
+         led(swap.percent, dim)); y += 2
+    safe(scr, y, rx + 2, f"RAM AVAIL: {avail} MB", base); y += 1
+    safe(scr, y, rx + 2, f"USB: {usb}", base)
 
-        # Displayed status
-        sys_status = base_status if cur_repair == "IDLE" else cur_repair
+    # BOTTOM row (below broadcast box, which is 3 lines)
+    by = top_y + box_h + 3
+    bw = w // 2 - 2
+    bh = max(4, h - by - 2)
 
-        # ── HEADER ──
-        safe(scr, 0, 2, f"Webcam Server Stack  •  uptime {up // 3600}h {(up % 3600) // 60}m")
-        mid = f"• {sys_status}"
-        safe(scr, 0, w // 2 - len(mid) // 2, mid, status_attr(sys_status))
-        load_text = f"Load {l:.2f}/{cores}"
-        safe(scr, 0, w - len(load_text) - 2, load_text, load_attr(l, cores))
+    # PROCESS VIEW
+    box(scr, by, 1, bh, bw, "PROCESS VIEW", base)
+    procs = sorted(
+        psutil.process_iter(['name', 'cpu_percent']),
+        key=lambda p: p.info['cpu_percent'] or 0,
+        reverse=True
+    )[:bh - 3]
+    for i, p in enumerate(procs):
+        try:
+            name = (p.info['name'] or "")[:20]
+            cpuv = p.info['cpu_percent'] or 0.0
+            safe(scr, by + 2 + i, 3, f"{name:<20} {cpuv:5.1f}%", base)
+        except:
+            pass
 
-        # ── LAYOUT ──
-        top_y = 2
-        box_h = 16
-        col_w = w // 2 - 2
-
-        # PIPELINE box
-        box(scr, top_y, 1, box_h, col_w, "PIPELINE")
-        y = top_y + 2
-        safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}", status_attr('LIVE' if ff else 'DOWN')); y += 1
-        safe(scr, y, 3, f"mediamtx: {'LIVE' if mm else 'DOWN'}", status_attr('LIVE' if mm else 'DOWN')); y += 1
-        safe(scr, y, 3, f"HLS:      {hls}", status_attr(hls)); y += 2
-        safe(scr, y, 3, f"repair:   {cur_repair}", status_attr(cur_repair)); y += 2
-
-        # SYSTEM box
-        rx = col_w + 2
-        box(scr, top_y, rx, box_h, col_w, "SYSTEM")
-        y = top_y + 2
-        safe(scr, y, rx + 2, f"CPU   {c:5.1f}%"); y += 1
-        safe(scr, y, rx + 2, bar(c, col_w - 6), led(c)); y += 2
-        safe(scr, y, rx + 2, f"MEM   {m:5.1f}%"); y += 1
-        safe(scr, y, rx + 2, bar(m, col_w - 6), led(m)); y += 2
-        swap = psutil.swap_memory()
-        stype = swap_type()
-        safe(scr, y, rx + 2, f"SWAP  {swap.percent:5.1f}% [{stype}]"); y += 1
-        safe(scr, y, rx + 2, bar(swap.percent, col_w - 6), led(swap.percent)); y += 2
-        avail = psutil.virtual_memory().available // (1024 * 1024)
-        safe(scr, y, rx + 2, f"RAM AVAIL: {avail} MB"); y += 1
-        safe(scr, y, rx + 2, f"USB: {usb}")
-
-        # BOTTOM row
-        by = top_y + box_h + 1
-        bw = w // 2 - 2
-        bh = max(4, h - by - 2)
-
-        # PROCESS VIEW
-        box(scr, by, 1, bh, bw, "PROCESS VIEW")
-        procs = sorted(
-            psutil.process_iter(['name', 'cpu_percent']),
-            key=lambda p: p.info['cpu_percent'] or 0,
-            reverse=True
-        )[:bh - 3]
-        for i, p in enumerate(procs):
-            try:
-                name = (p.info['name'] or "")[:20]
-                cpuv = p.info['cpu_percent'] or 0.0
-                safe(scr, by + 2 + i, 3, f"{name:<20} {cpuv:5.1f}%")
-            except:
-                pass
-
-        # DISK / SMART
-        dx = bw + 2
-        box(scr, by, dx, bh, bw, "DISK / SMART")
-        y = by + 2
-        safe(scr, y, dx + 2, f"WRITE: {disk:.2f} MB/s"); y += 1
-        with smart_lock:
-            lines = smart_info[: bh - 4]
-        for line in lines:
+    # DISK / SMART
+    dx = bw + 2
+    box(scr, by, dx, bh, bw, "DISK / SMART", base)
+    y = by + 2
+    safe(scr, y, dx + 2, f"WRITE: {disk:.2f} MB/s", base); y += 1
+    with smart_lock:
+        lines = smart_info[: bh - 3]
+    for line in lines:
+        if dim:
+            attr = curses.A_DIM
+        else:
             attr = 0
             if "WARN" in line or "FAIL" in line:
                 attr = curses.color_pair(2) | curses.A_BOLD
             if line.startswith("REALLOC:"):
                 try:
                     val = int(line.split(":")[1].strip())
-                    attr = curses.color_pair(3 if val > 500 else 2 if val > 100 else 1) | curses.A_BOLD
+                    attr = curses.color_pair(
+                        3 if val > 0 else 1
+                    ) | curses.A_BOLD
                 except:
                     pass
-            safe(scr, y, dx + 2, line, attr); y += 1
+            if line.startswith("PENDING:") or line.startswith("UNCORR: "):
+                try:
+                    val = int(line.split(":")[1].strip())
+                    attr = curses.color_pair(3 if val > 0 else 1) | curses.A_BOLD
+                except:
+                    pass
+        safe(scr, y, dx + 2, line, attr); y += 1
 
-        # FOOTER
-        safe(scr, h - 1, 2,
-             "systemd auto-restarts on failure  •  [r] force repair  •  [q] quit",
+
+def draw_broadcast_box(scr, editing_buffer=None):
+    """Draw the 3-line broadcast box. Always bright (never dimmed).
+    If editing_buffer is not None, we're in edit mode: show buffer + cursor.
+    Border right edge aligns with PIPELINE/SYSTEM boxes below.
+    """
+    h, w = scr.getmaxyx()
+    top_y = 2
+    box_h = 15
+    col_w = w // 2 - 2
+    br_y = top_y + box_h
+
+    # Match the other boxes: PIPELINE starts at x=1 with width col_w,
+    # SYSTEM starts at x=col_w+2 with width col_w.
+    # So the right edge of SYSTEM is (col_w + 2) + col_w - 1 = 2*col_w + 1.
+    left_x = 1
+    right_x = 2 * col_w + 1
+    inner_w = right_x - left_x - 1  # span between borders
+
+    editing = editing_buffer is not None
+
+    # Title + color scheme
+    if editing:
+        title = " BROADCAST  [Enter=send  Esc=cancel  Ctrl+U=clear] "
+        title_attr = curses.color_pair(2) | curses.A_BOLD
+        border_attr = curses.color_pair(2)
+    elif broadcast_error:
+        title = " BROADCAST "
+        title_attr = curses.color_pair(3) | curses.A_BOLD
+        border_attr = curses.color_pair(3)
+    elif broadcast_current:
+        title = " BROADCAST  [LIVE] "
+        title_attr = curses.color_pair(5) | curses.A_BOLD
+        border_attr = curses.color_pair(5)
+    else:
+        title = " BROADCAST "
+        title_attr = curses.color_pair(4)
+        border_attr = curses.color_pair(4)
+
+    # Draw borders char-by-char (avoids full-width wrap quirk)
+    safe(scr, br_y,     left_x,  "┌", border_attr)
+    safe(scr, br_y,     right_x, "┐", border_attr)
+    safe(scr, br_y + 2, left_x,  "└", border_attr)
+    safe(scr, br_y + 2, right_x, "┘", border_attr)
+    safe(scr, br_y,     left_x + 1, "─" * inner_w, border_attr)
+    safe(scr, br_y + 2, left_x + 1, "─" * inner_w, border_attr)
+    safe(scr, br_y + 1, left_x,  "│", border_attr)
+    safe(scr, br_y + 1, right_x, "│", border_attr)
+
+    # Title overlay on the top border
+    safe(scr, br_y, left_x + 2, title, title_attr)
+
+    # Contents on the middle line
+    content_y = br_y + 1
+    content_x = left_x + 2
+    content_maxw = inner_w - 2
+
+    if editing:
+        prompt = "› "
+        safe(scr, content_y, content_x, prompt,
+             curses.color_pair(2) | curses.A_BOLD)
+        buf = editing_buffer
+        maxw = content_maxw - len(prompt)
+        shown = buf
+        if len(shown) > maxw:
+            shown = "…" + shown[-(maxw - 1):]
+        safe(scr, content_y, content_x + len(prompt), shown,
+             curses.color_pair(4) | curses.A_BOLD)
+        # Park cursor at end of text
+        try:
+            scr.move(content_y, content_x + len(prompt) + len(shown))
+        except curses.error:
+            pass
+    elif broadcast_error:
+        safe(scr, content_y, content_x, broadcast_error,
+             curses.color_pair(3) | curses.A_BOLD)
+    elif broadcast_current:
+        show = broadcast_current
+        if len(show) > content_maxw:
+            show = show[:content_maxw - 1] + "…"
+        safe(scr, content_y, content_x, show,
+             curses.color_pair(5) | curses.A_BOLD)
+    else:
+        safe(scr, content_y, content_x,
+             "(empty — press [b] to broadcast a message)",
              curses.color_pair(4))
 
+
+def draw_footer(scr, editing):
+    h, w = scr.getmaxyx()
+    if editing:
+        footer = ("BROADCAST: type message  •  [Enter] send (empty=clear)  "
+                  "•  [Esc] cancel  •  [Ctrl+U] clear line")
+    else:
+        footer = ("systemd auto-restarts on failure  •  [b] broadcast  "
+                  "•  [r] force repair  •  [q] quit")
+    safe(scr, h - 1, 2, footer, curses.color_pair(4))
+
+
+# ---------- MAIN ----------
+def main(scr):
+    global repair_status, broadcast_mode, broadcast_buffer
+    global broadcast_current, broadcast_error
+
+    threading.Thread(target=smart_worker, daemon=True).start()
+    threading.Thread(target=hls_worker, daemon=True).start()
+
+    curses.curs_set(0)
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_GREEN,  -1)
+    curses.init_pair(2, curses.COLOR_YELLOW, -1)
+    curses.init_pair(3, curses.COLOR_RED,    -1)
+    curses.init_pair(4, curses.COLOR_WHITE,  -1)
+    curses.init_pair(5, curses.COLOR_CYAN,   -1)
+
+    # Snapshot of the dashboard to freeze during edit mode.
+    frozen_snap = None
+    frozen_repair = "IDLE"
+
+    while True:
+        if broadcast_mode:
+            # ── MODAL EDIT MODE ──
+            # Blocking getch: redraw only on key events. No gauge sampling.
+            scr.timeout(-1)
+            curses.curs_set(1)
+
+            scr.erase()
+            draw_dashboard(scr, frozen_snap, frozen_repair, dim=True)
+            draw_broadcast_box(scr, editing_buffer=broadcast_buffer)
+            draw_footer(scr, editing=True)
+            scr.refresh()
+
+            k = scr.getch()
+
+            if k in (10, 13):                      # Enter → send
+                err = write_broadcast(broadcast_buffer)
+                if err:
+                    broadcast_error = "ERR: " + err
+                else:
+                    broadcast_current = broadcast_buffer
+                    broadcast_error = ""
+                broadcast_mode = False
+                broadcast_buffer = ""
+                curses.curs_set(0)
+            elif k == 27:                          # Esc → cancel
+                broadcast_mode = False
+                broadcast_buffer = ""
+                curses.curs_set(0)
+            elif k in (curses.KEY_BACKSPACE, 127, 8):
+                broadcast_buffer = broadcast_buffer[:-1]
+            elif k == 21:                          # Ctrl+U → clear
+                broadcast_buffer = ""
+            elif 32 <= k <= 126:
+                if len(broadcast_buffer) < 140:
+                    broadcast_buffer += chr(k)
+            # any other key: ignored; loop redraws
+            continue
+
+        # ── LIVE DASHBOARD MODE ──
+        scr.timeout(500)
+
+        k = scr.getch()
+        if k in (ord('q'), 3):
+            break
+        if k == ord('r'):
+            with repair_lock:
+                can_manual = repair_status != "RUNNING"
+            if can_manual:
+                threading.Thread(target=run_repair, daemon=True).start()
+        elif k == ord('b'):
+            # Snapshot before entering modal so the frozen view is accurate.
+            frozen_snap = sample_metrics()
+            with repair_lock:
+                frozen_repair = repair_status
+            broadcast_mode = True
+            broadcast_buffer = broadcast_current  # prefill with current
+            broadcast_error = ""
+            continue  # next iteration handles edit-mode draw
+
+        # Live sample + draw
+        snap = sample_metrics()
+        with repair_lock:
+            cur_repair = repair_status
+        broadcast_current = read_broadcast()
+
+        scr.erase()
+        draw_dashboard(scr, snap, cur_repair, dim=False)
+        draw_broadcast_box(scr, editing_buffer=None)
+        draw_footer(scr, editing=False)
         scr.refresh()
-        time.sleep(0.5)
+
 
 if __name__ == "__main__":
     curses.wrapper(main)
