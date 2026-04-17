@@ -28,6 +28,7 @@ broadcast_mode = False       # True when user is typing a message
 broadcast_buffer = ""        # in-progress message during edit
 broadcast_current = ""       # last-known file contents (for display)
 broadcast_error = ""         # transient error message (e.g. write failed)
+confirm_repair = False        # True when waiting for y/n on repair
 
 SMARTCTL = "/usr/sbin/smartctl"
 
@@ -351,25 +352,34 @@ def draw_dashboard(scr, snap, cur_repair, dim=False):
     mid = f"• {sys_status}"
     safe(scr, 0, w // 2 - len(mid) // 2, mid, status_attr(sys_status, dim))
     load_text = f"Load {l:.2f}/{cores}"
-    safe(scr, 0, w - len(load_text) - 2, load_text, load_attr(l, cores, dim))
+    safe(scr, 0, w - len(load_text) - 5, load_text, load_attr(l, cores, dim))
 
     # ── LAYOUT ──
     top_y = 2
     box_h = 15
     col_w = w // 2 - 2
 
-    # PIPELINE box
-    box(scr, top_y, 1, box_h, col_w, "PIPELINE", base)
-    y = top_y + 1
-    safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
-         status_attr('LIVE' if ff else 'DOWN', dim)); y += 1
-    safe(scr, y, 3, f"mediamtx: {'LIVE' if mm else 'DOWN'}",
-         status_attr('LIVE' if mm else 'DOWN', dim)); y += 1
-    safe(scr, y, 3, f"HLS:      {hls}", status_attr(hls, dim)); y += 2
-    safe(scr, y, 3, f"repair:   {cur_repair}",
-         status_attr(cur_repair, dim)); y += 2
+    # PROCESS VIEW (top-left — most dynamic, earns the big box)
+    box(scr, top_y, 1, box_h, col_w, "PROCESS VIEW", base)
+    procs = sorted(
+        psutil.process_iter(['name', 'cpu_percent']),
+        key=lambda p: p.info['cpu_percent'] or 0,
+        reverse=True
+    )[:box_h - 2]
+    for i, p in enumerate(procs):
+        try:
+            name = (p.info['name'] or "")[:20]
+            cpuv = p.info['cpu_percent'] or 0.0
+            proc_attr = curses.A_DIM if dim else (
+                curses.color_pair(3) | curses.A_BOLD if cpuv > 30 else
+                curses.color_pair(2) | curses.A_BOLD if cpuv > 10 else
+                curses.color_pair(4) | curses.A_BOLD if cpuv > 2 else
+                curses.A_DIM)
+            safe(scr, top_y + 1 + i, 3, f"{name:<20} {cpuv:5.1f}%", proc_attr)
+        except:
+            pass
 
-    # SYSTEM box
+    # SYSTEM box (top-right — unchanged)
     rx = col_w + 2
     box(scr, top_y, rx, box_h, col_w, "SYSTEM", base)
     y = top_y + 1
@@ -388,20 +398,16 @@ def draw_dashboard(scr, snap, cur_repair, dim=False):
     bw = w // 2 - 2
     bh = max(4, h - by - 2)
 
-    # PROCESS VIEW
-    box(scr, by, 1, bh, bw, "PROCESS VIEW", base)
-    procs = sorted(
-        psutil.process_iter(['name', 'cpu_percent']),
-        key=lambda p: p.info['cpu_percent'] or 0,
-        reverse=True
-    )[:bh - 3]
-    for i, p in enumerate(procs):
-        try:
-            name = (p.info['name'] or "")[:20]
-            cpuv = p.info['cpu_percent'] or 0.0
-            safe(scr, by + 1 + i, 3, f"{name:<20} {cpuv:5.1f}%", base)
-        except:
-            pass
+    # PIPELINE (bottom-left — 4 lines of content, fits fine here)
+    box(scr, by, 1, bh, bw, "PIPELINE", base)
+    y = by + 1
+    safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
+         status_attr('LIVE' if ff else 'DOWN', dim)); y += 1
+    safe(scr, y, 3, f"mediamtx: {'LIVE' if mm else 'DOWN'}",
+         status_attr('LIVE' if mm else 'DOWN', dim)); y += 1
+    safe(scr, y, 3, f"HLS:      {hls}", status_attr(hls, dim)); y += 1
+    safe(scr, y, 3, f"REPAIR:   {cur_repair}",
+         status_attr(cur_repair, dim))
 
     # DISK / SMART — two-column layout
     dx = bw + 2
@@ -453,8 +459,9 @@ def draw_dashboard(scr, snap, cur_repair, dim=False):
         risk_attr = curses.A_DIM
 
     # Row: WRITE | DISK path
-    safe(scr, y, dx + 2,       f"WRITE: {disk:.2f} MB/s", base)
-    safe(scr, y, dx + 2 + col, scell("DISK", "DISK  ")[:col], base)
+    write_attr = curses.A_DIM if dim else (curses.color_pair(1) | curses.A_BOLD if disk > 0.01 else curses.color_pair(1))
+    safe(scr, y, dx + 2,       f"WRITE  : {disk:.2f} MB/s", write_attr)
+    safe(scr, y, dx + 2 + col, scell("DISK", "DISK  ")[:col], curses.A_DIM if dim else curses.color_pair(1))
     y += 1
 
     # Row: ASSESS (manufacturer gate) | RISK (our verdict)
@@ -550,6 +557,13 @@ def draw_broadcast_box(scr, editing_buffer=None):
             shown = "…" + shown[-(maxw - 1):]
         safe(scr, content_y, content_x + len(prompt), shown,
              curses.color_pair(4) | curses.A_BOLD)
+        # Counter: chars remaining, right-aligned inside box
+        remaining = 120 - len(editing_buffer)
+        ctr_str = str(remaining)
+        ctr_attr = (curses.color_pair(1) if remaining > 20 else
+                    curses.color_pair(2) | curses.A_BOLD if remaining > 0 else
+                    curses.color_pair(3) | curses.A_BOLD)
+        safe(scr, content_y, right_x - len(ctr_str) - 1, ctr_str, ctr_attr)
         # Park cursor at end of text
         try:
             scr.move(content_y, content_x + len(prompt) + len(shown))
@@ -571,7 +585,13 @@ def draw_broadcast_box(scr, editing_buffer=None):
 
 
 def draw_footer(scr, editing):
+    global confirm_repair
     h, w = scr.getmaxyx()
+    if confirm_repair:
+        safe(scr, h - 1, 2,
+             "REPAIR: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(2) | curses.A_BOLD)
+        return
     if editing:
         footer = ("BROADCAST: type message  •  [Enter] send (empty=clear)  "
                   "•  [Esc] cancel  •  [Ctrl+U] clear line")
@@ -584,7 +604,7 @@ def draw_footer(scr, editing):
 # ---------- MAIN ----------
 def main(scr):
     global repair_status, broadcast_mode, broadcast_buffer
-    global broadcast_current, broadcast_error
+    global broadcast_current, broadcast_error, confirm_repair
 
     threading.Thread(target=smart_worker, daemon=True).start()
     threading.Thread(target=hls_worker, daemon=True).start()
@@ -636,7 +656,7 @@ def main(scr):
             elif k == 21:                          # Ctrl+U → clear
                 broadcast_buffer = ""
             elif 32 <= k <= 126:
-                if len(broadcast_buffer) < 140:
+                if len(broadcast_buffer) < 120:
                     broadcast_buffer += chr(k)
             # any other key: ignored; loop redraws
             continue
@@ -647,11 +667,17 @@ def main(scr):
         k = scr.getch()
         if k in (ord('q'), 3):
             break
-        if k == ord('r'):
-            with repair_lock:
-                can_manual = repair_status != "RUNNING"
-            if can_manual:
-                threading.Thread(target=run_repair, daemon=True).start()
+        if confirm_repair:
+            if k == ord('y'):
+                with repair_lock:
+                    can_manual = repair_status != "RUNNING"
+                if can_manual:
+                    threading.Thread(target=run_repair, daemon=True).start()
+                confirm_repair = False
+            elif k != -1:
+                confirm_repair = False
+        elif k == ord('r'):
+            confirm_repair = True
         elif k == ord('b'):
             # Snapshot before entering modal so the frozen view is accurate.
             frozen_snap = sample_metrics()
