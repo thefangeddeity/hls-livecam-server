@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-broadcast-api — hls-livecam-server message + dark-mode endpoint
+broadcast-api — hls-livecam-server message + dark-mode + buzz endpoint
 """
 from flask import Flask, request, abort
-import os, subprocess
+import os, subprocess, time
 
 app = Flask(__name__)
 
 BROADCAST_FILE = "/var/www/hls-livecam/broadcast.txt"
+BUZZ_FILE      = "/var/www/hls-livecam/buzz.txt"
 DARK_FLAG      = "/var/lib/hls-livecam/dark"
 MAX_LEN        = 140
 
@@ -38,6 +39,18 @@ def dark_post():
             stderr=subprocess.DEVNULL,
         )
         return ("true" if os.path.exists(DARK_FLAG) else "false"), 200
+    except Exception:
+        abort(500)
+
+@app.route("/api/buzz", methods=["POST"])
+def buzz_post():
+    try:
+        ts = str(int(time.time() * 1000))
+        with open(BUZZ_FILE, "w") as f:
+            f.write(ts)
+        return ts, 200
+    except PermissionError:
+        abort(403)
     except Exception:
         abort(500)
 

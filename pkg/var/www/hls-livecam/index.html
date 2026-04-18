@@ -52,6 +52,36 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* ── BUZZ FLASH ── */
+  @keyframes buzzFlash {
+    0%   { background: var(--bg); }
+    8%   { background: #ff3b30; }
+    16%  { background: var(--bg); }
+    24%  { background: #ff3b30; }
+    32%  { background: var(--bg); }
+    40%  { background: #ff9500; }
+    48%  { background: var(--bg); }
+    56%  { background: #ff9500; }
+    64%  { background: var(--bg); }
+    80%  { background: var(--bg); }
+    100% { background: var(--bg); }
+  }
+  @keyframes buzzShake {
+    0%,100% { transform: translate(0,0) rotate(0deg); }
+    10%  { transform: translate(-8px, -6px) rotate(-1.5deg); }
+    20%  { transform: translate(9px, 5px) rotate(1deg); }
+    30%  { transform: translate(-10px, 7px) rotate(-2deg); }
+    40%  { transform: translate(8px, -8px) rotate(1.5deg); }
+    50%  { transform: translate(-6px, 9px) rotate(-1deg); }
+    60%  { transform: translate(10px, -5px) rotate(2deg); }
+    70%  { transform: translate(-9px, 6px) rotate(-1.5deg); }
+    80%  { transform: translate(7px, -7px) rotate(1deg); }
+    90%  { transform: translate(-5px, 4px) rotate(-0.5deg); }
+  }
+  body.buzzing {
+    animation: buzzFlash 0.9s ease-out, buzzShake 0.9s ease-out;
+  }
+
   /* ── HEADER ── */
   header {
     display: flex;
@@ -124,7 +154,7 @@
     position: relative;
     background: #000;
     border-radius: var(--radius);
-    overflow: hidden; padding: 16px;
+    overflow: hidden;
     box-shadow: var(--shadow);
     min-width: 0; min-height: 0;
   }
@@ -247,6 +277,9 @@
   .btn.dark-btn { background: #1c1c1e; border-color: #3a3a3c; color: #ebebf5; }
   .btn.dark-btn:hover { background: #2c2c2e; border-color: #636366; }
   .btn.dark-btn.is-dark { background: #3a3a3c; border-color: #636366; color: #fff; }
+  .btn.buzz-btn { background: #ff3b30; border-color: #ff3b30; color: #fff; font-weight: 700; }
+  .btn.buzz-btn:hover { background: #e0352b; border-color: #e0352b; }
+  .btn.buzz-btn.muted { background: var(--panel-2); border-color: var(--border-strong); color: var(--text-muted); font-weight: 500; }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
   .btn[hidden] { display: none; }
 
@@ -276,7 +309,6 @@
   #clearBtn { grid-column: 1 / -1; }
   .msg-actions .btn { padding: 9px 6px; font-size: 12px; }
 
-
   .msg-hint {
     font-size: 11px; color: var(--text-muted);
     text-align: center; min-height: 16px;
@@ -285,48 +317,40 @@
   .msg-hint.ok { color: var(--success); }
   .msg-hint.err { color: var(--danger); }
 
+  /* ── FULLSCREEN OVERLAY BTN ── */
+  .fs-btn {
+    position: absolute;
+    bottom: 20px; right: 20px;
+    width: 36px; height: 36px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: none; border-radius: 8px;
+    color: #fff; font-size: 16px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 10;
+  }
+  .video-wrap:hover .fs-btn { opacity: 1; }
+  @media (max-width: 720px) { .fs-btn { opacity: 0.7; } }
+
   /* ── MOBILE ── */
   @media (max-width: 720px) {
     body { overflow: auto; height: auto; min-height: 100dvh; }
     header { padding: 10px 16px; }
-
-    .main {
-      flex-direction: column;
-      padding: 0;
-      gap: 0;
-      flex: none; /* don't stretch; let content flow */
-    }
-
-    /* Video: 16:9 fixed height, full width */
-    .video-wrap {
-      flex: none;
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      border-radius: 0;
-      box-shadow: none;
-    }
+    .main { flex-direction: column; padding: 0; gap: 0; flex: none; }
+    .video-wrap { flex: none; width: 100%; aspect-ratio: 16 / 9; border-radius: 0; box-shadow: none; }
     video { object-fit: contain; }
-
-    /* Sidebar becomes a normal block below video */
     .sidebar {
-      width: 100%;
-      height: auto;
-      border-radius: 0;
-      border-left: none;
-      border-right: none;
-      border-bottom: none;
-      box-shadow: none;
-      padding: 16px;
-      gap: 16px;
-      overflow-y: visible;
-      flex-shrink: unset;
+      width: 100%; height: auto; border-radius: 0;
+      border-left: none; border-right: none; border-bottom: none;
+      box-shadow: none; padding: 16px; gap: 16px;
+      overflow-y: visible; flex-shrink: unset;
     }
     .sidebar-scroll { overflow-y: visible; }
-
-    /* Hide desktop-only sections on mobile */
     .desktop-only { display: none !important; }
-
-    /* Message textarea fixed height on mobile */
     textarea.msg-box { min-height: 80px; flex: none; width: 100%; max-width: 100%; -webkit-appearance: none; transform: translateZ(0); }
     .msg-box-wrap { flex: none; }
     .message-section { flex: none; }
@@ -354,6 +378,11 @@
       <img src="/dark.png" alt="">
     </div>
     <div class="video-overlay" id="tsOverlay">--</div>
+    <button class="fs-btn" onclick="toggleFullscreen()" title="Fullscreen">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </button>
     <div class="error-overlay" id="errorOverlay">
       <div class="title">Signal lost</div>
       <div class="sub">Retrying…</div>
@@ -380,6 +409,8 @@
       <div class="section">
         <div class="section-title">Controls</div>
         <div style="display:flex;flex-direction:column;gap:8px;">
+          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
+          <button class="btn" id="muteBtn" onclick="toggleMute()">Mute Buzzes</button>
           <button class="btn dark-btn" id="darkBtn" onclick="toggleDark()">Hide Feed</button>
           <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
         </div>
@@ -404,10 +435,7 @@
         </div>
       </div>
 
-      <!-- FULLSCREEN — desktop only -->
-      <div class="section desktop-only">
-        <button class="btn" onclick="toggleFullscreen()">Fullscreen</button>
-      </div>
+
 
     </div>
   </aside>
@@ -420,6 +448,8 @@
   var errorOverlay = document.getElementById('errorOverlay');
   var darkOverlay  = document.getElementById('darkOverlay');
   var darkBtn      = document.getElementById('darkBtn');
+  var buzzBtn      = document.getElementById('buzzBtn');
+  var muteBtn      = document.getElementById('muteBtn');
   var reconnectBtn = document.getElementById('reconnectBtn');
   var clearBtn     = document.getElementById('clearBtn');
   var hls = null;
@@ -431,6 +461,97 @@
   var protoEl = document.getElementById('protoVal');
   if (hostEl) hostEl.textContent = window.location.hostname;
   if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
+
+  // ── BUZZ ──
+  var buzzMuted = localStorage.getItem('buzzMuted') === 'true';
+  var lastBuzzTs = null;
+  var audioCtx = null;
+
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return audioCtx;
+  }
+
+  function playBuzzSound() {
+    try {
+      var ctx = getAudioCtx();
+      // Compressor to maximise perceived loudness
+      var comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -6;
+      comp.knee.value = 3;
+      comp.ratio.value = 8;
+      comp.attack.value = 0.001;
+      comp.release.value = 0.1;
+      comp.connect(ctx.destination);
+
+      var tones = [880, 660, 440];
+      tones.forEach(function(freq, i) {
+        // Stack two detuned oscillators per tone for thickness
+        [-4, 0, 4].forEach(function(detune) {
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(comp);
+          osc.type = 'sawtooth';
+          osc.frequency.value = freq;
+          osc.detune.value = detune;
+          var t = ctx.currentTime + i * 0.13;
+          gain.gain.setValueAtTime(0, t);
+          gain.gain.linearRampToValueAtTime(0.9, t + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+          osc.start(t);
+          osc.stop(t + 0.25);
+        });
+      });
+    } catch(e) {}
+  }
+
+  function triggerBuzz() {
+    if (buzzMuted) return;
+    playBuzzSound();
+    // Full-screen shake + flash
+    document.body.classList.remove('buzzing');
+    void document.body.offsetWidth; // force reflow to restart animation
+    document.body.classList.add('buzzing');
+    setTimeout(function() { document.body.classList.remove('buzzing'); }, 900);
+  }
+
+  function updateMuteBtn() {
+    muteBtn.textContent = buzzMuted ? 'Unmute Buzzes' : 'Mute Buzzes';
+    muteBtn.classList.toggle('primary', buzzMuted);
+  }
+
+  function toggleMute() {
+    buzzMuted = !buzzMuted;
+    localStorage.setItem('buzzMuted', buzzMuted);
+    updateMuteBtn();
+  }
+
+  function sendBuzz() {
+    buzzBtn.disabled = true;
+    fetch('/api/buzz', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(ts) {
+        if (ts) lastBuzzTs = ts.trim();
+        buzzBtn.disabled = false;
+      });
+  }
+
+  function pollBuzz() {
+    fetch('/buzz.txt', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (!text) return;
+        var ts = text.trim();
+        if (lastBuzzTs === null) { lastBuzzTs = ts; return; } // init
+        if (ts !== lastBuzzTs) { lastBuzzTs = ts; triggerBuzz(); }
+      });
+  }
+
+  updateMuteBtn();
+  setInterval(pollBuzz, 1000);
 
   // ── DARK MODE ──
   var darkLiftTimer = null;
@@ -531,11 +652,9 @@
 
     if (!Hls.isSupported()) {
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // iOS native HLS
         video.src = HLS_URL;
         video.load();
         video.play().catch(function() {
-          // Autoplay blocked — add tap-to-play
           video.addEventListener('click', function handler() {
             video.play().catch(function(){});
             video.removeEventListener('click', handler);
@@ -593,7 +712,7 @@
 
   // ── FPS (desktop only) ──
   (function setupFpsCounter() {
-    var fpsEl = document.getElementById('fpsVal');
+    var fpsEl = document.getElementById('fpsEl');
     if (!fpsEl) return;
     var frames = 0;
     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
@@ -621,11 +740,7 @@
 
   function updateClearBtn() {
     if (!clearBtn) return;
-    if (currentMsg) {
-      clearBtn.classList.add('primary');
-    } else {
-      clearBtn.classList.remove('primary');
-    }
+    clearBtn.classList.toggle('primary', currentMsg.length > 0);
   }
 
   function setHint(text, cls) {
@@ -650,7 +765,6 @@
     msgBox.classList.add('editing');
     msgBox.removeAttribute('readonly');
     msgActions.hidden = false;
-    // iOS: focus inside a user-gesture handler triggers keyboard
     msgBox.focus();
     setHint('Esc = cancel');
   }
