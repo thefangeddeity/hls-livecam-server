@@ -185,6 +185,19 @@ PYEOF
 chown mediamtx:mediamtx "$MEDIAMTX_CONF"
 chmod 0644 "$MEDIAMTX_CONF"
 
+
+# ── Performance profile ───────────────────────────────────────
+echo ""
+echo -e "${BOLD}Performance profile:${NC}"
+echo "  1) High  (30 fps)"
+echo "  2) Low   (15 fps)"
+read -rp "  Choice [1/2, default 1]: " PERF_CHOICE
+case "$PERF_CHOICE" in
+  2) FRAMERATE=15 ;;
+  *) FRAMERATE=30 ;;
+esac
+echo -e "  ${GREEN}Framerate: ${FRAMERATE} fps${NC}"
+
 # ── Write persistent device.env (kept for hls-livecam-repair) ─
 # Repair script still reads this to know which device to restart against.
 # The ffmpeg-cam unit no longer uses EnvironmentFile — all values are
@@ -202,7 +215,7 @@ cat > "$DEVICE_ENV" <<EOF
 VIDEO_DEVICE=${STABLE_DEV}
 V4L2_INPUT_FMT=${INPUT_FMT_ARGS% }
 VIDEO_SIZE=1280x720
-FRAMERATE=30
+FRAMERATE=${FRAMERATE}
 EOF
 chown mediamtx:mediamtx "$DEVICE_ENV_DIR" "$DEVICE_ENV"
 chmod 0755 "$DEVICE_ENV_DIR"
@@ -249,7 +262,7 @@ echo -e "${BOLD}Installing ffmpeg-cam.service...${NC}"
 sed \
   -e "s|@INPUT_FMT_ARGS@|${INPUT_FMT_ARGS}|g" \
   -e "s|@VIDEO_SIZE@|1280x720|g" \
-  -e "s|@FRAMERATE@|30|g" \
+  -e "s|@FRAMERATE@|${FRAMERATE}|g" \
   -e "s|@VIDEO_DEVICE@|${STABLE_DEV}|g" \
   "$FFMPEG_UNIT_TEMPLATE" > "$FFMPEG_UNIT_DST"
 
