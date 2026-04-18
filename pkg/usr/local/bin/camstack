@@ -139,13 +139,6 @@ def get_main_disk():
         pass
     return "/dev/sda"
 
-def parse_realloc(line):
-    if re.search(r"\b5\b", line) and "Reallocated" in line:
-        cols = line.split()
-        if len(cols) >= 10:
-            return cols[-1]
-    return None
-
 def read_smart():
     disk = get_main_disk()
     cmds = [
@@ -164,30 +157,20 @@ def read_smart():
             if not out or len(out.splitlines()) < 5:
                 continue
 
-            health = realloc = temp = pending = uncorr = "UNKNOWN"
+            health = realloc = temp = pending = uncorr = "?"
             for line in out.splitlines():
                 if "SMART overall-health" in line:
                     health = line.split(":")[-1].strip()
-                r = parse_realloc(line)
-                if r is not None:
-                    realloc = r
-                if "Temperature_Celsius" in line:
-                    cols = line.split()
-                    if len(cols) >= 10:
-                        temp = cols[9]
-                elif "Temperature:" in line:
-                    try:
-                        temp = line.split(":")[-1].strip().split()[0]
-                    except:
-                        pass
-                if "Current_Pending_Sector" in line:
-                    cols = line.split()
-                    if len(cols) >= 10:
-                        pending = cols[-1]
-                elif "Offline_Uncorrectable" in line:
-                    cols = line.split()
-                    if len(cols) >= 10:
-                        uncorr = cols[-1]
+                cols = line.split()
+                if len(cols) >= 10:
+                    aid = cols[0]
+                    if aid == "5": realloc = cols[-1]
+                    elif aid == "194" and "Temperature_Celsius" in line: temp = cols[9]
+                    elif aid == "197": pending = cols[-1]
+                    elif aid == "198": uncorr = cols[-1]
+                if "Temperature:" in line and temp == "?":
+                    try: temp = line.split(":")[-1].strip().split()[0]
+                    except: pass
 
             data = [f"DISK:   {disk}", f"HEALTH: {health}"]
             if result.returncode != 0:
