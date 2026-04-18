@@ -541,7 +541,7 @@
             video.removeEventListener('click', handler);
           });
         });
-        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); }, { once: true });
+        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); liftDarkOverlay(); }, { once: true });
         video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
       } else { setStatus('UNSUPPORTED'); showError(); }
       return;
@@ -674,7 +674,7 @@
       });
   }
   pollBroadcast();
-  setInterval(pollBroadcast, 5000);
+  setInterval(pollBroadcast, 1000);
 
   function doPost(body, onOk) {
     fetch('/api/broadcast', {
@@ -704,7 +704,6 @@
   });
   msgBox.addEventListener('keydown', function(e) {
     if (!editing) return;
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     if (e.key === 'Escape') { cancelEdit(); }
   });
 
