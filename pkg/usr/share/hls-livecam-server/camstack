@@ -422,8 +422,6 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
 
     # STACK: full causal chain + dark
     y = by + 1
-    safe(scr, y, 3, f"v4l2:     {'OK  ' if v4l2 else 'ERR '}",
-         status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
     safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
          status_attr('LIVE' if ff else 'DOWN', dim)); y += 1
     safe(scr, y, 3, f"RTSP:     {'LIVE' if rtsp else 'DOWN'}",
@@ -436,9 +434,9 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 3, f"API:      {'LIVE' if api else 'DOWN'}",
          status_attr('LIVE' if api else 'DOWN', dim)); y += 1
     dark_attr = (curses.A_DIM if dim else
-                 curses.color_pair(2) | curses.A_BOLD if dark else
-                 curses.color_pair(4))
-    safe(scr, y, 3, f"DARK:     {'ON ' if dark else 'OFF'}",
+                 curses.color_pair(1) | curses.A_BOLD if dark else
+                 curses.color_pair(2) | curses.A_BOLD)
+    safe(scr, y, 3, f"FEED:     {'HIDDEN' if dark else 'SHOWN '}",
          dark_attr); y += 1
     safe(scr, y, 3, f"REPAIR:   {cur_repair}",
          status_attr(cur_repair, dim))
@@ -551,7 +549,7 @@ def draw_footer(scr, editing):
                   "•  [Esc] cancel  •  [Ctrl+U] clear line")
     else:
         footer = ("systemd auto-restarts on failure  •  [m] message  "
-                  "•  [t] dark toggle  •  [r] force repair  •  [q] quit")
+                  "•  [t] show/hide feed  •  [r] force repair  •  [q] quit")
     safe(scr, h - 1, 2, footer, curses.color_pair(4))
 
 
