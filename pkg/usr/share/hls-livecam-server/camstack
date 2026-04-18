@@ -305,12 +305,12 @@ def status_attr(status, dim=False):
     if dim:
         return curses.A_DIM
     if status in ("LIVE", "OK"):
-        return curses.color_pair(1) | curses.A_BOLD
-    if status in ("DEGRADED", "RUNNING"):
         return curses.color_pair(2) | curses.A_BOLD
+    if status in ("DEGRADED", "RUNNING"):
+        return curses.color_pair(3) | curses.A_BOLD
     if status in ("ERROR", "DOWN", "FAIL"):
         return curses.color_pair(3) | curses.A_BOLD
-    return curses.color_pair(4)
+    return curses.color_pair(1)
 
 def load_attr(l, cores, dim=False):
     if dim:
@@ -365,8 +365,11 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
          base)
     mid = f"• {sys_status}"
     safe(scr, 0, w // 2 - len(mid) // 2, mid, status_attr(sys_status, dim))
-    load_text = f"Load {l:.2f}/{cores}"
-    safe(scr, 0, w - len(load_text) - 5, load_text, load_attr(l, cores, dim))
+    feed_text = f"Feed: {'HIDDEN' if dark else 'SHOWN '}"
+    feed_attr = (curses.A_DIM if dim else
+                 curses.color_pair(2) | curses.A_BOLD if not dark else
+                 curses.color_pair(1) | curses.A_BOLD)
+    safe(scr, 0, w - len(feed_text) - 5, feed_text, feed_attr)
 
     # ── LAYOUT ──
     top_y = 2
@@ -406,8 +409,11 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, rx + 2, bar(m, col_w - 6), led(m, dim)); y += 2
     safe(scr, y, rx + 2, f"SWAP  {swap.percent:5.1f}% [{stype}]", base); y += 1
     safe(scr, y, rx + 2, bar(swap.percent, col_w - 6), led(swap.percent, dim)); y += 2
-    safe(scr, y, rx + 2, f"RAM AVAIL: {avail} MB", base); y += 1
-    safe(scr, y, rx + 2, f"USB: {usb}", base)
+    safe(scr, y, rx + 2, f"LOAD  {l:.2f}/{cores}", base); y += 1
+    safe(scr, y, rx + 2, bar(min(l / cores * 100, 100), col_w - 6), load_attr(l, cores, dim)); y += 2
+    col2 = (col_w - 4) // 2
+    safe(scr, y, rx + 2,        f"RAM: {avail} MB"[:col2], base)
+    safe(scr, y, rx + 2 + col2, f"USB: {usb}"[:col2], base)
 
     # BOTTOM row
     by = top_y + box_h
@@ -433,11 +439,8 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
          status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
     safe(scr, y, 3, f"API:      {'LIVE' if api else 'DOWN'}",
          status_attr('LIVE' if api else 'DOWN', dim)); y += 1
-    dark_attr = (curses.A_DIM if dim else
-                 curses.color_pair(1) | curses.A_BOLD if dark else
-                 curses.color_pair(2) | curses.A_BOLD)
-    safe(scr, y, 3, f"FEED:     {'HIDDEN' if dark else 'SHOWN '}",
-         dark_attr); y += 1
+    fps_val = read_device_env().get("FRAMERATE", "?")
+    safe(scr, y, 3, f"FPS:      {fps_val}", base); y += 1
     safe(scr, y, 3, f"REPAIR:   {cur_repair}",
          status_attr(cur_repair, dim))
 
@@ -526,7 +529,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
 
     if warn_partial:
         safe(scr, y, dx + 2, "SMART:  WARN (partial)",
-             curses.A_DIM if dim else curses.color_pair(2) | curses.A_BOLD)
+             curses.A_DIM if dim else curses.color_pair(1) | curses.A_BOLD)
         y += 1
 
     safe(scr, y, dx + 2,       scell("REALLOC"), sattr("REALLOC"))
@@ -542,7 +545,7 @@ def draw_footer(scr, editing):
     if confirm_repair:
         safe(scr, h - 1, 2,
              "REPAIR: are you sure?  [y] yes  [any other key] cancel",
-             curses.color_pair(2) | curses.A_BOLD)
+             curses.color_pair(1) | curses.A_BOLD)
         return
     if editing:
         footer = ("BROADCAST: type message  •  [Enter] send (empty=clear)  "
