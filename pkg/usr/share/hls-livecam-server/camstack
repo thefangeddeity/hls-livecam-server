@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
-Version: 2.2.0
+Version: 2.3.0
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap
@@ -24,15 +24,15 @@ cpu_samples = collections.deque(maxlen=5)
 
 # Broadcast state
 BROADCAST_FILE = "/var/www/hls-livecam/broadcast.txt"
-broadcast_mode = False       # True when user is typing a message
-broadcast_buffer = ""        # in-progress message during edit
-broadcast_current = ""       # last-known file contents (for display)
-broadcast_error = ""         # transient error message (e.g. write failed)
-confirm_repair = False        # True when waiting for y/n on repair
+DARK_FLAG      = "/var/lib/hls-livecam/dark"
+broadcast_mode = False
+broadcast_buffer = ""
+broadcast_current = ""
+broadcast_error = ""
+confirm_repair = False
 
 SMARTCTL = "/usr/sbin/smartctl"
 
-# Prime cpu_percent so first call returns a real value
 psutil.cpu_percent(interval=None)
 
 # ---------- METRICS ----------
@@ -46,7 +46,6 @@ def load(): return os.getloadavg()[0]
 def uptime(): return int(time.time() - psutil.boot_time())
 
 def disk_write_mbs():
-    """Returns MB/s since last call — time-normalized."""
     global last_disk, last_disk_time
     now_counters = psutil.disk_io_counters()
     now_time = time.time()
@@ -178,7 +177,7 @@ def read_smart():
             data.append(f"REALLOC:{realloc}")
             data.append(f"PENDING:{pending}")
             data.append(f"UNCORR: {uncorr}")
-            data.append(f"TEMP:   {temp}°C" if temp != "UNKNOWN" else "TEMP:   UNKNOWN")
+            data.append(f"TEMP:   {temp}°C" if temp != "?" else "TEMP:   UNKNOWN")
 
             with smart_lock:
                 smart_info[:] = data
@@ -186,7 +185,6 @@ def read_smart():
         except:
             continue
 
-    # All attempts failed — give a helpful hint
     with smart_lock:
         smart_info[:] = [
             f"DISK:   {disk}",
@@ -204,7 +202,6 @@ def smart_worker():
 DEVICE_ENV = "/etc/hls-livecam/device.env"
 
 def read_device_env():
-    """Parse /etc/hls-livecam/device.env, return dict of key=value pairs."""
     result = {}
     try:
         with open(DEVICE_ENV) as f:
@@ -229,7 +226,6 @@ def port_open(host, port, timeout=1):
 
 # ---------- BROADCAST ----------
 def read_broadcast():
-    """Read current broadcast message from disk. Returns '' if missing."""
     try:
         with open(BROADCAST_FILE) as f:
             return f.read().strip()
@@ -238,9 +234,7 @@ def read_broadcast():
     except Exception:
         return ""
 
-
 def write_broadcast(msg):
-    """Write broadcast to disk. Returns '' on success, error string on failure."""
     try:
         with open(BROADCAST_FILE, "w") as f:
             f.write(msg)
@@ -253,28 +247,33 @@ def write_broadcast(msg):
 # ---------- REPAIR ----------
 def run_repair():
     global repair_status, last_repair_time
-
     with repair_lock:
         if repair_status == "RUNNING":
-            return  # prevent double-trigger
+            return
         repair_status = "RUNNING"
-
     cmd = ["hls-livecam-repair"]
     if os.geteuid() != 0:
         cmd = ["sudo", "-n"] + cmd
-
     try:
-        subprocess.run(
-            cmd, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, timeout=60
-        )
+        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=60)
         with repair_lock:
             repair_status = "OK"
     except Exception:
         with repair_lock:
             repair_status = "FAIL"
-
     last_repair_time = time.time()
+
+# ---------- DARK TOGGLE ----------
+def run_dark_toggle():
+    cmd = ["hls-livecam-dark"]
+    if os.geteuid() != 0:
+        cmd = ["sudo", "-n"] + cmd
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=15)
+    except Exception:
+        pass
 
 # ---------- UI HELPERS ----------
 def safe(scr, y, x, s, a=0):
@@ -322,16 +321,15 @@ def load_attr(l, cores, dim=False):
 
 # ---------- DASHBOARD SNAPSHOT ----------
 def sample_metrics():
-    """One-shot read of everything the dashboard shows."""
     return {
-        "c": cpu(),
-        "m": mem(),
-        "l": load(),
-        "up": uptime(),
-        "ff": proc("ffmpeg"),
-        "mm": proc("mediamtx"),
-        "usb": usb_power_state(),
-        "hls": get_hls(),
+        "c":    cpu(),
+        "m":    mem(),
+        "l":    load(),
+        "up":   uptime(),
+        "ff":   proc("ffmpeg"),
+        "mm":   proc("mediamtx"),
+        "usb":  usb_power_state(),
+        "hls":  get_hls(),
         "disk": disk_write_mbs(),
         "cores": psutil.cpu_count(logical=True),
         "swap": psutil.swap_memory(),
@@ -342,12 +340,10 @@ def sample_metrics():
         "api":   port_open("127.0.0.1", 5000),
         "v4l2":  os.path.exists(read_device_env().get("VIDEO_DEVICE", "")),
         "v4l2_dev": read_device_env().get("VIDEO_DEVICE", "?"),
+        "dark":  os.path.exists(DARK_FLAG),
     }
 
 def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
-    """Draw header + PIPELINE + SYSTEM + PROCESS + DISK boxes.
-    If dim=True, use A_DIM everywhere (frozen-while-editing look).
-    Does NOT draw the broadcast box or footer — those are drawn separately."""
     h, w = scr.getmaxyx()
     base = curses.A_DIM if dim else 0
 
@@ -358,7 +354,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     avail = snap["avail"]
     nginx = snap["nginx"]; rtsp = snap["rtsp"]
     api   = snap["api"];   v4l2 = snap["v4l2"]
-    v4l2_dev = snap["v4l2_dev"]
+    dark  = snap["dark"]
 
     base_status = system_status(hls, ff, mm)
     sys_status = base_status if cur_repair == "IDLE" else cur_repair
@@ -377,7 +373,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     box_h = 15
     col_w = w // 2 - 2
 
-    # MESSAGE box (top-left — broadcast text; doubles as edit surface)
+    # MESSAGE box
     editing_msg = editing_buffer is not None
     msg_border = curses.color_pair(2) if editing_msg else base
     box(scr, top_y, 1, box_h, col_w, "MESSAGE", msg_border)
@@ -400,7 +396,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
         hint = "(editing — type message)" if editing_msg else "(no message)"
         safe(scr, top_y + 1, 3, hint, curses.A_DIM)
 
-    # SYSTEM box (top-right — unchanged)
+    # SYSTEM box
     rx = col_w + 2
     box(scr, top_y, rx, box_h, col_w, "SYSTEM", base)
     y = top_y + 1
@@ -409,23 +405,22 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, rx + 2, f"MEM   {m:5.1f}%", base); y += 1
     safe(scr, y, rx + 2, bar(m, col_w - 6), led(m, dim)); y += 2
     safe(scr, y, rx + 2, f"SWAP  {swap.percent:5.1f}% [{stype}]", base); y += 1
-    safe(scr, y, rx + 2, bar(swap.percent, col_w - 6),
-         led(swap.percent, dim)); y += 2
+    safe(scr, y, rx + 2, bar(swap.percent, col_w - 6), led(swap.percent, dim)); y += 2
     safe(scr, y, rx + 2, f"RAM AVAIL: {avail} MB", base); y += 1
     safe(scr, y, rx + 2, f"USB: {usb}", base)
 
-    # BOTTOM row (below broadcast box, which is 3 lines)
+    # BOTTOM row
     by = top_y + box_h
     bw = w // 2 - 2
     bh = max(4, h - by - 2)
 
-    # Two side-by-side boxes matching upper row spacing
-    stack_w = 20                      # fits "mediamtx: LIVE" + borders
-    proc_x  = 1 + stack_w + 1        # 1-char gap, same as MESSAGE/SYSTEM
-    proc_w  = bw - stack_w - 1       # remaining width
-    box(scr, by, 1,       bh, stack_w, "STACK",     base)
-    box(scr, by, proc_x,  bh, proc_w,  "PROCESSES", base)
-    # Left: full causal chain
+    stack_w = 20
+    proc_x  = 1 + stack_w + 1
+    proc_w  = bw - stack_w - 1
+    box(scr, by, 1,      bh, stack_w, "STACK",     base)
+    box(scr, by, proc_x, bh, proc_w,  "PROCESSES", base)
+
+    # STACK: full causal chain + dark
     y = by + 1
     safe(scr, y, 3, f"v4l2:     {'OK  ' if v4l2 else 'ERR '}",
          status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
@@ -440,9 +435,15 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
          status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
     safe(scr, y, 3, f"API:      {'LIVE' if api else 'DOWN'}",
          status_attr('LIVE' if api else 'DOWN', dim)); y += 1
+    dark_attr = (curses.A_DIM if dim else
+                 curses.color_pair(2) | curses.A_BOLD if dark else
+                 curses.color_pair(4))
+    safe(scr, y, 3, f"DARK:     {'ON ' if dark else 'OFF'}",
+         dark_attr); y += 1
     safe(scr, y, 3, f"REPAIR:   {cur_repair}",
          status_attr(cur_repair, dim))
-    # Right: top 5 processes
+
+    # PROCESSES
     px = proc_x + 2
     right_edge = proc_x + proc_w - 2
     cpu_w = 6
@@ -465,11 +466,12 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
             safe(scr, by + 1 + i, right_edge - cpu_w, f"{cpuv:5.1f}%", proc_attr)
         except:
             pass
-        # DISK / SMART — two-column layout
+
+    # DISK / SMART
     dx = bw + 2
     box(scr, by, dx, bh, bw, "DISK / SMART", base)
     y = by + 1
-    col = (bw - 4) // 2  # width of each half-column
+    col = (bw - 4) // 2
 
     with smart_lock:
         si_raw = list(smart_info)
@@ -483,17 +485,13 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
             si[k.strip()] = v.strip()
 
     def sint(key):
-        try:
-            return int(si.get(key, "x"))
-        except:
-            return None
+        try: return int(si.get(key, "x"))
+        except: return None
 
     def sattr(key):
-        if dim:
-            return curses.A_DIM
+        if dim: return curses.A_DIM
         n = sint(key)
-        if n is None:
-            return 0
+        if n is None: return 0
         return curses.color_pair(3 if n > 0 else 1) | curses.A_BOLD
 
     def scell(key, label=None):
@@ -501,7 +499,6 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
         val = si.get(key, "?")
         return f"{lbl}:{val}"[:col]
 
-    # Compute RISK independent of manufacturer HEALTH threshold
     realloc_n = sint("REALLOC") or 0
     pending_n = sint("PENDING") or 0
     uncorr_n  = sint("UNCORR")  or 0
@@ -514,20 +511,19 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     if dim:
         risk_attr = curses.A_DIM
 
-    # Row: WRITE | DISK path
-    write_attr = curses.A_DIM if dim else (curses.color_pair(1) | curses.A_BOLD if disk > 0.01 else curses.color_pair(1))
+    write_attr = curses.A_DIM if dim else (
+        curses.color_pair(1) | curses.A_BOLD if disk > 0.01 else curses.color_pair(1))
     safe(scr, y, dx + 2,       f"WRITE  : {disk:.2f} MB/s", write_attr)
-    safe(scr, y, dx + 2 + col, scell("DISK", "DISK  ")[:col], curses.A_DIM if dim else curses.color_pair(1))
+    safe(scr, y, dx + 2 + col, scell("DISK", "DISK  ")[:col],
+         curses.A_DIM if dim else curses.color_pair(1))
     y += 1
 
-    # Row: ASSESS (manufacturer gate) | RISK (our verdict)
     assess_val  = si.get("HEALTH", "?")
     assess_attr = curses.A_DIM if dim else (
         curses.color_pair(1) | curses.A_BOLD if assess_val == "PASSED"
-        else curses.color_pair(3) | curses.A_BOLD
-    )
+        else curses.color_pair(3) | curses.A_BOLD)
     safe(scr, y, dx + 2,       f"ASSESS:{assess_val}"[:col], assess_attr)
-    safe(scr, y, dx + 2 + col, f"RISK:  {risk}"[:col],      risk_attr)
+    safe(scr, y, dx + 2 + col, f"RISK:  {risk}"[:col], risk_attr)
     y += 1
 
     if warn_partial:
@@ -535,16 +531,11 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
              curses.A_DIM if dim else curses.color_pair(2) | curses.A_BOLD)
         y += 1
 
-    # Row: REALLOC | PENDING
     safe(scr, y, dx + 2,       scell("REALLOC"), sattr("REALLOC"))
     safe(scr, y, dx + 2 + col, scell("PENDING"), sattr("PENDING"))
     y += 1
-
-    # Row: UNCORR | TEMP
     safe(scr, y, dx + 2,       scell("UNCORR", "UNCORR "), sattr("UNCORR"))
     safe(scr, y, dx + 2 + col, scell("TEMP", "TEMP  "), base)
-    y += 1
-
 
 
 def draw_footer(scr, editing):
@@ -560,7 +551,7 @@ def draw_footer(scr, editing):
                   "•  [Esc] cancel  •  [Ctrl+U] clear line")
     else:
         footer = ("systemd auto-restarts on failure  •  [m] message  "
-                  "•  [r] force repair  •  [q] quit")
+                  "•  [t] dark toggle  •  [r] force repair  •  [q] quit")
     safe(scr, h - 1, 2, footer, curses.color_pair(4))
 
 
@@ -570,7 +561,7 @@ def main(scr):
     global broadcast_current, broadcast_error, confirm_repair
 
     threading.Thread(target=smart_worker, daemon=True).start()
-    threading.Thread(target=hls_worker, daemon=True).start()
+    threading.Thread(target=hls_worker,   daemon=True).start()
 
     curses.curs_set(0)
     curses.start_color()
@@ -581,25 +572,23 @@ def main(scr):
     curses.init_pair(4, curses.COLOR_WHITE,  -1)
     curses.init_pair(5, curses.COLOR_CYAN,   -1)
 
-    # Snapshot of the dashboard to freeze during edit mode.
-    frozen_snap = None
+    frozen_snap   = None
     frozen_repair = "IDLE"
 
     while True:
         if broadcast_mode:
-            # ── MODAL EDIT MODE ──
-            # Blocking getch: redraw only on key events. No gauge sampling.
             scr.timeout(-1)
             curses.curs_set(1)
 
             scr.erase()
-            draw_dashboard(scr, frozen_snap, frozen_repair, dim=True, editing_buffer=broadcast_buffer)
+            draw_dashboard(scr, frozen_snap, frozen_repair,
+                           dim=True, editing_buffer=broadcast_buffer)
             draw_footer(scr, editing=True)
             scr.refresh()
 
             k = scr.getch()
 
-            if k in (10, 13):                      # Enter → send
+            if k in (10, 13):
                 err = write_broadcast(broadcast_buffer)
                 if err:
                     broadcast_error = "ERR: " + err
@@ -609,18 +598,17 @@ def main(scr):
                 broadcast_mode = False
                 broadcast_buffer = ""
                 curses.curs_set(0)
-            elif k == 27:                          # Esc → cancel
+            elif k == 27:
                 broadcast_mode = False
                 broadcast_buffer = ""
                 curses.curs_set(0)
             elif k in (curses.KEY_BACKSPACE, 127, 8):
                 broadcast_buffer = broadcast_buffer[:-1]
-            elif k == 21:                          # Ctrl+U → clear
+            elif k == 21:
                 broadcast_buffer = ""
             elif 32 <= k <= 126:
                 if len(broadcast_buffer) < 140:
                     broadcast_buffer += chr(k)
-            # any other key: ignored; loop redraws
             continue
 
         # ── LIVE DASHBOARD MODE ──
@@ -640,17 +628,17 @@ def main(scr):
                 confirm_repair = False
         elif k == ord('r'):
             confirm_repair = True
+        elif k == ord('t'):
+            threading.Thread(target=run_dark_toggle, daemon=True).start()
         elif k == ord('m'):
-            # Snapshot before entering modal so the frozen view is accurate.
             frozen_snap = sample_metrics()
             with repair_lock:
                 frozen_repair = repair_status
             broadcast_mode = True
-            broadcast_buffer = broadcast_current  # prefill with current
+            broadcast_buffer = broadcast_current
             broadcast_error = ""
-            continue  # next iteration handles edit-mode draw
+            continue
 
-        # Live sample + draw
         snap = sample_metrics()
         with repair_lock:
             cur_repair = repair_status

@@ -1,0 +1,24 @@
+[Unit]
+Description=FFmpeg Camera Capture — Dark Mode (black stream)
+After=network-online.target mediamtx.service
+Wants=network-online.target
+
+[Service]
+User=mediamtx
+Group=video
+ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel info \
+  -f lavfi -i color=black:s=1280x720:r=30 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -vf format=yuv420p -profile:v high -level 4.0 \
+  -b:v 500k -g 60 \
+  -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/cam
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ffmpeg-cam-dark
+
+[Install]
+WantedBy=multi-user.target

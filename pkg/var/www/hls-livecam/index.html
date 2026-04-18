@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CAM-01 — tina</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --panel: #ffffff;
+    --panel-2: #fafafa;
+    --border: #e5e5ea;
+    --border-strong: #d2d2d7;
+    --text: #1d1d1f;
+    --text-dim: #86868b;
+    --text-muted: #a1a1a6;
+    --accent: #0071e3;
+    --accent-hover: #0077ed;
+    --danger: #ff3b30;
+    --success: #34c759;
+    --warn: #ff9500;
+    --shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.06);
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1e;
+      --panel: #2c2c2e;
+      --panel-2: #242426;
+      --border: #38383a;
+      --border-strong: #48484a;
+      --text: #f5f5f7;
+      --text-dim: #98989d;
+      --text-muted: #6e6e73;
+      --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.4);
+    }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .brand .sep { color: var(--text-muted); font-weight: 400; }
+  .brand .host { color: var(--text-dim); font-weight: 500; }
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+    transition: all 0.2s;
+  }
+  .live-pill::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .live-pill.live { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
+  .live-pill.live::before { background: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
+  .live-pill.reconnecting { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
+  .live-pill.reconnecting::before { background: var(--warn); }
+  .live-pill.dark-mode { color: var(--text-muted); background: var(--panel-2); border-color: var(--border); }
+  .live-pill.dark-mode::before { background: var(--text-muted); animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+  /* ── MAIN LAYOUT ── */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    min-height: 0;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  /* ── VIDEO ── */
+  .video-wrap {
+    flex: 1;
+    position: relative;
+    background: #000;
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    min-width: 0; min-height: 0;
+  }
+  video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+    background: #000;
+  }
+  .dark-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    background: #000;
+  }
+  .dark-overlay.visible { display: flex; }
+  .dark-overlay img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    opacity: 0.85;
+  }
+  .video-overlay {
+    position: absolute;
+    top: 12px; left: 16px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    opacity: 0.85;
+    pointer-events: none;
+  }
+  .error-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 8px;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(4px);
+    color: #fff;
+  }
+  .error-overlay.visible { display: flex; }
+  .error-overlay .title { font-size: 15px; font-weight: 600; color: var(--danger); }
+  .error-overlay .sub { font-size: 12px; color: rgba(255,255,255,0.7); }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: 260px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    padding: 18px;
+    gap: 18px;
+    overflow-y: auto;
+    flex-shrink: 0;
+    height: 100%;
+  }
+  .section { display: flex; flex-direction: column; gap: 8px; }
+  .section-title {
+    font-size: 11px; font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .stat {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 13px; padding: 3px 0;
+  }
+  .stat .k { color: var(--text-dim); }
+  .stat .v { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+  .info-chip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px; color: var(--text-dim);
+  }
+  .info-chip .label { font-weight: 500; color: var(--text); }
+  .info-chip .badge {
+    margin-left: auto;
+    font-size: 10px; font-weight: 600;
+    color: var(--text-muted);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 2px 6px; border-radius: 4px;
+    letter-spacing: 0.02em;
+  }
+
+  .btn {
+    appearance: none;
+    width: 100%;
+    padding: 9px 14px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit; font-size: 13px; font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn:hover { background: var(--bg); border-color: var(--text-muted); }
+  .btn:active { transform: scale(0.98); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.dark-btn {
+    background: #1c1c1e;
+    border-color: #3a3a3c;
+    color: #ebebf5;
+  }
+  .btn.dark-btn:hover { background: #2c2c2e; border-color: #636366; }
+  .btn.dark-btn.is-dark {
+    background: #3a3a3c;
+    border-color: #636366;
+    color: #fff;
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+  .btn[hidden] { display: none; }
+
+  /* ── MESSAGE BOX ── */
+  .message-section { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+  .msg-box-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  textarea.msg-box {
+    flex: 1;
+    width: 100%;
+    padding: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit; font-size: 14px; line-height: 1.5;
+    resize: none; outline: none;
+    transition: border-color 0.15s, background 0.15s;
+    cursor: default;
+  }
+  textarea.msg-box.empty { color: var(--text-muted); font-style: italic; }
+  textarea.msg-box.editing {
+    border-color: var(--accent);
+    background: var(--panel);
+    cursor: text; font-style: normal; color: var(--text);
+  }
+
+  .msg-actions { display: flex; gap: 6px; }
+  .msg-actions .btn { flex: 1; }
+
+  .msg-hint {
+    font-size: 11px; color: var(--text-muted);
+    text-align: center; min-height: 16px;
+    transition: color 0.2s;
+  }
+  .msg-hint.ok { color: var(--success); }
+  .msg-hint.err { color: var(--danger); }
+
+  .sidebar-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  @media (max-width: 720px) {
+    header { padding: 10px 16px; }
+    .main { padding: 0; gap: 0; flex-direction: column; }
+    .video-wrap { flex: 1; border-radius: 0; box-shadow: none; }
+    .sidebar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      width: 100%;
+      border-radius: var(--radius) var(--radius) 0 0;
+      border-bottom: none;
+      max-height: 85dvh;
+      padding: 0 16px 24px;
+      gap: 0;
+      transform: translateY(calc(100% - 64px));
+      transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+      z-index: 100;
+    }
+    .sidebar.open { transform: translateY(0); }
+    .drawer-handle {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 0 16px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .drawer-handle .knob { width: 36px; height: 4px; background: var(--border-strong); border-radius: 2px; }
+    .drawer-handle .label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+    .sidebar-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+    .message-section { order: -1; }
+    .message-display { min-height: 48px; }
+    textarea.msg-input { min-height: 52px; }
+  }
+  .drawer-handle { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span>CAM-01</span>
+    <span class="sep">//</span>
+    <span class="host">tina</span>
+  </div>
+  <div class="status-bar">
+    <span class="live-pill" id="liveIndicator">CONNECTING</span>
+    <span id="clockDisplay">--:--:--</span>
+  </div>
+</header>
+
+<div class="main">
+  <div class="video-wrap" id="videoContainer">
+    <video id="video" autoplay muted playsinline></video>
+    <div class="dark-overlay" id="darkOverlay">
+      <img src="/dark.png" alt="">
+    </div>
+    <div class="video-overlay" id="tsOverlay">--</div>
+    <div class="error-overlay" id="errorOverlay">
+      <div class="title">Signal lost</div>
+      <div class="sub">Retrying…</div>
+    </div>
+  </div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="drawer-handle" id="drawerHandle" onclick="toggleDrawer()">
+      <div class="knob"></div>
+      <div class="label" id="drawerLabel">Message &amp; Info</div>
+    </div>
+
+    <div class="sidebar-scroll">
+      <!-- MESSAGE -->
+      <div class="section message-section">
+        <div class="section-title">Message <span id="msgHint" class="msg-hint"></span></div>
+        <div class="msg-box-wrap">
+          <textarea class="msg-box empty" id="msgBox" readonly>(no message)</textarea>
+        </div>
+        <div class="msg-actions" id="msgActions" hidden>
+          <button class="btn primary" onclick="sendMessage()">Send</button>
+          <button class="btn" onclick="cancelEdit()">Cancel</button>
+          <button class="btn" onclick="clearMessage()">Clear</button>
+        </div>
+      </div>
+
+      <!-- STREAM INFO -->
+      <div class="section">
+        <div class="section-title">Stream</div>
+        <div class="stat"><span class="k">Host</span><span class="v" id="hostVal">--</span></div>
+        <div class="stat"><span class="k">Protocol</span><span class="v" id="protoVal">--</span></div>
+        <div class="stat"><span class="k">Resolution</span><span class="v">1280 × 720</span></div>
+        <div class="stat"><span class="k">Framerate</span><span class="v" id="fpsVal">--</span></div>
+        <div class="stat"><span class="k">Uptime</span><span class="v" id="uptimeVal">--</span></div>
+      </div>
+
+      <!-- AUDIO -->
+      <div class="section">
+        <div class="section-title">Audio</div>
+        <div class="info-chip">
+          <span class="label">No audio</span>
+          <span class="badge">COMING SOON</span>
+        </div>
+      </div>
+
+      <!-- CONTROLS -->
+      <div class="section">
+        <div class="section-title">Controls</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <button class="btn" onclick="toggleFullscreen()">Fullscreen</button>
+          <button class="btn dark-btn" id="darkBtn" onclick="toggleDark()">Hide Feed</button>
+          <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+  var HLS_URL = 'http://' + window.location.hostname + ':8888/cam/index.m3u8';
+  var video        = document.getElementById('video');
+  var liveInd      = document.getElementById('liveIndicator');
+  var errorOverlay = document.getElementById('errorOverlay');
+  var darkOverlay  = document.getElementById('darkOverlay');
+  var darkBtn      = document.getElementById('darkBtn');
+  var reconnectBtn = document.getElementById('reconnectBtn');
+  var hls = null;
+  var recovering = false, retryTimer = null;
+  var liveAt = null, uptimeInterval = null;
+  var isDark = false;
+
+  document.getElementById('hostVal').textContent  = window.location.hostname;
+  document.getElementById('protoVal').textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
+
+  // ── MOBILE DRAWER ──
+  var drawerOpen = false;
+  function toggleDrawer() {
+    drawerOpen = !drawerOpen;
+    document.getElementById('sidebar').classList.toggle('open', drawerOpen);
+    document.getElementById('drawerLabel').textContent = drawerOpen ? 'Close' : 'Message & Info';
+  }
+
+  // ── DARK MODE ──
+  // Overlay and button state are decoupled:
+  //   isDark      — tracks server state; cleared immediately on "go live"
+  //   darkOverlay — stays visible until first FRAG_LOADED or 15s timeout
+  //   darkBtn     — disabled only during POST, re-enabled on ack
+  var darkLiftTimer = null;
+
+  function liftDarkOverlay() {
+    if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
+    darkOverlay.classList.remove('visible');
+  }
+
+  function applyDark(dark) {
+    isDark = dark;
+    darkBtn.textContent = dark ? 'Show Feed' : 'Hide Feed';
+    darkBtn.classList.toggle('is-dark', dark);
+    darkBtn.disabled = false;
+    if (dark) {
+      if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
+      darkOverlay.classList.add('visible');
+      liveInd.textContent = 'DARK';
+      liveInd.className = 'live-pill dark-mode';
+    } else {
+      // Keep overlay up until stream confirms live; 15s failsafe
+      if (!darkLiftTimer) darkLiftTimer = setTimeout(liftDarkOverlay, 15000);
+    }
+  }
+
+  function pollDark() {
+    fetch('/api/dark', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (text === null) return;
+        var serverDark = text.trim() === 'true';
+        if (serverDark !== isDark) applyDark(serverDark);
+      });
+  }
+
+  function toggleDark() {
+    darkBtn.disabled = true;
+    fetch('/api/dark', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (text !== null) applyDark(text.trim() === 'true');
+        else darkBtn.disabled = false;
+      });
+  }
+
+  pollDark();
+  setInterval(pollDark, 5000);
+
+  // ── HLS ──
+  function setStatus(text, mode) {
+    // Always update pill unless we're dark and not going live
+    if (isDark && mode !== 'live') return;
+    liveInd.textContent = text;
+    liveInd.className = 'live-pill' + (mode ? ' ' + mode : '');
+    if (mode === 'live') {
+      errorOverlay.classList.remove('visible');
+      liftDarkOverlay(); // drop overlay once stream is confirmed
+      reconnectBtn.hidden = true;
+      if (!liveAt) {
+        liveAt = Date.now();
+        if (uptimeInterval) clearInterval(uptimeInterval);
+        uptimeInterval = setInterval(updateUptime, 1000);
+      }
+    } else {
+      liveAt = null;
+      if (uptimeInterval) { clearInterval(uptimeInterval); uptimeInterval = null; }
+      document.getElementById('uptimeVal').textContent = '--';
+    }
+  }
+
+  function showError() {
+    if (isDark) return;
+    errorOverlay.classList.add('visible');
+    reconnectBtn.hidden = false;
+  }
+
+  function updateUptime() {
+    if (!liveAt) return;
+    var s = Math.floor((Date.now() - liveAt) / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    document.getElementById('uptimeVal').textContent =
+      h > 0 ? h + 'h ' + m + 'm' : m > 0 ? m + 'm ' + sec + 's' : sec + 's';
+  }
+
+  function scheduleRetry(ms) {
+    if (retryTimer) clearTimeout(retryTimer);
+    setStatus('RECONNECTING', 'reconnecting');
+    retryTimer = setTimeout(initHLS, ms);
+  }
+
+  function initHLS() {
+    recovering = false;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (hls) { hls.destroy(); hls = null; }
+    setStatus('CONNECTING');
+
+    if (!Hls.isSupported()) {
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = HLS_URL;
+        video.onloadedmetadata = function() { video.play().catch(function(){}); setStatus('LIVE', 'live'); };
+        video.onerror = function() { showError(); scheduleRetry(5000); };
+      } else { setStatus('UNSUPPORTED'); showError(); }
+      return;
+    }
+
+    hls = new Hls({
+      lowLatencyMode: false, backBufferLength: 4, maxBufferLength: 8,
+      liveSyncDurationCount: 3, enableWorker: true,
+      levelLoadingTimeOut: 12000, fragLoadingTimeOut: 20000,
+      maxFragLookUpTolerance: 0.5, fragLoadingMaxRetry: 8,
+      levelLoadingMaxRetry: 8, fragLoadingRetryDelay: 1000,
+      levelLoadingRetryDelay: 1000, debug: false,
+    });
+    hls.loadSource(HLS_URL);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, function() { setStatus('BUFFERING'); video.play().catch(function(){}); });
+    hls.on(Hls.Events.FRAG_LOADED, function() { if (liveInd.textContent !== 'LIVE') setStatus('LIVE', 'live'); });
+    hls.on(Hls.Events.ERROR, function(e, data) {
+      if (!data.fatal) { scheduleRetry(3000); return; }
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovering) {
+        recovering = true; setStatus('RECONNECTING', 'reconnecting');
+        hls.recoverMediaError(); setTimeout(function() { recovering = false; }, 4000);
+      } else { showError(); scheduleRetry(5000); }
+    });
+  }
+
+  function reloadStream() { initHLS(); }
+
+  function toggleFullscreen() {
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    if (isIOS) { if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); return; }
+    var c = document.getElementById('videoContainer');
+    if (!document.fullscreenElement) c.requestFullscreen().catch(function(){});
+    else document.exitFullscreen();
+  }
+
+  // ── CLOCK ──
+  function updateClock() {
+    var now = new Date();
+    var hh = String(now.getHours()).padStart(2,'0');
+    var mm = String(now.getMinutes()).padStart(2,'0');
+    var ss = String(now.getSeconds()).padStart(2,'0');
+    document.getElementById('clockDisplay').textContent = hh+':'+mm+':'+ss;
+    var date = now.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+    document.getElementById('tsOverlay').textContent = date+'  '+hh+':'+mm+':'+ss;
+  }
+  setInterval(updateClock, 1000); updateClock();
+
+  // ── FPS ──
+  (function setupFpsCounter() {
+    var fpsEl = document.getElementById('fpsVal');
+    var frames = 0;
+    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+      var tick = function() { frames++; video.requestVideoFrameCallback(tick); };
+      video.requestVideoFrameCallback(tick);
+      setInterval(function() { fpsEl.textContent = frames + ' fps'; frames = 0; }, 1000);
+      return;
+    }
+    var lastCount = 0;
+    setInterval(function() {
+      var count = null;
+      if (typeof video.getVideoPlaybackQuality === 'function') count = video.getVideoPlaybackQuality().totalVideoFrames;
+      else if (video.webkitDecodedFrameCount !== undefined) count = video.webkitDecodedFrameCount;
+      if (count === null) { fpsEl.textContent = '—'; return; }
+      fpsEl.textContent = (count - lastCount) + ' fps'; lastCount = count;
+    }, 1000);
+  })();
+
+  // ── BROADCAST POLL + SEND ──
+  var currentMsg = '';
+  var editing = false;
+  var msgBox = document.getElementById('msgBox');
+  var msgActions = document.getElementById('msgActions');
+  var msgHint = document.getElementById('msgHint');
+
+  function setHint(text, cls) {
+    msgHint.textContent = text;
+    msgHint.className = 'msg-hint' + (cls ? ' ' + cls : '');
+    if (cls) setTimeout(function() { msgHint.textContent = ''; msgHint.className = 'msg-hint'; }, 3000);
+  }
+
+  function showDisplay(msg) {
+    currentMsg = msg;
+    if (!editing) {
+      msgBox.value = msg || '(no message)';
+      msgBox.classList.toggle('empty', !msg);
+    }
+  }
+
+  function enterEdit() {
+    editing = true;
+    msgBox.value = currentMsg;
+    msgBox.classList.remove('empty');
+    msgBox.classList.add('editing');
+    msgBox.removeAttribute('readonly');
+    msgBox.focus();
+    msgActions.hidden = false;
+    setHint('Enter = send  •  Esc = cancel');
+  }
+
+  function cancelEdit() {
+    editing = false;
+    msgBox.setAttribute('readonly', '');
+    msgBox.classList.remove('editing');
+    msgActions.hidden = true;
+    showDisplay(currentMsg);
+    setHint('');
+  }
+
+  function pollBroadcast() {
+    fetch('/broadcast.txt', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : ''; })
+      .catch(function() { return ''; })
+      .then(function(text) {
+        var msg = (text || '').trim();
+        if (msg !== currentMsg) showDisplay(msg);
+      });
+  }
+  pollBroadcast();
+  setInterval(pollBroadcast, 5000);
+
+  function doPost(body, onOk) {
+    fetch('/api/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: body
+    })
+    .then(function(r) {
+      if (r.ok) { onOk(); }
+      else { setHint('Server error', 'err'); }
+    })
+    .catch(function() { setHint('Not available yet', 'err'); });
+  }
+
+  function sendMessage() {
+    var text = msgBox.value.trim();
+    doPost(text, function() { cancelEdit(); showDisplay(text); setHint('Sent', 'ok'); });
+  }
+
+  function clearMessage() {
+    doPost('', function() { cancelEdit(); showDisplay(''); setHint('Cleared', 'ok'); });
+  }
+
+  msgBox.addEventListener('click', function() { if (!editing) enterEdit(); });
+  msgBox.addEventListener('keydown', function(e) {
+    if (!editing) return;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (e.key === 'Escape') { cancelEdit(); }
+  });
+
+  initHLS();
+</script>
+</body>
+</html>

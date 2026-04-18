@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""
+broadcast-api — hls-livecam-server message + dark-mode endpoint
+"""
+from flask import Flask, request, abort
+import os, subprocess
+
+app = Flask(__name__)
+
+BROADCAST_FILE = "/var/www/hls-livecam/broadcast.txt"
+DARK_FLAG      = "/var/lib/hls-livecam/dark"
+MAX_LEN        = 140
+
+@app.route("/api/broadcast", methods=["POST"])
+def broadcast():
+    body = request.get_data(as_text=True)
+    msg  = body.strip()[:MAX_LEN]
+    try:
+        with open(BROADCAST_FILE, "w") as f:
+            f.write(msg)
+        return "", 204
+    except PermissionError:
+        abort(403)
+    except Exception:
+        abort(500)
+
+@app.route("/api/dark", methods=["GET"])
+def dark_get():
+    return ("true" if os.path.exists(DARK_FLAG) else "false"), 200
+
+@app.route("/api/dark", methods=["POST"])
+def dark_post():
+    try:
+        subprocess.run(
+            ["sudo", "-n", "hls-livecam-dark"],
+            timeout=15,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return ("true" if os.path.exists(DARK_FLAG) else "false"), 200
+    except Exception:
+        abort(500)
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000)

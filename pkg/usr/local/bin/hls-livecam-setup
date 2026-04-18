@@ -281,6 +281,18 @@ echo ""
 echo -e "${BOLD}Configuring nginx...${NC}"
 mkdir -p "$WEB_ROOT"
 
+# ── Broadcast file (user-writable by www-data group) ──
+# camstack (running as the logged-in user) writes here when the operator
+# sends a broadcast message. nginx serves it to the web viewer with
+# no-cache headers. File is group-writable by www-data so any user in
+# that group can send broadcasts without sudo.
+BROADCAST_FILE="${WEB_ROOT}/broadcast.txt"
+if [ ! -f "$BROADCAST_FILE" ]; then
+  touch "$BROADCAST_FILE"
+fi
+chown root:www-data "$BROADCAST_FILE"
+chmod 0664 "$BROADCAST_FILE"
+
 # Substitute @HOSTNAME@ into index.html at install time (no runtime JS).
 HOSTNAME_VAL=$(hostname)
 sed "s|@HOSTNAME@|${HOSTNAME_VAL}|g" "$INDEX_TEMPLATE" > "$WEB_ROOT/index.html"
@@ -291,6 +303,16 @@ server {
     listen 80 default_server;
     root $WEB_ROOT;
     index index.html;
+
+# Broadcast file: served with aggressive no-cache so the browser
+    # picks up new messages on every poll. 200 if present, 404 if missing.
+    location = /broadcast.txt {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires 0;
+        default_type text/plain;
+    }
+
     location / {
         add_header Cache-Control "no-store, no-cache, must-revalidate";
         add_header Pragma "no-cache";

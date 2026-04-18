@@ -1,0 +1,550 @@
+#!/usr/bin/env python3
+"""
+camstack — hls-livecam-server monitor
+Launch with: camstack
+"""
+import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re
+
+# ---------- STATE ----------
+repair_status = "IDLE"
+repair_lock = threading.Lock()
+last_repair_time = 0
+
+last_disk = psutil.disk_io_counters()
+last_disk_time = time.time()
+
+smart_info = ["SMART: loading..."]
+smart_lock = threading.Lock()
+
+hls_state = "UNKNOWN"
+hls_lock = threading.Lock()
+
+cpu_samples = collections.deque(maxlen=5)
+
+# Broadcast state
+BROADCAST_FILE = "/var/www/hls-livecam/broadcast.txt"
+broadcast_mode = False       # True when user is typing a message
+broadcast_buffer = ""        # in-progress message during edit
+broadcast_current = ""       # last-known file contents (for display)
+broadcast_error = ""         # transient error message (e.g. write failed)
+
+SMARTCTL = "/usr/sbin/smartctl"
+
+# Prime cpu_percent so first call returns a real value
+psutil.cpu_percent(interval=None)
+
+# ---------- METRICS ----------
+def cpu():
+    val = psutil.cpu_percent(interval=None)
+    cpu_samples.append(val)
+    return sum(cpu_samples) / len(cpu_samples)
+
+def mem(): return psutil.virtual_memory().percent
+def load(): return os.getloadavg()[0]
+def uptime(): return int(time.time() - psutil.boot_time())
+
+def disk_write_mbs():
+    """Returns MB/s since last call — time-normalized."""
+    global last_disk, last_disk_time
+    now_counters = psutil.disk_io_counters()
+    now_time = time.time()
+    elapsed = now_time - last_disk_time
+    if elapsed <= 0:
+        return 0.0
+    delta_bytes = now_counters.write_bytes - last_disk.write_bytes
+    last_disk = now_counters
+    last_disk_time = now_time
+    return (delta_bytes / elapsed) / (1024 * 1024)
+
+def proc(name):
+    for p in psutil.process_iter(['name', 'cmdline']):
+        try:
+            if name in (p.info['name'] or ""):
+                return True
+            if p.info['cmdline'] and any(name in x for x in p.info['cmdline']):
+                return True
+        except:
+            pass
+    return False
+
+# ---------- SYSTEM STATUS ----------
+def system_status(hls, ff, mm):
+    if hls == "LIVE":    return "LIVE"
+    if hls == "ERROR":   return "ERROR"
+    if ff or mm:         return "DEGRADED"
+    return "DOWN"
+
+# ---------- SWAP ----------
+def swap_type():
+    try:
+        with open("/proc/swaps") as f:
+            lines = f.readlines()[1:]
+        if not lines:           return "NONE"
+        if any("zram" in l for l in lines):  return "ZRAM"
+        if any("/dev/" in l for l in lines): return "DISK"
+        return "OTHER"
+    except:
+        return "UNKNOWN"
+
+# ---------- USB ----------
+def usb_power_state():
+    try:
+        base = "/sys/bus/usb/devices"
+        for d in sorted(os.listdir(base)):
+            p = f"{base}/{d}/power/control"
+            if os.path.exists(p):
+                with open(p) as f:
+                    v = f.read().strip()
+                if v in ("on", "auto"):
+                    return v.upper()
+    except:
+        return "ERROR"
+    return "UNKNOWN"
+
+# ---------- HLS WORKER ----------
+def hls_worker():
+    global hls_state
+    while True:
+        state = "DOWN"
+        try:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8888/cam/index.m3u8", timeout=2
+            ) as r:
+                state = "LIVE" if r.status == 200 else "ERROR"
+        except urllib.error.URLError:
+            state = "DOWN"
+        except Exception:
+            state = "ERROR"
+        with hls_lock:
+            hls_state = state
+        time.sleep(2)
+
+def get_hls():
+    with hls_lock:
+        return hls_state
+
+# ---------- SMART WORKER ----------
+def get_main_disk():
+    try:
+        out = subprocess.check_output(
+            ["lsblk", "-d", "-n", "-o", "NAME,TYPE"], text=True
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "disk":
+                return f"/dev/{parts[0]}"
+    except:
+        pass
+    return "/dev/sda"
+
+def parse_realloc(line):
+    if re.search(r"\b5\b", line) and "Reallocated" in line:
+        cols = line.split()
+        if len(cols) >= 10:
+            return cols[-1]
+    return None
+
+def read_smart():
+    disk = get_main_disk()
+    cmds = [
+        [SMARTCTL, "-a", disk],
+        ["sudo", "-n", SMARTCTL, "-a", disk],
+        ["sudo", "-n", SMARTCTL, "-a", "-d", "sat", disk],
+        ["sudo", "-n", SMARTCTL, "-a", "-d", "scsi", disk],
+    ]
+    for cmd in cmds:
+        try:
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=5
+            )
+            out = result.stdout.decode(errors="ignore")
+            if not out or len(out.splitlines()) < 5:
+                continue
+
+            health = realloc = temp = "UNKNOWN"
+            for line in out.splitlines():
+                if "SMART overall-health" in line:
+                    health = line.split(":")[-1].strip()
+                r = parse_realloc(line)
+                if r is not None:
+                    realloc = r
+                if "Temperature_Celsius" in line:
+                    cols = line.split()
+                    if len(cols) >= 10:
+                        temp = cols[9]
+                elif "Temperature:" in line:
+                    try:
+                        temp = line.split(":")[-1].strip().split()[0]
+                    except:
+                        pass
+
+            data = [f"DISK:   {disk}", f"HEALTH: {health}"]
+            if result.returncode != 0:
+                data.append("SMART:  WARN (partial)")
+            data.append(f"REALLOC:{realloc}")
+            data.append(f"TEMP:   {temp}°C" if temp != "UNKNOWN" else "TEMP:   UNKNOWN")
+
+            with smart_lock:
+                smart_info[:] = data
+            return
+        except:
+            continue
+
+    # All attempts failed — give a helpful hint
+    with smart_lock:
+        smart_info[:] = [
+            f"DISK:   {disk}",
+            "SMART:  NO ACCESS",
+            "HINT:   run as root or",
+            "        add smartctl to sudoers",
+        ]
+
+def smart_worker():
+    while True:
+        read_smart()
+        time.sleep(30)
+
+# ---------- BROADCAST ----------
+def read_broadcast():
+    """Read current broadcast message from disk. Returns '' if missing."""
+    try:
+        with open(BROADCAST_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return ""
+
+
+def write_broadcast(msg):
+    """Write broadcast to disk. Returns '' on success, error string on failure."""
+    try:
+        with open(BROADCAST_FILE, "w") as f:
+            f.write(msg)
+        return ""
+    except PermissionError:
+        return "permission denied"
+    except Exception as e:
+        return str(e)[:40]
+
+# ---------- REPAIR ----------
+def run_repair():
+    global repair_status, last_repair_time
+
+    with repair_lock:
+        if repair_status == "RUNNING":
+            return  # prevent double-trigger
+        repair_status = "RUNNING"
+
+    cmd = ["hls-livecam-repair"]
+    if os.geteuid() != 0:
+        cmd = ["sudo", "-n"] + cmd
+
+    try:
+        subprocess.run(
+            cmd, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=60
+        )
+        with repair_lock:
+            repair_status = "OK"
+    except Exception:
+        with repair_lock:
+            repair_status = "FAIL"
+
+    last_repair_time = time.time()
+
+# ---------- UI HELPERS ----------
+def safe(scr, y, x, s, a=0):
+    try:
+        scr.addstr(y, x, s[:max(0, scr.getmaxyx()[1] - x - 1)], a)
+    except:
+        pass
+
+def box(scr, y, x, h, w, title):
+    safe(scr, y, x, "┌" + "─" * (w - 2) + "┐")
+    safe(scr, y, x + 2, f" {title} ")
+    for i in range(1, h - 1):
+        safe(scr, y + i, x, "│")
+        safe(scr, y + i, x + w - 1, "│")
+    safe(scr, y + h - 1, x, "└" + "─" * (w - 2) + "┘")
+
+def bar(val, w):
+    filled = int((val / 100.0) * w)
+    return "█" * filled + "░" * (w - filled)
+
+def led(val):
+    if val < 50:   return curses.color_pair(1)
+    if val < 80:   return curses.color_pair(2) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+def status_attr(status):
+    if status in ("LIVE", "OK"):
+        return curses.color_pair(1) | curses.A_BOLD
+    if status in ("DEGRADED", "RUNNING"):
+        return curses.color_pair(2) | curses.A_BOLD
+    if status in ("ERROR", "DOWN", "FAIL"):
+        return curses.color_pair(3) | curses.A_BOLD
+    # IDLE, UNKNOWN, etc
+    return curses.color_pair(4)
+
+def load_attr(l, cores):
+    if l < cores * 0.7:  return curses.color_pair(1)
+    if l <= cores:        return curses.color_pair(2) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+# ---------- MAIN ----------
+def main(scr):
+    global repair_status, broadcast_mode, broadcast_buffer, broadcast_current, broadcast_error
+
+    threading.Thread(target=smart_worker, daemon=True).start()
+    threading.Thread(target=hls_worker, daemon=True).start()
+
+    curses.curs_set(0)  # hidden by default; shown in edit mode below
+    scr.timeout(500)  # default poll: 500ms; tightened to 30ms in edit mode below
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_GREEN,  -1)
+    curses.init_pair(2, curses.COLOR_YELLOW, -1)
+    curses.init_pair(3, curses.COLOR_RED,    -1)
+    curses.init_pair(4, curses.COLOR_WHITE,  -1)
+    curses.init_pair(5, curses.COLOR_CYAN,   -1)  # broadcast content
+
+    while True:
+        k = scr.getch()
+        if broadcast_mode:
+            # In edit mode: Enter sends, Esc cancels, backspace/printables edit
+            if k in (10, 13):                      # Enter → send
+                err = write_broadcast(broadcast_buffer)
+                if err:
+                    broadcast_error = "ERR: " + err
+                else:
+                    broadcast_current = broadcast_buffer
+                    broadcast_error = ""
+                broadcast_mode = False
+                broadcast_buffer = ""
+                curses.curs_set(0)
+            elif k == 27:                          # Esc → cancel
+                broadcast_mode = False
+                broadcast_buffer = ""
+                curses.curs_set(0)
+            elif k in (curses.KEY_BACKSPACE, 127, 8):
+                broadcast_buffer = broadcast_buffer[:-1]
+            elif k == 21:                          # Ctrl+U → clear line
+                broadcast_buffer = ""
+            elif 32 <= k <= 126:                   # printable ASCII
+                if len(broadcast_buffer) < 140:
+                    broadcast_buffer += chr(k)
+            # Fall through to redraw
+        else:
+            if k in (ord('q'), 3):
+                break
+            if k == ord('r'):
+                with repair_lock:
+                    can_manual = repair_status != "RUNNING"
+                if can_manual:
+                    threading.Thread(target=run_repair, daemon=True).start()
+            elif k == ord('b'):
+                broadcast_mode = True
+                broadcast_buffer = broadcast_current  # prefill with current
+                broadcast_error = ""
+                curses.curs_set(1)  # show blinking cursor while typing
+            with repair_lock:
+                can_manual = repair_status != "RUNNING"
+            if can_manual:
+                threading.Thread(target=run_repair, daemon=True).start()
+
+        scr.erase()
+        # Refresh broadcast_current from disk every loop; cheap local read.
+        if not broadcast_mode:
+            broadcast_current = read_broadcast()
+        h, w = scr.getmaxyx()
+
+        c = cpu(); m = mem(); l = load()
+        up = uptime()
+        ff = proc("ffmpeg"); mm = proc("mediamtx")
+        usb = usb_power_state()
+        hls = get_hls()
+        disk = disk_write_mbs()
+        cores = psutil.cpu_count(logical=True)
+        base_status = system_status(hls, ff, mm)
+
+        with repair_lock:
+            cur_repair = repair_status
+
+        # Displayed status
+        sys_status = base_status if cur_repair == "IDLE" else cur_repair
+
+        # ── HEADER ──
+        safe(scr, 0, 2, f"Webcam Server Stack  •  uptime {up // 3600}h {(up % 3600) // 60}m")
+        mid = f"• {sys_status}"
+        safe(scr, 0, w // 2 - len(mid) // 2, mid, status_attr(sys_status))
+        load_text = f"Load {l:.2f}/{cores}"
+        safe(scr, 0, w - len(load_text) - 2, load_text, load_attr(l, cores))
+
+        # ── LAYOUT ──
+        top_y = 2
+        box_h = 16
+        col_w = w // 2 - 2
+
+        # PIPELINE box
+        box(scr, top_y, 1, box_h, col_w, "PIPELINE")
+        y = top_y + 2
+        safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}", status_attr('LIVE' if ff else 'DOWN')); y += 1
+        safe(scr, y, 3, f"mediamtx: {'LIVE' if mm else 'DOWN'}", status_attr('LIVE' if mm else 'DOWN')); y += 1
+        safe(scr, y, 3, f"HLS:      {hls}", status_attr(hls)); y += 2
+        safe(scr, y, 3, f"repair:   {cur_repair}", status_attr(cur_repair)); y += 2
+
+        # SYSTEM box
+        rx = col_w + 2
+        box(scr, top_y, rx, box_h, col_w, "SYSTEM")
+        y = top_y + 2
+        safe(scr, y, rx + 2, f"CPU   {c:5.1f}%"); y += 1
+        safe(scr, y, rx + 2, bar(c, col_w - 6), led(c)); y += 2
+        safe(scr, y, rx + 2, f"MEM   {m:5.1f}%"); y += 1
+        safe(scr, y, rx + 2, bar(m, col_w - 6), led(m)); y += 2
+        swap = psutil.swap_memory()
+        stype = swap_type()
+        safe(scr, y, rx + 2, f"SWAP  {swap.percent:5.1f}% [{stype}]"); y += 1
+        safe(scr, y, rx + 2, bar(swap.percent, col_w - 6), led(swap.percent)); y += 2
+        avail = psutil.virtual_memory().available // (1024 * 1024)
+        safe(scr, y, rx + 2, f"RAM AVAIL: {avail} MB"); y += 1
+        safe(scr, y, rx + 2, f"USB: {usb}")
+
+        # Temporarily force bright-color safe() for the broadcast box,
+        # regardless of dim mode — the broadcast is always the focus.
+        _active_safe = globals()['safe']
+        globals()['safe'] = _safe_orig
+        # ── BROADCAST box (3-line bordered box, matches other boxes) ──
+        # Border is drawn at absolute columns 1 and w-2 to avoid the
+        # bottom-right-corner wrap quirk where curses drops the last
+        # char of a full-width string.
+        br_y = top_y + box_h
+        right_x = w - 2  # column index of right border
+        inner_w = right_x - 2  # horizontal span between borders
+
+        # Title + color scheme:
+        #   empty   → dim white   (neutral, nothing to see)
+        #   live    → CYAN        (info to the viewer, attention)
+        #   editing → YELLOW      (in-progress, caution)
+        #   error   → RED         (something broke)
+        if broadcast_mode:
+            title = " BROADCAST  [Enter=send  Esc=cancel  Ctrl+U=clear] "
+            title_attr = curses.color_pair(2) | curses.A_BOLD
+            border_attr = curses.color_pair(2)
+        elif broadcast_error:
+            title = " BROADCAST "
+            title_attr = curses.color_pair(3) | curses.A_BOLD
+            border_attr = curses.color_pair(3)
+        elif broadcast_current:
+            title = " BROADCAST  [LIVE] "
+            title_attr = curses.color_pair(5) | curses.A_BOLD
+            border_attr = curses.color_pair(5)
+        else:
+            title = " BROADCAST "
+            title_attr = curses.color_pair(4)
+            border_attr = curses.color_pair(4)
+
+        # Draw borders char-by-char (avoids the full-width wrap quirk)
+        safe(scr, br_y,     1,       "┌", border_attr)
+        safe(scr, br_y,     right_x, "┐", border_attr)
+        safe(scr, br_y + 2, 1,       "└", border_attr)
+        safe(scr, br_y + 2, right_x, "┘", border_attr)
+        safe(scr, br_y,     2, "─" * inner_w, border_attr)
+        safe(scr, br_y + 2, 2, "─" * inner_w, border_attr)
+        safe(scr, br_y + 1, 1,       "│", border_attr)
+        safe(scr, br_y + 1, right_x, "│", border_attr)
+
+        # Title overlay on the top border
+        safe(scr, br_y, 3, title, title_attr)
+
+        # Contents on the middle line
+        content_y = br_y + 1
+        content_x = 3
+        content_maxw = inner_w - 2  # leave one space of padding each side
+
+        if broadcast_mode:
+            prompt = "› "
+            safe(scr, content_y, content_x, prompt,
+                 curses.color_pair(2) | curses.A_BOLD)
+            buf = broadcast_buffer
+            # Truncate from the left if message outgrew the box (show tail)
+            maxw = content_maxw - len(prompt)
+            if len(buf) > maxw:
+                buf = "…" + buf[-(maxw - 1):]
+            safe(scr, content_y, content_x + len(prompt), buf,
+                 curses.color_pair(4) | curses.A_BOLD)
+            # Park the cursor at end of text so it blinks there
+            try:
+                scr.move(content_y, content_x + len(prompt) + len(buf))
+            except curses.error:
+                pass
+        elif broadcast_error:
+            safe(scr, content_y, content_x, broadcast_error,
+                 curses.color_pair(3) | curses.A_BOLD)
+        elif broadcast_current:
+            show = broadcast_current
+            if len(show) > content_maxw:
+                show = show[:content_maxw - 1] + "…"
+            safe(scr, content_y, content_x, show,
+                 curses.color_pair(5) | curses.A_BOLD)
+        else:
+            safe(scr, content_y, content_x,
+                 "(empty — press [b] to broadcast a message)",
+                 curses.color_pair(4))
+
+        # BOTTOM row
+        # Restore whichever safe() was active (dim or bright)
+        globals()['safe'] = _active_safe
+        by = top_y + box_h + 3  # broadcast box is 3 lines now
+        bw = w // 2 - 2
+        bh = max(4, h - by - 2)
+
+        # PROCESS VIEW
+        box(scr, by, 1, bh, bw, "PROCESS VIEW")
+        procs = sorted(
+            psutil.process_iter(['name', 'cpu_percent']),
+            key=lambda p: p.info['cpu_percent'] or 0,
+            reverse=True
+        )[:bh - 3]
+        for i, p in enumerate(procs):
+            try:
+                name = (p.info['name'] or "")[:20]
+                cpuv = p.info['cpu_percent'] or 0.0
+                safe(scr, by + 2 + i, 3, f"{name:<20} {cpuv:5.1f}%")
+            except:
+                pass
+
+        # DISK / SMART
+        dx = bw + 2
+        box(scr, by, dx, bh, bw, "DISK / SMART")
+        y = by + 2
+        safe(scr, y, dx + 2, f"WRITE: {disk:.2f} MB/s"); y += 1
+        with smart_lock:
+            lines = smart_info[: bh - 4]
+        for line in lines:
+            attr = 0
+            if "WARN" in line or "FAIL" in line:
+                attr = curses.color_pair(2) | curses.A_BOLD
+            if line.startswith("REALLOC:"):
+                try:
+                    val = int(line.split(":")[1].strip())
+                    attr = curses.color_pair(3 if val > 500 else 2 if val > 100 else 1) | curses.A_BOLD
+                except:
+                    pass
+            safe(scr, y, dx + 2, line, attr); y += 1
+
+        # FOOTER
+        if broadcast_mode:
+            footer = "BROADCAST: type message  •  [Enter] send (empty=clear)  •  [Esc] cancel  •  [Ctrl+U] clear line"
+        else:
+            footer = "systemd auto-restarts on failure  •  [b] broadcast  •  [r] force repair  •  [q] quit"
+        safe(scr, h - 1, 2, footer, curses.color_pair(4))
+
+        scr.refresh()
+        # scr.timeout() handles the wait; no manual sleep needed.
+        # Re-set it each iteration in case mode changed.
+        scr.timeout(30 if broadcast_mode else 500)
+
+if __name__ == "__main__":
+    curses.wrapper(main)

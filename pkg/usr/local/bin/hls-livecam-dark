@@ -1,0 +1,18 @@
+#!/bin/bash
+# hls-livecam-dark — toggle dark (black-stream) mode
+# Must run as root (called via sudo -n from camstack / broadcast-api)
+set -euo pipefail
+
+FLAG=/var/lib/hls-livecam/dark
+
+if [ -f "$FLAG" ]; then
+    # Currently dark → go live
+    systemctl stop  ffmpeg-cam-dark.service
+    systemctl start ffmpeg-cam.service
+    rm -f "$FLAG"
+else
+    # Currently live → go dark
+    systemctl stop  ffmpeg-cam.service
+    systemctl start ffmpeg-cam-dark.service
+    touch "$FLAG"
+fi
