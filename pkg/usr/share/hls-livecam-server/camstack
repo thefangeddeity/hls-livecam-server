@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
-Version: 2.3.0
+Version: 2.6.0
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap
@@ -29,7 +29,8 @@ broadcast_mode = False
 broadcast_buffer = ""
 broadcast_current = ""
 broadcast_error = ""
-confirm_repair = False
+confirm_repair  = False
+confirm_service = False
 
 SMARTCTL = "/usr/sbin/smartctl"
 
@@ -177,7 +178,7 @@ def read_smart():
             data.append(f"REALLOC:{realloc}")
             data.append(f"PENDING:{pending}")
             data.append(f"UNCORR: {uncorr}")
-            data.append(f"TEMP:   {temp}°C" if temp != "?" else "TEMP:   UNKNOWN")
+            data.append(f"TEMP:   {temp}C" if temp != "?" else "TEMP:   UNKNOWN")
 
             with smart_lock:
                 smart_info[:] = data
@@ -275,6 +276,21 @@ def run_dark_toggle():
     except Exception:
         pass
 
+# ---------- SERVICE TOGGLE ----------
+SERVICES = ["mediamtx", "ffmpeg-cam", "nginx"]
+
+def services_running():
+    return proc("mediamtx") or proc("nginx")
+
+def run_service_toggle():
+    action = "stop" if services_running() else "start"
+    cmd = ["sudo", "-n", "systemctl", action] + SERVICES
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=15)
+    except Exception:
+        pass
+
 # ---------- UI HELPERS ----------
 def safe(scr, y, x, s, a=0):
     try:
@@ -341,6 +357,7 @@ def sample_metrics():
         "v4l2":  os.path.exists(read_device_env().get("VIDEO_DEVICE", "")),
         "v4l2_dev": read_device_env().get("VIDEO_DEVICE", "?"),
         "dark":  os.path.exists(DARK_FLAG),
+        "svc":   services_running(),
     }
 
 def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
@@ -354,7 +371,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     avail = snap["avail"]
     nginx = snap["nginx"]; rtsp = snap["rtsp"]
     api   = snap["api"];   v4l2 = snap["v4l2"]
-    dark  = snap["dark"]
+    dark  = snap["dark"];  svc  = snap["svc"]
 
     base_status = system_status(hls, ff, mm)
     sys_status = base_status if cur_repair == "IDLE" else cur_repair
@@ -426,7 +443,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     box(scr, by, 1,      bh, stack_w, "STACK",     base)
     box(scr, by, proc_x, bh, proc_w,  "PROCESSES", base)
 
-    # STACK: full causal chain + dark
+    # STACK
     y = by + 1
     safe(scr, y, 3, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
          status_attr('LIVE' if ff else 'DOWN', dim)); y += 1
@@ -540,11 +557,16 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
 
 
 def draw_footer(scr, editing):
-    global confirm_repair
+    global confirm_repair, confirm_service
     h, w = scr.getmaxyx()
     if confirm_repair:
         safe(scr, h - 1, 2,
              "REPAIR: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if confirm_service:
+        safe(scr, h - 1, 2,
+             "SERVICES: are you sure?  [y] yes  [any other key] cancel",
              curses.color_pair(1) | curses.A_BOLD)
         return
     if editing:
@@ -552,14 +574,15 @@ def draw_footer(scr, editing):
                   "•  [Esc] cancel  •  [Ctrl+U] clear line")
     else:
         footer = ("systemd auto-restarts on failure  •  [m] message  "
-                  "•  [t] show/hide feed  •  [r] force repair  •  [q] quit")
+                  "•  [h] show/hide feed  •  [s] start/stop services  "
+                  "•  [r] force repair  •  [q] quit")
     safe(scr, h - 1, 2, footer, curses.color_pair(4))
 
 
 # ---------- MAIN ----------
 def main(scr):
     global repair_status, broadcast_mode, broadcast_buffer
-    global broadcast_current, broadcast_error, confirm_repair
+    global broadcast_current, broadcast_error, confirm_repair, confirm_service
 
     threading.Thread(target=smart_worker, daemon=True).start()
     threading.Thread(target=hls_worker,   daemon=True).start()
@@ -627,9 +650,15 @@ def main(scr):
                 confirm_repair = False
             elif k != -1:
                 confirm_repair = False
+        elif confirm_service:
+            if k == ord('y'):
+                threading.Thread(target=run_service_toggle, daemon=True).start()
+            confirm_service = False
         elif k == ord('r'):
             confirm_repair = True
-        elif k == ord('t'):
+        elif k == ord('s'):
+            confirm_service = True
+        elif k == ord('h'):
             threading.Thread(target=run_dark_toggle, daemon=True).start()
         elif k == ord('m'):
             frozen_snap = sample_metrics()

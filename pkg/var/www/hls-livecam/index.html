@@ -606,7 +606,7 @@
     if (isDark && mode !== 'live') return;
     liveInd.textContent = text;
     liveInd.className = 'live-pill' + (mode ? ' ' + mode : '');
-    if (mode === 'live') {
+    if (mode === 'live' && !isDark) {
       errorOverlay.classList.remove('visible');
       liftDarkOverlay();
       reconnectBtn.hidden = true;
