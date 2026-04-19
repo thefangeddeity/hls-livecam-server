@@ -1,34 +1,18 @@
 #!/bin/bash
-# /usr/local/bin/hls-livecam-dark
-# Toggles dark mode. On hide: captures a frame and generates block-art dark.png.
+# hls-livecam-dark — toggle dark (black-stream) mode
+# Must run as root (called via sudo -n from camstack / broadcast-api)
+set -euo pipefail
 
-DARK_FLAG="/var/lib/hls-livecam/dark"
-DARK_PNG="/var/www/hls-livecam/dark.png"
-DARK_PNG_ORIG="/var/lib/hls-livecam/dark_orig.png"
-SNAP="/tmp/hls-livecam-snap.jpg"
-BLOCK_ART_PY="/usr/share/hls-livecam-server/block_art.py"
-RTSP_URL="rtsp://127.0.0.1:8554/cam"
+FLAG=/var/lib/hls-livecam/dark
 
-if [ -f "$DARK_FLAG" ]; then
-    # Un-hide
-    rm -f "$DARK_FLAG"
-    if [ -f "$DARK_PNG_ORIG" ]; then
-        cp "$DARK_PNG_ORIG" "$DARK_PNG"
-    fi
-    echo "false"
+if [ -f "$FLAG" ]; then
+    # Currently dark → go live
+    systemctl stop  ffmpeg-cam-dark.service
+    systemctl start ffmpeg-cam.service
+    rm -f "$FLAG"
 else
-    # Hide: grab frame, render block-art PNG
-    ffmpeg -y -loglevel error \
-        -rtsp_transport tcp \
-        -i "$RTSP_URL" \
-        -frames:v 1 \
-        "$SNAP"
-
-    if [ -f "$SNAP" ]; then
-        python3 "$BLOCK_ART_PY" "$SNAP" "$DARK_PNG"
-        rm -f "$SNAP"
-    fi
-
-    touch "$DARK_FLAG"
-    echo "true"
+    # Currently live → go dark
+    systemctl stop  ffmpeg-cam.service
+    systemctl start ffmpeg-cam-dark.service
+    touch "$FLAG"
 fi
