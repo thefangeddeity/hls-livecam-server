@@ -557,6 +557,7 @@
   var darkLiftTimer = null;
 
   function liftDarkOverlay() {
+    if (isDark) return;
     if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
     darkOverlay.classList.remove('visible');
   }
