@@ -660,7 +660,7 @@
             video.removeEventListener('click', handler);
           });
         });
-        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); liftDarkOverlay(); }, { once: true });
+        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); if (!isDark) liftDarkOverlay(); }, { once: true });
         video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
       } else { setStatus('UNSUPPORTED'); showError(); }
       return;
