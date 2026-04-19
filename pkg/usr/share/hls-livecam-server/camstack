@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
-Version: 2.6.0
+Version: 2.6.3
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap
@@ -61,9 +61,16 @@ def disk_write_mbs():
 def proc(name):
     for p in psutil.process_iter(['name', 'cmdline']):
         try:
-            if name in (p.info['name'] or ""):
+            cmdline = p.info['cmdline'] or []
+            pname = p.info['name'] or ""
+            if name == "ffmpeg":
+                if "ffmpeg" in pname or any("ffmpeg" in x for x in cmdline):
+                    if any("8554" in x for x in cmdline):
+                        return True
+                continue
+            if name in pname:
                 return True
-            if p.info['cmdline'] and any(name in x for x in p.info['cmdline']):
+            if any(name in x for x in cmdline):
                 return True
         except:
             pass
@@ -277,19 +284,28 @@ def run_dark_toggle():
         pass
 
 # ---------- SERVICE TOGGLE ----------
-SERVICES = ["mediamtx", "ffmpeg-cam", "nginx"]
+SERVICES = ["mediamtx", "ffmpeg-cam", "nginx", "broadcast-api"]
 
 def services_running():
     return proc("mediamtx") or proc("nginx")
 
 def run_service_toggle():
-    action = "stop" if services_running() else "start"
-    cmd = ["sudo", "-n", "systemctl", action] + SERVICES
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=15)
-    except Exception:
-        pass
+    if services_running():
+        try:
+            subprocess.run(["sudo", "-n", "systemctl", "stop"] + SERVICES,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+            subprocess.run(["sudo", "-n", "systemctl", "mask", "ffmpeg-cam"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(["sudo", "-n", "systemctl", "unmask", "ffmpeg-cam"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            subprocess.run(["sudo", "-n", "systemctl", "start"] + SERVICES,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        except Exception:
+            pass
 
 # ---------- UI HELPERS ----------
 def safe(scr, y, x, s, a=0):
@@ -327,6 +343,27 @@ def status_attr(status, dim=False):
     if status in ("ERROR", "DOWN", "FAIL"):
         return curses.color_pair(3) | curses.A_BOLD
     return curses.color_pair(1)
+
+def header_attr(sys_status, svc, dark, dim=False):
+    """
+    Color logic for the compound header status string.
+    GREEN  = services stopped intentionally (no fault)
+    YELLOW = feed hidden but no real fault
+    RED    = live/exposed, or genuine error/degraded without intentional stop
+    """
+    if dim:
+        return curses.A_DIM
+    if not svc:
+        # services stopped intentionally
+        if dark:
+            return curses.color_pair(2) | curses.A_BOLD  # YELLOW: stopped + hidden
+        return curses.color_pair(1) | curses.A_BOLD       # GREEN: stopped, all clear
+    if sys_status == "LIVE":
+        if dark:
+            return curses.color_pair(2) | curses.A_BOLD  # YELLOW: live but hidden
+        return curses.color_pair(3) | curses.A_BOLD       # RED: live and exposed
+    # DEGRADED / ERROR / DOWN with services running = something wrong
+    return curses.color_pair(3) | curses.A_BOLD            # RED
 
 def load_attr(l, cores, dim=False):
     if dim:
@@ -380,13 +417,15 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, 0, 2,
          f"Webcam Server Stack  •  uptime {up // 3600}h {(up % 3600) // 60}m",
          base)
-    mid = f"• {sys_status}"
-    safe(scr, 0, w // 2 - len(mid) // 2, mid, status_attr(sys_status, dim))
-    feed_text = f"Feed: {'HIDDEN' if dark else 'SHOWN '}"
-    feed_attr = (curses.A_DIM if dim else
-                 curses.color_pair(2) | curses.A_BOLD if not dark else
-                 curses.color_pair(1) | curses.A_BOLD)
-    safe(scr, 0, w - len(feed_text) - 5, feed_text, feed_attr)
+    qualifiers = []
+    if not svc:
+        qualifiers.append("services stopped")
+    elif base_status in ("DEGRADED", "ERROR", "DOWN"):
+        qualifiers.append("suggest repair")
+    if dark:
+        qualifiers.append("feed hidden")
+    mid = "• " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else "")
+    safe(scr, 0, w // 2 - len(mid) // 2, mid, header_attr(sys_status, svc, dark, dim))
 
     # ── LAYOUT ──
     top_y = 2
@@ -454,7 +493,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 3, f"HLS:      {hls}", status_attr(hls, dim)); y += 1
     safe(scr, y, 3, f"nginx:    {'LIVE' if nginx else 'DOWN'}",
          status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
-    safe(scr, y, 3, f"API:      {'LIVE' if api else 'DOWN'}",
+    safe(scr, y, 3, f"MSSG API: {'LIVE' if api else 'DOWN'}",
          status_attr('LIVE' if api else 'DOWN', dim)); y += 1
     fps_val = read_device_env().get("FRAMERATE", "?")
     safe(scr, y, 3, f"FPS:      {fps_val}", base); y += 1
@@ -636,7 +675,10 @@ def main(scr):
             continue
 
         # ── LIVE DASHBOARD MODE ──
-        scr.timeout(500)
+        if confirm_repair or confirm_service:
+            scr.timeout(-1)
+        else:
+            scr.timeout(500)
 
         k = scr.getch()
         if k in (ord('q'), 3):
