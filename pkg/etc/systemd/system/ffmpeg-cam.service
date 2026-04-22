@@ -1,0 +1,32 @@
+[Unit]
+Description=FFmpeg Camera Capture (RTSP Producer)
+# After= provides boot ordering only — NOT failure coupling.
+# Do NOT add Requires=mediamtx.service. ffmpeg and mediamtx are peer
+# services. If mediamtx dies at runtime, ffmpeg keeps running and
+# reconnects via the loopback RTSP endpoint.
+After=network-online.target mediamtx.service
+Wants=network-online.target
+
+[Service]
+User=mediamtx
+Group=video
+
+# NOTE: ExecStart is fully literal — no ${VAR} expansion.
+# systemd's ExecStart does not perform shell-style word splitting on
+# environment variables, so "${V4L2_INPUT_FMT}" would have been passed
+# to ffmpeg as a single token like "-input_format mjpeg" and rejected.
+# Setup substitutes @PLACEHOLDER@ values into this file at install time,
+# producing a unit file with a stable argv that systemd can exec cleanly.
+ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel info -f v4l2 @INPUT_FMT_ARGS@-video_size @VIDEO_SIZE@ -framerate @FRAMERATE@ -thread_queue_size 512 -i @VIDEO_DEVICE@ -c:v libx264 -preset ultrafast -tune zerolatency -vf "fps=@FRAMERATE@,format=yuv420p" -profile:v high -level 4.0 -b:v 1500k -g 60 -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/cam
+
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ffmpeg-cam
+
+[Install]
+WantedBy=multi-user.target

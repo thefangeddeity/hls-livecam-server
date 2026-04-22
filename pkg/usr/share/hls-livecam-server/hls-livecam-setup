@@ -339,6 +339,14 @@ systemctl enable --now nginx
 systemctl reload nginx
 echo -e "  ${GREEN}nginx configured and serving.${NC}"
 
+# ── Sudoers: passwordless smartctl for camstack ──
+  SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
+  if [ -n "$SUDO_USER_NAME" ]; then
+    echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camstack-smart
+    chmod 440 /etc/sudoers.d/camstack-smart
+    echo -e "  \033[0;32msmartctl sudoers entry written for $SUDO_USER_NAME.\033[0m"
+  fi
+
 # ── Done ──────────────────────────────────────────────────────
 IP=$(hostname -I | awk '{print $1}')
 echo ""

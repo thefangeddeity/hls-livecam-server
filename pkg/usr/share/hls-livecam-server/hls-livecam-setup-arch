@@ -1,0 +1,295 @@
+#!/bin/bash
+# hls-livecam-setup — Arch Linux variant
+# For Debian/Ubuntu use the standard hls-livecam-setup from the deb package.
+set -e
+
+YELLOW='\033[1;33m'; GREEN='\033[0;32m'; RED='\033[0;31m'
+CYAN='\033[0;36m'; NC='\033[0m'; BOLD='\033[1m'
+
+MEDIAMTX_VERSION="1.15.2"
+MEDIAMTX_URL="https://github.com/bluenviron/mediamtx/releases/download/v${MEDIAMTX_VERSION}/mediamtx_v${MEDIAMTX_VERSION}_linux_amd64.tar.gz"
+MEDIAMTX_BIN="/usr/local/bin/mediamtx"
+MEDIAMTX_CONF="/usr/local/etc/mediamtx.yml"
+DEVICE_ENV="/etc/hls-livecam/device.env"
+WEB_ROOT="/var/www/hls-livecam"
+LIB_DIR="/var/lib/hls-livecam"
+
+# Arch: use conf.d instead of sites-available/sites-enabled
+NGINX_CONF="/etc/nginx/conf.d/hls-livecam.conf"
+
+echo ""
+echo -e "${CYAN}${BOLD}╔══════════════════════════════════════╗${NC}"
+echo -e "${CYAN}${BOLD}║   hls-livecam-server setup (Arch)    ║${NC}"
+echo -e "${CYAN}${BOLD}╚══════════════════════════════════════╝${NC}"
+echo ""
+
+[ "$EUID" -ne 0 ] && { echo -e "${RED}Run as root: sudo hls-livecam-setup${NC}"; exit 1; }
+
+# ── Detect video devices ──────────────────────────────────────
+echo -e "${BOLD}Detecting webcams...${NC}"
+VIDEO_DEVICES=()
+for dev in /dev/video*; do
+  [ -e "$dev" ] || continue
+  if v4l2-ctl --device="$dev" --info 2>/dev/null | grep -q "Video Capture"; then
+    NAME=$(v4l2-ctl --device="$dev" --info 2>/dev/null | grep "Card type" | cut -d: -f2 | xargs)
+    VIDEO_DEVICES+=("$dev ($NAME)")
+    echo "  Found: $dev — $NAME"
+  fi
+done
+
+[ ${#VIDEO_DEVICES[@]} -eq 0 ] && { echo -e "${RED}No webcam found.${NC}"; exit 1; }
+
+if [ ${#VIDEO_DEVICES[@]} -eq 1 ]; then
+  VIDEO_DEV=$(echo "${VIDEO_DEVICES[0]}" | cut -d' ' -f1)
+  echo -e "  ${GREEN}Using: $VIDEO_DEV${NC}"
+else
+  echo ""
+  echo "Multiple webcams found. Which one to use?"
+  select opt in "${VIDEO_DEVICES[@]}"; do
+    VIDEO_DEV=$(echo "$opt" | cut -d' ' -f1); break
+  done
+fi
+
+# ── Stable by-id path ─────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Resolving stable device ID...${NC}"
+STABLE_DEV="$VIDEO_DEV"
+for link in /dev/v4l/by-id/*; do
+  [ -e "$link" ] || continue
+  resolved=$(readlink -f "$link")
+  if [ "$resolved" = "$VIDEO_DEV" ]; then
+    STABLE_DEV="$link"
+    break
+  fi
+done
+echo -e "  ${GREEN}Stable path: $STABLE_DEV${NC}"
+
+# ── Check MJPEG ───────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Checking webcam capabilities...${NC}"
+if v4l2-ctl --device="$VIDEO_DEV" --list-formats-ext 2>/dev/null | grep -qi "mjpg\|mjpeg"; then
+  INPUT_FMT="-input_format mjpeg"
+  echo -e "  ${GREEN}MJPEG supported — optimal.${NC}"
+else
+  INPUT_FMT=""
+  echo -e "  ${YELLOW}MJPEG not available — using default format.${NC}"
+fi
+
+# ── Framerate ─────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Select capture framerate:${NC}"
+select FPS_CHOICE in "High (30fps)" "Low (15fps — recommended for older hardware)"; do
+  case $REPLY in
+    1) FRAMERATE=30; break ;;
+    2) FRAMERATE=15; break ;;
+  esac
+done
+echo -e "  ${GREEN}Framerate: ${FRAMERATE}fps${NC}"
+
+# ── Download MediaMTX ─────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Installing MediaMTX v${MEDIAMTX_VERSION}...${NC}"
+if [ ! -f "$MEDIAMTX_BIN" ]; then
+  cd /tmp
+  wget -q --show-progress "$MEDIAMTX_URL" -O mediamtx.tar.gz
+  tar -xzf mediamtx.tar.gz
+  mv mediamtx "$MEDIAMTX_BIN"
+  chmod +x "$MEDIAMTX_BIN"
+  rm -f mediamtx.tar.gz
+  echo -e "  ${GREEN}Installed.${NC}"
+else
+  echo -e "  ${GREEN}Already installed.${NC}"
+fi
+
+# ── Write fresh MediaMTX config ───────────────────────────────
+echo ""
+echo -e "${BOLD}Writing MediaMTX config...${NC}"
+cd /tmp
+wget -q "$MEDIAMTX_URL" -O mediamtx_tmp.tar.gz
+tar -xzf mediamtx_tmp.tar.gz mediamtx.yml 2>/dev/null || true
+rm -f mediamtx_tmp.tar.gz
+mkdir -p "$(dirname $MEDIAMTX_CONF)"
+[ -f /tmp/mediamtx.yml ] && cp /tmp/mediamtx.yml "$MEDIAMTX_CONF" && rm -f /tmp/mediamtx.yml
+
+python3 - <<PYEOF
+import re
+conf_path = "$MEDIAMTX_CONF"
+with open(conf_path, 'r') as f:
+    content = f.read()
+content = re.sub(r'\npaths:.*', '', content, flags=re.DOTALL)
+content = content.rstrip()
+content += "\n\npaths:\n  cam:\n  all_others:\n"
+with open(conf_path, 'w') as f:
+    f.write(content)
+print("  Config written.")
+PYEOF
+
+# ── Write device.env ──────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Writing device config...${NC}"
+mkdir -p "$(dirname $DEVICE_ENV)"
+cat > "$DEVICE_ENV" <<EOF
+VIDEO_DEVICE=$STABLE_DEV
+V4L2_INPUT_FMT=$INPUT_FMT
+VIDEO_SIZE=1280x720
+FRAMERATE=$FRAMERATE
+EOF
+echo -e "  ${GREEN}Written to $DEVICE_ENV${NC}"
+
+# ── Install systemd services ──────────────────────────────────
+echo ""
+echo -e "${BOLD}Installing systemd services...${NC}"
+
+# mediamtx
+cat > /etc/systemd/system/mediamtx.service <<EOF
+[Unit]
+Description=MediaMTX streaming server
+After=network.target
+
+[Service]
+User=root
+ExecStart=$MEDIAMTX_BIN $MEDIAMTX_CONF
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ffmpeg-cam — uses device.env
+cat > /etc/systemd/system/ffmpeg-cam.service <<EOF
+[Unit]
+Description=FFmpeg Camera Capture (RTSP Producer)
+After=network-online.target mediamtx.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=$DEVICE_ENV
+User=root
+ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel info \
+  -f v4l2 \${V4L2_INPUT_FMT} -video_size \${VIDEO_SIZE} \
+  -framerate \${FRAMERATE} -thread_queue_size 512 \
+  -i \${VIDEO_DEVICE} \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -vf "fps=\${FRAMERATE},format=yuv420p" \
+  -profile:v high -level 4.0 -b:v 1500k -g 60 \
+  -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/cam
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ffmpeg-cam-dark
+cp /usr/lib/systemd/system/ffmpeg-cam-dark.service \
+   /etc/systemd/system/ffmpeg-cam-dark.service 2>/dev/null || true
+
+# broadcast-api
+cp /usr/lib/systemd/system/broadcast-api.service \
+   /etc/systemd/system/broadcast-api.service 2>/dev/null || true
+
+systemctl daemon-reload
+systemctl enable --now mediamtx
+systemctl enable --now ffmpeg-cam
+systemctl enable --now broadcast-api 2>/dev/null || true
+echo -e "  ${GREEN}Services installed and started.${NC}"
+
+# ── nginx — Arch uses conf.d ──────────────────────────────────
+echo ""
+echo -e "${BOLD}Configuring nginx...${NC}"
+
+HOSTNAME_VAL=$(hostname)
+mkdir -p "$WEB_ROOT"
+mkdir -p "$LIB_DIR"
+
+# Copy web viewer
+cp /usr/share/hls-livecam-server/index.html "$WEB_ROOT/index.html"
+sed -i "s/@HOSTNAME@/$HOSTNAME_VAL/g" "$WEB_ROOT/index.html"
+
+# broadcast.txt and buzz.txt
+touch "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt"
+chown root:www-data "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt" 2>/dev/null || \
+  chown root:http   "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt" 2>/dev/null || true
+chmod 0664 "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt"
+
+# dark.png placeholder
+[ -f "$WEB_ROOT/dark.png" ] || convert -size 1280x720 xc:black "$WEB_ROOT/dark.png" 2>/dev/null || \
+  python3 -c "
+import struct, zlib
+def png_chunk(t,d): l=len(d); return struct.pack('>I',l)+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+raw=b'\x89PNG\r\n\x1a\n'+png_chunk(b'IHDR',struct.pack('>IIBBBBB',1280,720,8,2,0,0,0))
+row=b'\x00'+b'\x00\x00\x00'*1280
+idat=zlib.compress(row*720)
+raw+=png_chunk(b'IDAT',idat)+png_chunk(b'IEND',b'')
+open('$WEB_ROOT/dark.png','wb').write(raw)
+"
+cp "$WEB_ROOT/dark.png" "$LIB_DIR/dark_orig.png" 2>/dev/null || true
+
+# Arch nginx: conf.d
+cat > "$NGINX_CONF" <<NGINXEOF
+server {
+    listen 80 default_server;
+    root $WEB_ROOT;
+    index index.html;
+
+    location = /broadcast.txt {
+        etag off;
+        if_modified_since off;
+        add_header Last-Modified "" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        default_type text/plain;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+
+    location / {
+        etag off;
+        if_modified_since off;
+        add_header Last-Modified "" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        try_files \$uri \$uri/ =404;
+    }
+}
+NGINXEOF
+
+nginx -t
+systemctl enable --now nginx
+systemctl reload nginx
+echo -e "  ${GREEN}nginx configured and serving.${NC}"
+
+# ── Sudoers: passwordless smartctl for camstack ───────────────
+SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
+if [ -n "$SUDO_USER_NAME" ]; then
+  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" \
+    > /etc/sudoers.d/camstack-smart
+  chmod 440 /etc/sudoers.d/camstack-smart
+  echo -e "  ${GREEN}smartctl sudoers entry written for $SUDO_USER_NAME.${NC}"
+fi
+
+# ── Done ──────────────────────────────────────────────────────
+IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}${BOLD}  hls-livecam-server is running!${NC}"
+echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "  Web viewer:  ${YELLOW}http://$IP${NC}"
+echo -e "  HLS stream:  ${YELLOW}http://$IP:8888/cam/index.m3u8${NC}"
+echo -e "  RTSP (VLC):  ${YELLOW}rtsp://$IP:8554/cam${NC}"
+echo ""
+echo -e "  Video: ${CYAN}$STABLE_DEV${NC}"
+echo -e "  Host:  ${CYAN}${HOSTNAME_VAL}${NC}"
+echo ""
+echo -e "Monitor:        ${YELLOW}camstack${NC}"
+echo -e "Services:       ${YELLOW}systemctl status mediamtx ffmpeg-cam${NC}"
+echo -e "Logs:           ${YELLOW}journalctl -u ffmpeg-cam -f${NC}"
+echo -e "To repair:      ${YELLOW}sudo hls-livecam-repair${NC}"
+echo -e "To reconfigure: ${YELLOW}sudo hls-livecam-setup${NC}"
+echo ""
