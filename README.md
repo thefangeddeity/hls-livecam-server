@@ -53,7 +53,7 @@ sudo apt update
 sudo apt install ffmpeg nginx v4l-utils python3 python3-psutil wget ca-certificates
 
 # Install the package
-sudo dpkg -i hls-livecam-server_2.2.0_amd64.deb
+sudo dpkg -i hls-livecam-server_2.7.3_amd64.deb
 
 # Run the setup wizard
 sudo hls-livecam-setup
