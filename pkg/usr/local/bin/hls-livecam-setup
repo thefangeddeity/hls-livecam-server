@@ -299,12 +299,38 @@ mkdir -p "$WEB_ROOT"
 # sends a broadcast message. nginx serves it to the web viewer with
 # no-cache headers. File is group-writable by www-data so any user in
 # that group can send broadcasts without sudo.
+LIB_DIR="/var/lib/hls-livecam"
+mkdir -p "$LIB_DIR"
+chmod 0755 "$LIB_DIR"
+
 BROADCAST_FILE="${WEB_ROOT}/broadcast.txt"
 if [ ! -f "$BROADCAST_FILE" ]; then
   touch "$BROADCAST_FILE"
 fi
 chown root:www-data "$BROADCAST_FILE"
 chmod 0664 "$BROADCAST_FILE"
+
+BUZZ_FILE="${WEB_ROOT}/buzz.txt"
+if [ ! -f "$BUZZ_FILE" ]; then
+  touch "$BUZZ_FILE"
+fi
+chown root:www-data "$BUZZ_FILE"
+chmod 0664 "$BUZZ_FILE"
+
+# Black dark.png placeholder — used as cloak overlay when feed is hidden.
+# Backed up to dark_orig.png so hls-livecam-dark can restore it on un-hide.
+if [ ! -f "${WEB_ROOT}/dark.png" ]; then
+  python3 -c "
+import struct, zlib
+def chunk(t,d): l=len(d); return struct.pack('>I',l)+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+raw=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',1280,720,8,2,0,0,0))
+row=b'\x00'+b'\x00\x00\x00'*1280
+raw+=chunk(b'IDAT',zlib.compress(row*720))+chunk(b'IEND',b'')
+open('${WEB_ROOT}/dark.png','wb').write(raw)
+"
+fi
+cp "${WEB_ROOT}/dark.png" "$LIB_DIR/dark_orig.png"
+chmod 0644 "${WEB_ROOT}/dark.png" "$LIB_DIR/dark_orig.png"
 
 # Substitute @HOSTNAME@ into index.html at install time (no runtime JS).
 HOSTNAME_VAL=$(hostname)
@@ -317,19 +343,27 @@ server {
     root $WEB_ROOT;
     index index.html;
 
-# Broadcast file: served with aggressive no-cache so the browser
-    # picks up new messages on every poll. 200 if present, 404 if missing.
     location = /broadcast.txt {
-        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        etag off;
+        if_modified_since off;
+        add_header Last-Modified "" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
         add_header Pragma "no-cache" always;
-        expires 0;
         default_type text/plain;
     }
 
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+
     location / {
-        add_header Cache-Control "no-store, no-cache, must-revalidate";
-        add_header Pragma "no-cache";
-        expires 0;
+        etag off;
+        if_modified_since off;
+        add_header Last-Modified "" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
         try_files \$uri \$uri/ =404;
     }
 }
@@ -344,6 +378,26 @@ nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
 echo -e "  ${GREEN}nginx configured and serving.${NC}"
+
+# ── Sudoers: passwordless sudo for camstack [h] and [s] ──────
+SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
+if [ -n "$SUDO_USER_NAME" ]; then
+  # [h] hide/show feed
+  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark" > /etc/sudoers.d/hls-livecam-dark
+  chmod 440 /etc/sudoers.d/hls-livecam-dark
+  # smartctl for camstack SMART panel
+  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camstack-smart
+  chmod 440 /etc/sudoers.d/camstack-smart
+  # [s] service toggle
+  cat > /etc/sudoers.d/hls-livecam-services << EOF
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl start mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
+EOF
+  chmod 440 /etc/sudoers.d/hls-livecam-services
+  echo -e "  ${GREEN}Sudoers entries written for $SUDO_USER_NAME.${NC}"
+fi
 
 # ── Done ──────────────────────────────────────────────────────
 IP=$(hostname -I | awk '{print $1}')

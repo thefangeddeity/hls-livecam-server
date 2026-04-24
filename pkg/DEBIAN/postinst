@@ -23,6 +23,15 @@ mkdir -p /etc/hls-livecam
 chown mediamtx:mediamtx /etc/hls-livecam
 chmod 755 /etc/hls-livecam
 
+# ─── State directory for dark mode flag and dark_orig.png ───────
+mkdir -p /var/lib/hls-livecam
+chmod 755 /var/lib/hls-livecam
+
+# ─── Web root pre-creation ──────────────────────────────────────
+mkdir -p /var/www/hls-livecam
+chown root:www-data /var/www/hls-livecam
+chmod 775 /var/www/hls-livecam
+
 # /usr/local/etc holds mediamtx.yml after setup writes it.
 # Pre-create and set ownership so setup can write as mediamtx later
 # if ever refactored; harmless if already correct.

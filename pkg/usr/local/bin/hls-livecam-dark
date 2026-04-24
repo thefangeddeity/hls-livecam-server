@@ -3,6 +3,7 @@
 # Toggles dark mode. On hide: captures a frame and generates block-art dark.png.
 
 DARK_FLAG="/var/lib/hls-livecam/dark"
+mkdir -p /var/lib/hls-livecam
 DARK_PNG="/var/www/hls-livecam/dark.png"
 DARK_PNG_ORIG="/var/lib/hls-livecam/dark_orig.png"
 SNAP="/tmp/hls-livecam-snap.jpg"

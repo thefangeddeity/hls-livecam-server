@@ -89,13 +89,24 @@ echo -e "  ${GREEN}Framerate: ${FRAMERATE}fps${NC}"
 # ── Download MediaMTX ─────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Installing MediaMTX v${MEDIAMTX_VERSION}...${NC}"
+MEDIAMTX_SHA256="8143486d886cc2d5c76f98d687cfb2ee6daf947fd45989c9322c0618057dcf5b"
+
 if [ ! -f "$MEDIAMTX_BIN" ]; then
   cd /tmp
   wget -q --show-progress "$MEDIAMTX_URL" -O mediamtx.tar.gz
+  echo "  Verifying integrity..."
+  echo "${MEDIAMTX_SHA256}  mediamtx.tar.gz" | sha256sum -c - || {
+    echo -e "  ${RED}ERROR: SHA256 mismatch — tarball corrupt or tampered.${NC}"
+    rm -f mediamtx.tar.gz
+    exit 1
+  }
   tar -xzf mediamtx.tar.gz
   mv mediamtx "$MEDIAMTX_BIN"
   chmod +x "$MEDIAMTX_BIN"
-  rm -f mediamtx.tar.gz
+  # Save yml for config write below — single download, both artifacts.
+  mkdir -p "$(dirname $MEDIAMTX_CONF)"
+  [ -f /tmp/mediamtx.yml ] && cp /tmp/mediamtx.yml "${MEDIAMTX_CONF}.default"
+  rm -f mediamtx.tar.gz /tmp/mediamtx.yml
   echo -e "  ${GREEN}Installed.${NC}"
 else
   echo -e "  ${GREEN}Already installed.${NC}"
@@ -104,12 +115,20 @@ fi
 # ── Write fresh MediaMTX config ───────────────────────────────
 echo ""
 echo -e "${BOLD}Writing MediaMTX config...${NC}"
-cd /tmp
-wget -q "$MEDIAMTX_URL" -O mediamtx_tmp.tar.gz
-tar -xzf mediamtx_tmp.tar.gz mediamtx.yml 2>/dev/null || true
-rm -f mediamtx_tmp.tar.gz
+# mediamtx.yml was extracted during binary install above and saved as .default.
+# If it's missing (e.g. re-run after binary already installed), re-fetch.
 mkdir -p "$(dirname $MEDIAMTX_CONF)"
-[ -f /tmp/mediamtx.yml ] && cp /tmp/mediamtx.yml "$MEDIAMTX_CONF" && rm -f /tmp/mediamtx.yml
+if [ ! -f "${MEDIAMTX_CONF}.default" ]; then
+  cd /tmp
+  wget -q "$MEDIAMTX_URL" -O mediamtx_tmp.tar.gz
+  echo "${MEDIAMTX_SHA256}  mediamtx_tmp.tar.gz" | sha256sum -c - || {
+    echo -e "  ${RED}ERROR: SHA256 mismatch.${NC}"; rm -f mediamtx_tmp.tar.gz; exit 1
+  }
+  tar -xzf mediamtx_tmp.tar.gz mediamtx.yml 2>/dev/null || true
+  rm -f mediamtx_tmp.tar.gz
+  [ -f /tmp/mediamtx.yml ] && cp /tmp/mediamtx.yml "${MEDIAMTX_CONF}.default" && rm -f /tmp/mediamtx.yml
+fi
+cp "${MEDIAMTX_CONF}.default" "$MEDIAMTX_CONF"
 
 python3 - <<PYEOF
 import re
@@ -181,13 +200,16 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# ffmpeg-cam-dark
-cp /usr/lib/systemd/system/ffmpeg-cam-dark.service \
-   /etc/systemd/system/ffmpeg-cam-dark.service 2>/dev/null || true
+# ffmpeg-cam-dark and broadcast-api service files are installed by the
+# PKGBUILD to /etc/systemd/system/ — no copy needed here.
 
-# broadcast-api
-cp /usr/lib/systemd/system/broadcast-api.service \
-   /etc/systemd/system/broadcast-api.service 2>/dev/null || true
+# Add installing user to required groups
+SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
+if [ -n "$SUDO_USER_NAME" ]; then
+  usermod -aG video "$SUDO_USER_NAME" 2>/dev/null || true
+  usermod -aG wheel "$SUDO_USER_NAME" 2>/dev/null || true
+  echo -e "  ${GREEN}Added $SUDO_USER_NAME to video and wheel groups.${NC}"
+fi
 
 systemctl daemon-reload
 systemctl enable --now mediamtx
@@ -264,13 +286,24 @@ systemctl enable --now nginx
 systemctl reload nginx
 echo -e "  ${GREEN}nginx configured and serving.${NC}"
 
-# ── Sudoers: passwordless smartctl for camstack ───────────────
-SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
+# ── Sudoers: passwordless sudo for camstack [h], [s], and SMART ─
+# SUDO_USER_NAME already set above
 if [ -n "$SUDO_USER_NAME" ]; then
-  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" \
-    > /etc/sudoers.d/camstack-smart
+  # [h] hide/show feed
+  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark" > /etc/sudoers.d/hls-livecam-dark
+  chmod 440 /etc/sudoers.d/hls-livecam-dark
+  # smartctl for SMART panel
+  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camstack-smart
   chmod 440 /etc/sudoers.d/camstack-smart
-  echo -e "  ${GREEN}smartctl sudoers entry written for $SUDO_USER_NAME.${NC}"
+  # [s] service toggle
+  cat > /etc/sudoers.d/hls-livecam-services << EOF
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl start mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
+EOF
+  chmod 440 /etc/sudoers.d/hls-livecam-services
+  echo -e "  ${GREEN}Sudoers entries written for $SUDO_USER_NAME.${NC}"
 fi
 
 # ── Done ──────────────────────────────────────────────────────
