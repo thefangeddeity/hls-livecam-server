@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
-Version: 2.7.4
+Version: 2.7.9
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap
@@ -411,7 +411,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     dark  = snap["dark"];  svc  = snap["svc"]
 
     base_status = system_status(hls, ff, mm)
-    sys_status = base_status if cur_repair == "IDLE" else cur_repair
+    sys_status = base_status if cur_repair in ("IDLE", "OK") else cur_repair
 
     # ── HEADER ──
     safe(scr, 0, 2,
