@@ -277,13 +277,14 @@ grep '^ExecStart=' "$FFMPEG_UNIT_DST" | sed 's/^/    /' | fold -s -w 78 | sed '2
 
 # ── Activate services ────────────────────────────────────────
 systemctl daemon-reload
-systemctl enable mediamtx ffmpeg-cam
+systemctl enable mediamtx ffmpeg-cam broadcast-api
 systemctl restart mediamtx
 # Brief pause so mediamtx binds :8554 before ffmpeg-cam starts.
 # ffmpeg's own RTSP retry handles any residual race.
 sleep 2
 systemctl restart ffmpeg-cam
-echo -e "  ${GREEN}mediamtx + ffmpeg-cam started.${NC}"
+systemctl restart broadcast-api
+echo -e "  ${GREEN}mediamtx + ffmpeg-cam + broadcast-api started.${NC}"
 
 # ── nginx ─────────────────────────────────────────────────────
 # Use enable --now to ensure nginx is running before we try to reload it.
@@ -350,6 +351,14 @@ server {
         add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
         add_header Pragma "no-cache" always;
         default_type text/plain;
+    }
+
+    location = /dark.png {
+        etag off;
+        if_modified_since off;
+        add_header Last-Modified "" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
     }
 
     location /api/ {

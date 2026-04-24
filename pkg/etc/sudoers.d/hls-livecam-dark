@@ -1,2 +1,1 @@
-ron      ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark
 www-data ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark

@@ -214,7 +214,7 @@ fi
 systemctl daemon-reload
 systemctl enable --now mediamtx
 systemctl enable --now ffmpeg-cam
-systemctl enable --now broadcast-api 2>/dev/null || true
+systemctl enable --now broadcast-api
 echo -e "  ${GREEN}Services installed and started.${NC}"
 
 # ── nginx — Arch uses conf.d ──────────────────────────────────
@@ -262,6 +262,14 @@ server {
         add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
         add_header Pragma "no-cache" always;
         default_type text/plain;
+    }
+
+    location = /dark.png {
+        etag off;
+        if_modified_since off;
+        add_header Last-Modified "" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
     }
 
     location /api/ {

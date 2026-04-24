@@ -402,8 +402,8 @@
         </div>
         <div class="msg-actions" id="msgActions" hidden>
           <button class="btn primary" id="saveBtn" onclick="sendMessage()">Save</button>
-          <button class="btn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
-          <button class="btn" id="clearBtn" onclick="clearMessage()">Clear</button>
+          <button class="btn primary" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
+          <button class="btn primary" id="clearBtn" onclick="clearMessage()">Clear</button>
         </div>
       </div>
 
@@ -739,10 +739,7 @@
   var msgActions = document.getElementById('msgActions');
   var msgHint    = document.getElementById('msgHint');
 
-  function updateClearBtn() {
-    if (!clearBtn) return;
-    clearBtn.classList.toggle('primary', currentMsg.length > 0);
-  }
+  function updateClearBtn() { /* static — all buttons blue */ }
 
   function setHint(text, cls) {
     msgHint.textContent = text;
