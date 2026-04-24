@@ -382,11 +382,13 @@ echo -e "  ${GREEN}nginx configured and serving.${NC}"
 # ── Sudoers: passwordless sudo for camstack [h] and [s] ──────
 SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
 if [ -n "$SUDO_USER_NAME" ]; then
-  # [h] hide/show feed
-  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark" > /etc/sudoers.d/hls-livecam-dark
+  # [h] hide/show feed — both the installing user (camstack) and www-data (broadcast-api) need this
+  printf '%s ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\nwww-data ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\n' "$SUDO_USER_NAME" > /etc/sudoers.d/hls-livecam-dark
+  chown root:root /etc/sudoers.d/hls-livecam-dark
   chmod 440 /etc/sudoers.d/hls-livecam-dark
   # smartctl for camstack SMART panel
   echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camstack-smart
+  chown root:root /etc/sudoers.d/camstack-smart
   chmod 440 /etc/sudoers.d/camstack-smart
   # [s] service toggle
   cat > /etc/sudoers.d/hls-livecam-services << EOF
@@ -395,6 +397,7 @@ $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl start mediamtx ffmpeg-cam ngi
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
 EOF
+  chown root:root /etc/sudoers.d/hls-livecam-services
   chmod 440 /etc/sudoers.d/hls-livecam-services
   echo -e "  ${GREEN}Sudoers entries written for $SUDO_USER_NAME.${NC}"
 fi

@@ -40,6 +40,16 @@ if [ -f /usr/local/etc/mediamtx.yml ]; then
     chown mediamtx:mediamtx /usr/local/etc/mediamtx.yml
 fi
 
+# ─── Fix sudoers file ownership ─────────────────────────────────
+# dpkg extracts files with the installing user's uid if run as non-root
+# via sudo. Force root ownership on all sudoers files we ship.
+for f in /etc/sudoers.d/hls-livecam-dark /etc/sudoers.d/camstack-smart; do
+    if [ -f "$f" ]; then
+        chown root:root "$f"
+        chmod 440 "$f"
+    fi
+done
+
 echo ""
 echo -e "${GREEN}hls-livecam-server installed.${NC}"
 echo ""
