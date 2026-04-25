@@ -412,7 +412,7 @@
         <div class="section-title">Controls</div>
         <div style="display:flex;flex-direction:column;gap:5px;">
           <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
-          <button class="btn" id="muteBtn" onclick="toggleMute()">Mute Buzzes</button>
+          <button class="btn primary" id="muteBtn" onclick="toggleMute()">Mute Buzzes</button>
           <button class="btn dark-btn" id="darkBtn" onclick="toggleDark()">Hide Feed</button>
           <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
         </div>
@@ -518,7 +518,7 @@
 
   function updateMuteBtn() {
     muteBtn.textContent = buzzMuted ? 'Unmute Buzzes' : 'Mute Buzzes';
-    muteBtn.classList.toggle('primary', buzzMuted);
+
   }
 
   function toggleMute() {

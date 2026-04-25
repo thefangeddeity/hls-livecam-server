@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
-Version: 2.7.9
+Version: 2.8.0
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap
+from PIL import Image
 
 # ---------- STATE ----------
 repair_status = "IDLE"
@@ -29,6 +30,8 @@ broadcast_mode = False
 broadcast_buffer = ""
 broadcast_current = ""
 broadcast_error = ""
+widget_pixels_gray  = None
+widget_pixels_color = None
 confirm_repair  = False
 confirm_service = False
 
@@ -397,6 +400,66 @@ def sample_metrics():
         "svc":   services_running(),
     }
 
+WIDGET_SNAP = "/tmp/camsnap_widget.jpg"
+WIDGET_RTSP = "rtsp://127.0.0.1:8554/cam"
+WIDGET_COLS = 80
+WIDGET_ROWS = 26
+GRAY_STEPS    = [232, 238, 244, 250, 254, 255]
+OCEAN_PALETTE = [232, 236, 240, 66, 95, 101, 102, 109, 137, 144, 246, 251]
+# 232=near-black, 236=dark gray, 240=mid gray,
+# 66=#5f8787 slate-teal, 102=#878787 gray, 109=#87afaf muted teal,
+# 246=light gray, 251=near-white
+
+def snap_worker():
+    global widget_pixels_gray, widget_pixels_color
+    while True:
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-rtsp_transport", "tcp",
+                "-i", WIDGET_RTSP,
+                "-frames:v", "1", WIDGET_SNAP
+            ], timeout=6, capture_output=True)
+            if os.path.exists(WIDGET_SNAP):
+                # ── Grayscale ──
+                gray = Image.open(WIDGET_SNAP).convert("L")
+                gray = gray.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
+                gdata = list(gray.getdata())
+                s = sorted(gdata); n = len(s)
+                lo = s[int(n * 0.05)]; hi = s[int(n * 0.95)]
+                rng = (hi - lo) or 1
+                gpx = []
+                for r in range(WIDGET_ROWS):
+                    row = []
+                    for c in range(WIDGET_COLS):
+                        top = gdata[(r * 2)     * WIDGET_COLS + c]
+                        bot = gdata[(r * 2 + 1) * WIDGET_COLS + c]
+                        fg_i = max(0, min(5, int((top - lo) / rng * 1.4 * 6)))
+                        bg_i = max(0, min(5, int((bot - lo) / rng * 6)))
+                        row.append((fg_i, bg_i))
+                    gpx.append(row)
+                widget_pixels_gray = gpx
+                # ── Color ──
+                rgb = Image.open(WIDGET_SNAP).convert("RGB")
+                rgb = rgb.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
+                rdata = list(rgb.getdata())
+                cpx = []
+                for r in range(WIDGET_ROWS):
+                    row = []
+                    for c in range(WIDGET_COLS):
+                        tr, tg, tb = rdata[(r * 2)     * WIDGET_COLS + c]
+                        br, bg_c, bb = rdata[(r * 2 + 1) * WIDGET_COLS + c]
+                        tlum = int(tr * 0.299 + tg * 0.587 + tb * 0.114)
+                        blum = int(br * 0.299 + bg_c * 0.587 + bb * 0.114)
+                        fg_oi = max(0, min(11, int(tlum / 255 * 11.99)))
+                        bg_oi = max(0, min(11, int(blum / 255 * 11.99)))
+                        row.append((fg_oi, bg_oi))
+                    cpx.append(row)
+                widget_pixels_color = cpx
+        except Exception:
+            pass
+        time.sleep(2)
+
 def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     h, w = scr.getmaxyx()
     base = curses.A_DIM if dim else 0
@@ -425,7 +488,13 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     if dark:
         qualifiers.append("feed hidden")
     mid = "• " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else "")
-    safe(scr, 0, w // 2 - len(mid) // 2, mid, header_attr(sys_status, svc, dark, dim))
+    _mid_x = w // 2 - len(mid) // 2
+    _hattr = header_attr(sys_status, svc, dark, dim)
+    if sys_status == "LIVE" and not dim:
+        safe(scr, 0, _mid_x, "•", _hattr | curses.A_BLINK)
+        safe(scr, 0, _mid_x + 1, " " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else ""), _hattr)
+    else:
+        safe(scr, 0, _mid_x, mid, _hattr)
 
     # ── LAYOUT ──
     top_y = 2
@@ -439,11 +508,27 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     msg_w = col_w - 4
     msg_h = box_h - 2
     display_text = editing_buffer if editing_msg else broadcast_current
+    _use_color = not dark and widget_pixels_color is not None
+    _use_gray  = dark and widget_pixels_gray is not None
+    if (_use_color or _use_gray) and not dim:
+        _wpx = widget_pixels_color if _use_color else widget_pixels_gray
+        for _wr, _row in enumerate(_wpx[:msg_h]):
+            for _wc, (_fgi, _bgi) in enumerate(_row[:msg_w]):
+                if _use_color:
+                    _pair = 50 + _fgi * 12 + _bgi
+                else:
+                    _pair = 10 + _fgi * 6 + _bgi
+                try:
+                    safe(scr, top_y + 1 + _wr, 3 + _wc, '▀', curses.color_pair(_pair))
+                except curses.error:
+                    pass
     if display_text:
-        msg_lines = textwrap.wrap(display_text, msg_w) or [display_text]
-        for i, line in enumerate(msg_lines[:msg_h]):
-            attr = curses.color_pair(2) | curses.A_BOLD if editing_msg else curses.color_pair(5) | curses.A_BOLD
-            safe(scr, top_y + 1 + i, 3, line, attr)
+        msg_lines = []
+        for _para in display_text.split('\n'):
+            msg_lines.extend(textwrap.wrap(_para, msg_w - 4) or [''])
+        for i, line in enumerate(msg_lines[:msg_h - 2]):
+            attr = curses.color_pair(2) | curses.A_BOLD if editing_msg else curses.color_pair(4) | curses.A_BOLD
+            safe(scr, top_y + 2 + i, 5, line, attr)
         if editing_msg:
             remaining = 140 - len(editing_buffer)
             ctr = str(remaining)
@@ -609,13 +694,27 @@ def draw_footer(scr, editing):
              curses.color_pair(1) | curses.A_BOLD)
         return
     if editing:
-        footer = ("BROADCAST: type message  •  [Enter] send (empty=clear)  "
-                  "•  [Esc] cancel  •  [Ctrl+U] clear line")
+        footer1 = "BROADCAST: type message  •  [Enter] newline  •  [Ctrl+U] clear  •  [Ctrl+D] save & deliver"
+        footer2 = "[Esc] cancel"
     else:
-        footer = ("systemd auto-restarts on failure  •  [m] message  "
-                  "•  [h] show/hide feed  •  [s] start/stop services  "
-                  "•  [r] force repair  •  [q] quit")
-    safe(scr, h - 1, 2, footer, curses.color_pair(4))
+        footer1 = "systemd auto-restarts on failure  •  [m] message  •  [h] show/hide feed"
+        footer2 = "[s] start/stop services  •  [r] force repair  •  [q] quit"
+    _fw = w - 4
+    _items = (footer1 + "  •  " + footer2).split("  •  ")
+    _all = []
+    _cur = ""
+    for _item in _items:
+        _add = (_cur + "  •  " + _item) if _cur else _item
+        if len(_add) <= _fw:
+            _cur = _add
+        else:
+            if _cur:
+                _all.append(_cur)
+            _cur = _item
+    if _cur:
+        _all.append(_cur)
+    for _i, _line in enumerate(_all[-(h - 2):]):
+        safe(scr, h - len(_all) + _i, 2, _line, curses.color_pair(4))
 
 
 # ---------- MAIN ----------
@@ -625,6 +724,7 @@ def main(scr):
 
     threading.Thread(target=smart_worker, daemon=True).start()
     threading.Thread(target=hls_worker,   daemon=True).start()
+    threading.Thread(target=snap_worker,   daemon=True).start()
 
     curses.curs_set(0)
     curses.start_color()
@@ -634,6 +734,16 @@ def main(scr):
     curses.init_pair(3, curses.COLOR_RED,    -1)
     curses.init_pair(4, curses.COLOR_WHITE,  -1)
     curses.init_pair(5, curses.COLOR_CYAN,   -1)
+    _gp = 10
+    for _fg in GRAY_STEPS:
+        for _bg in GRAY_STEPS:
+            curses.init_pair(_gp, _fg, _bg)
+            _gp += 1
+    _cp = 50
+    for _fg in OCEAN_PALETTE:
+        for _bg in OCEAN_PALETTE:
+            curses.init_pair(_cp, _fg, _bg)
+            _cp += 1
 
     frozen_snap   = None
     frozen_repair = "IDLE"
@@ -648,10 +758,25 @@ def main(scr):
                            dim=True, editing_buffer=broadcast_buffer)
             draw_footer(scr, editing=True)
             scr.refresh()
+            _h, _w = scr.getmaxyx()
+            _msg_w = (_w // 2 - 2) - 4
+            _buf_before = broadcast_buffer[:broadcast_cursor]
+            _cur_lines = []
+            for _para in _buf_before.split('\n'):
+                _cur_lines.extend(textwrap.wrap(_para, _msg_w - 4) or [''])
+            _cur_row = min(len(_cur_lines) - 1, 12)
+            _cur_col = len(_cur_lines[-1]) if _cur_lines else 0
+            try:
+                scr.move(4 + _cur_row, min(5 + _cur_col, _w - 1))
+            except curses.error:
+                pass
 
             k = scr.getch()
 
             if k in (10, 13):
+                broadcast_buffer = broadcast_buffer[:broadcast_cursor] + '\n' + broadcast_buffer[broadcast_cursor:]
+                broadcast_cursor += 1
+            elif k == 4:
                 err = write_broadcast(broadcast_buffer)
                 if err:
                     broadcast_error = "ERR: " + err
@@ -660,18 +785,28 @@ def main(scr):
                     broadcast_error = ""
                 broadcast_mode = False
                 broadcast_buffer = ""
+                broadcast_cursor = 0
                 curses.curs_set(0)
             elif k == 27:
                 broadcast_mode = False
                 broadcast_buffer = ""
+                broadcast_cursor = 0
                 curses.curs_set(0)
             elif k in (curses.KEY_BACKSPACE, 127, 8):
-                broadcast_buffer = broadcast_buffer[:-1]
+                if broadcast_cursor > 0:
+                    broadcast_buffer = broadcast_buffer[:broadcast_cursor-1] + broadcast_buffer[broadcast_cursor:]
+                    broadcast_cursor -= 1
             elif k == 21:
                 broadcast_buffer = ""
+                broadcast_cursor = 0
+            elif k == curses.KEY_LEFT:
+                broadcast_cursor = max(0, broadcast_cursor - 1)
+            elif k == curses.KEY_RIGHT:
+                broadcast_cursor = min(len(broadcast_buffer), broadcast_cursor + 1)
             elif 32 <= k <= 126:
                 if len(broadcast_buffer) < 140:
-                    broadcast_buffer += chr(k)
+                    broadcast_buffer = broadcast_buffer[:broadcast_cursor] + chr(k) + broadcast_buffer[broadcast_cursor:]
+                    broadcast_cursor += 1
             continue
 
         # ── LIVE DASHBOARD MODE ──
@@ -708,6 +843,7 @@ def main(scr):
                 frozen_repair = repair_status
             broadcast_mode = True
             broadcast_buffer = broadcast_current
+            broadcast_cursor = len(broadcast_current)
             broadcast_error = ""
             continue
 
