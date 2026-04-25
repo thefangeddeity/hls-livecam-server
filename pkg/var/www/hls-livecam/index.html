@@ -7,35 +7,22 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
 <style>
   :root {
-    --bg: #f5f5f7;
-    --panel: #ffffff;
-    --panel-2: #fafafa;
-    --border: #e5e5ea;
-    --border-strong: #d2d2d7;
-    --text: #1d1d1f;
-    --text-dim: #86868b;
-    --text-muted: #a1a1a6;
-    --accent: #0071e3;
-    --accent-hover: #0077ed;
-    --danger: #ff3b30;
-    --success: #34c759;
-    --warn: #ff9500;
-    --shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 14px rgba(0,0,0,0.06);
+    --bg: #111113;
+    --panel: #1c1c1e;
+    --panel-2: #242426;
+    --border: #38383a;
+    --border-strong: #48484a;
+    --text: #f5f5f7;
+    --text-dim: #98989d;
+    --text-muted: #6e6e73;
+    --accent: #0a84ff;
+    --accent-hover: #409cff;
+    --danger: #ff453a;
+    --success: #30d158;
+    --warn: #ff9f0a;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.6);
     --radius: 12px;
     --radius-sm: 8px;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #1c1c1e;
-      --panel: #2c2c2e;
-      --panel-2: #242426;
-      --border: #38383a;
-      --border-strong: #48484a;
-      --text: #f5f5f7;
-      --text-dim: #98989d;
-      --text-muted: #6e6e73;
-      --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.4);
-    }
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -213,10 +200,17 @@
     padding: 18px;
     gap: 18px;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     flex-shrink: 0;
     height: 100%;
   }
-  .section { display: flex; flex-direction: column; gap: 8px; }
+  .section {
+    display: flex; flex-direction: column; gap: 8px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+  }
   .section-title {
     font-size: 11px; font-weight: 600;
     color: var(--text-dim);
@@ -250,10 +244,12 @@
   .sidebar-scroll {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 10px;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding-right: 8px;
   }
 
   /* ── BUTTONS ── */
@@ -283,6 +279,12 @@
   .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
   .btn[hidden] { display: none; }
 
+  /* ── CONTROLS STACK ── */
+  .controls-stack { display: flex; flex-direction: column; gap: 6px; }
+  .feed-mode-label { font-size: 10px; color: var(--text-muted); margin-bottom: 1px; }
+  .feed-mode-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+  .mute-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); cursor: pointer; padding: 2px 0; }
+
   /* ── MESSAGE BOX ── */
   .message-section { display: flex; flex-direction: column; gap: 8px; }
   .msg-box-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -308,7 +310,7 @@
     cursor: text; font-style: normal; color: var(--text);
   }
   .msg-actions { display: grid; gap: 6px; grid-template-columns: 1fr 1fr 1fr; max-width: 100%; }
-  .msg-actions .btn { padding: 6px 6px; font-size: 11px; }
+  .msg-actions .btn { padding: 6px 6px; font-size: 12px; }
 
   .msg-hint {
     font-size: 11px; color: var(--text-muted);
@@ -397,23 +399,31 @@
       <!-- MESSAGE -->
       <div class="section message-section">
         <div class="section-title">Message <span id="msgHint" class="msg-hint"></span></div>
+        <div class="feed-mode-label">Leave a message for viewers</div>
         <div class="msg-box-wrap">
           <textarea class="msg-box empty" id="msgBox" readonly>(no message)</textarea>
         </div>
         <div class="msg-actions" id="msgActions" hidden>
-          <button class="btn primary" id="saveBtn" onclick="sendMessage()">Save</button>
+          <button class="btn" id="saveBtn" onclick="sendMessage()">Save</button>
+          <button class="btn" id="clearBtn" onclick="clearMessage()">Clear</button>
           <button class="btn primary" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
-          <button class="btn primary" id="clearBtn" onclick="clearMessage()">Clear</button>
         </div>
       </div>
 
       <!-- CONTROLS — always visible -->
       <div class="section">
         <div class="section-title">Controls</div>
-        <div style="display:flex;flex-direction:column;gap:5px;">
+        <div class="controls-stack">
+          <div class="feed-mode-label">Show, blur, or hide feed</div>
+          <div class="feed-mode-grid">
+            <button class="btn primary" id="showBtn" onclick="setFeedMode('show')">Show</button>
+            <button class="btn" id="cloakBtn" onclick="setFeedMode('cloak')">Cloak</button>
+            <button class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
+          </div>
           <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
-          <button class="btn primary" id="muteBtn" onclick="toggleMute()">Mute Buzzes</button>
-          <button class="btn dark-btn" id="darkBtn" onclick="toggleDark()">Hide Feed</button>
+          <label class="mute-label">
+            <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
+          </label>
           <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
         </div>
       </div>
@@ -447,15 +457,21 @@
   var liveInd      = document.getElementById('liveIndicator');
   var errorOverlay = document.getElementById('errorOverlay');
   var darkOverlay  = document.getElementById('darkOverlay');
-  var darkBtn      = document.getElementById('darkBtn');
+  var showBtn      = document.getElementById('showBtn');
+  var cloakBtn     = document.getElementById('cloakBtn');
+  var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
-  var muteBtn      = document.getElementById('muteBtn');
+  var muteCheck    = document.getElementById('muteCheck');
   var reconnectBtn = document.getElementById('reconnectBtn');
+  var saveBtn      = document.getElementById('saveBtn');
   var clearBtn     = document.getElementById('clearBtn');
+  var cancelBtn    = document.getElementById('cancelBtn');
   var hls = null;
   var recovering = false, retryTimer = null;
   var liveAt = null, uptimeInterval = null;
   var isDark = false;
+  var feedMode = 'show'; // 'show' | 'cloak' | 'hide'
+  var cloakCanvas = null, cloakInterval = null;
 
   var hostEl = document.getElementById('hostVal');
   var protoEl = document.getElementById('protoVal');
@@ -517,8 +533,7 @@
   }
 
   function updateMuteBtn() {
-    muteBtn.textContent = buzzMuted ? 'Unmute Buzzes' : 'Mute Buzzes';
-
+    muteCheck.checked = buzzMuted;
   }
 
   function toggleMute() {
@@ -562,19 +577,98 @@
     darkOverlay.classList.remove('visible');
   }
 
+  function updateFeedButtons() {
+    showBtn.className  = 'btn' + (feedMode === 'show'  ? ' primary' : '');
+    cloakBtn.className = 'btn' + (feedMode === 'cloak' ? ' primary' : '');
+    hideBtn.className  = 'btn' + (feedMode === 'hide'  ? ' primary' : '');
+  }
+  // NOTE: Cloak is currently client-side only -- canvas overlay at 64x36px scaled up.
+  // A determined user with dev tools can remove it and see the raw stream.
+  // Future goal: route Cloak through server-side pixelated HLS stream via
+  // ffmpeg-cam-dark.service so no raw feed reaches the browser. See parked ideas.
+  var offCanvas = null;
+  function startCloak() {
+    if (!cloakCanvas) {
+      cloakCanvas = document.createElement('canvas');
+      cloakCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;image-rendering:pixelated;z-index:5;';
+      document.getElementById('videoContainer').appendChild(cloakCanvas);
+      offCanvas = document.createElement('canvas');
+    }
+    cloakCanvas.style.display = 'block';
+    cloakInterval = setInterval(function() {
+      var cols = 80, rows = 22;
+      var cw = 1280, ch = 720;
+      var cellW = cw / cols, cellH = ch / rows;
+      offCanvas.width = cols; offCanvas.height = rows * 2;
+      var octx = offCanvas.getContext('2d');
+      octx.drawImage(video, 0, 0, cols, rows * 2);
+      var src = octx.getImageData(0, 0, cols, rows * 2).data;
+      cloakCanvas.width = cw; cloakCanvas.height = ch;
+      var ctx = cloakCanvas.getContext('2d');
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          var ti = ((r*2)   * cols + c) * 4;
+          var bi = ((r*2+1) * cols + c) * 4;
+          var x = c * cellW, y = r * cellH;
+          ctx.fillStyle = 'rgb('+src[bi]+','+src[bi+1]+','+src[bi+2]+')';
+          ctx.fillRect(x, y, cellW, cellH);
+          ctx.fillStyle = 'rgb('+src[ti]+','+src[ti+1]+','+src[ti+2]+')';
+          ctx.fillRect(x, y, cellW, cellH * 0.5);
+        }
+      }
+    }, 100);
+  }
+  function stopCloak() {
+    if (cloakCanvas) { cloakCanvas.style.display = 'none'; cloakCanvas.style.filter = ''; }
+    if (cloakInterval) { clearInterval(cloakInterval); cloakInterval = null; }
+  }
+  function setFeedMode(mode) {
+    if (mode === feedMode) return;
+    if (mode === 'hide') {
+      if (isDark) { feedMode = 'hide'; updateFeedButtons(); return; }
+      hideBtn.disabled = true;
+      startCloak();
+      if (cloakCanvas) cloakCanvas.style.filter = 'grayscale(1)';
+      fetch('/api/dark', { method: 'POST' })
+        .then(function(r) { return r.ok ? r.text() : null; })
+        .catch(function() { return null; })
+        .then(function(text) {
+          if (text !== null) applyDark(true);
+          else hideBtn.disabled = false;
+        });
+    } else {
+      if (mode === 'cloak') startCloak(); else stopCloak();
+      if (isDark) {
+        fetch('/api/dark', { method: 'POST' })
+          .then(function(r) { return r.ok ? r.text() : null; })
+          .catch(function() { return null; })
+          .then(function() {
+            isDark = false;
+            if (darkLiftTimer) clearTimeout(darkLiftTimer);
+            darkLiftTimer = setTimeout(liftDarkOverlay, 15000);
+            feedMode = mode; updateFeedButtons();
+          });
+      } else {
+        feedMode = mode; updateFeedButtons();
+      }
+    }
+  }
   function applyDark(dark) {
     isDark = dark;
-    darkBtn.textContent = dark ? 'Show Feed' : 'Hide Feed';
-    darkBtn.classList.toggle('is-dark', dark);
-    darkBtn.disabled = false;
+    hideBtn.disabled = false;
     if (dark) {
+      feedMode = 'hide';
+      stopCloak();
       if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
+      darkOverlay.querySelector('img').src = '/dark.png?t=' + Date.now();
       darkOverlay.classList.add('visible');
       liveInd.textContent = 'DARK';
       liveInd.className = 'live-pill dark-mode';
     } else {
+      if (feedMode === 'hide') feedMode = 'show';
       if (!darkLiftTimer) darkLiftTimer = setTimeout(liftDarkOverlay, 15000);
     }
+    updateFeedButtons();
   }
 
   function pollDark() {
@@ -588,16 +682,7 @@
       });
   }
 
-  function toggleDark() {
-    darkBtn.disabled = true;
-    fetch('/api/dark', { method: 'POST' })
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .catch(function() { return null; })
-      .then(function(text) {
-        if (text !== null) applyDark(text.trim() === 'true');
-        else darkBtn.disabled = false;
-      });
-  }
+
 
   pollDark();
   setInterval(pollDark, 5000);
@@ -739,7 +824,13 @@
   var msgActions = document.getElementById('msgActions');
   var msgHint    = document.getElementById('msgHint');
 
-  function updateClearBtn() { /* static — all buttons blue */ }
+  function updateClearBtn() {
+    var val = msgBox.value.trim();
+    var changed = val !== currentMsg;
+    saveBtn.className   = 'btn' + (editing && changed ? ' primary' : '');
+    cancelBtn.className = 'btn' + (editing ? ' primary' : '');
+    clearBtn.className  = 'btn' + (currentMsg !== '' ? ' primary' : '');
+  }
 
   function setHint(text, cls) {
     msgHint.textContent = text;
@@ -762,18 +853,18 @@
     msgBox.classList.remove('empty');
     msgBox.classList.add('editing');
     msgBox.removeAttribute('readonly');
-    msgActions.hidden = false;
     msgBox.focus();
     setHint('Esc = cancel');
+    updateClearBtn();
   }
 
   function cancelEdit() {
     editing = false;
     msgBox.setAttribute('readonly', '');
     msgBox.classList.remove('editing');
-    msgActions.hidden = true;
     showDisplay(currentMsg);
     setHint('');
+    updateClearBtn();
   }
 
   function pollBroadcast() {
@@ -807,9 +898,11 @@
   }
 
   function clearMessage() {
+    if (!confirm('Clear the current message?')) return;
     doPost('', function() { cancelEdit(); showDisplay(''); setHint('Cleared', 'ok'); });
   }
 
+  msgBox.addEventListener('input', function() { if (editing) updateClearBtn(); });
   msgBox.addEventListener('click', function() { if (!editing) enterEdit(); });
   msgBox.addEventListener('touchend', function(e) {
     if (!editing) { e.preventDefault(); enterEdit(); }

@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ── Config ────────────────────────────────────────────────────────────────────
 OUTPUT_W   = 1280
 OUTPUT_H   = 720
-COLS       = 160
+COLS       = 80
 GAIN       = 1.4   # fg contrast boost, mirrors ascii_cam default
 BG_CANVAS  = (10, 10, 10)
 
