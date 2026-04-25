@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
-Version: 2.8.0
+Version: 2.8.1
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap
@@ -129,7 +129,7 @@ def hls_worker():
             state = "ERROR"
         with hls_lock:
             hls_state = state
-        time.sleep(2)
+        time.sleep(5)
 
 def get_hls():
     with hls_lock:
@@ -185,10 +185,10 @@ def read_smart():
             data = [f"DISK:   {disk}", f"HEALTH: {health}"]
             if result.returncode != 0:
                 data.append("SMART:  WARN (partial)")
-            data.append(f"REALLOC:{realloc}")
-            data.append(f"PENDING:{pending}")
-            data.append(f"UNCORR: {uncorr}")
-            data.append(f"TEMP:   {temp}C" if temp != "?" else "TEMP:   UNKNOWN")
+            data.append(f"REALLOC: {realloc}")
+            data.append(f"PENDING: {pending}")
+            data.append(f"UNCORR:  {uncorr}")
+            data.append(f"DISK TEMP: {temp}C" if temp != "?" else "DISK TEMP: UNKNOWN")
 
             with smart_lock:
                 smart_info[:] = data
@@ -398,6 +398,7 @@ def sample_metrics():
         "v4l2_dev": read_device_env().get("VIDEO_DEVICE", "?"),
         "dark":  os.path.exists(DARK_FLAG),
         "svc":   services_running(),
+        "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
     }
 
 WIDGET_SNAP = "/tmp/camsnap_widget.jpg"
@@ -458,7 +459,13 @@ def snap_worker():
                 widget_pixels_color = cpx
         except Exception:
             pass
-        time.sleep(2)
+        _interval = 2
+        try:
+            with open("/var/lib/hls-livecam/snap_interval") as _f:
+                _interval = int(_f.read().strip())
+        except Exception:
+            pass
+        time.sleep(_interval)
 
 def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     h, w = scr.getmaxyx()
@@ -471,7 +478,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     avail = snap["avail"]
     nginx = snap["nginx"]; rtsp = snap["rtsp"]
     api   = snap["api"];   v4l2 = snap["v4l2"]
-    dark  = snap["dark"];  svc  = snap["svc"]
+    dark  = snap["dark"];  svc  = snap["svc"];  cputemp = snap["cputemp"]
 
     base_status = system_status(hls, ff, mm)
     sys_status = base_status if cur_repair in ("IDLE", "OK") else cur_repair
@@ -553,8 +560,11 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, rx + 2, f"LOAD  {l:.2f}/{cores}", base); y += 1
     safe(scr, y, rx + 2, bar(min(l / cores * 100, 100), col_w - 6), load_attr(l, cores, dim)); y += 2
     col2 = (col_w - 4) // 2
-    safe(scr, y, rx + 2,        f"RAM: {avail} MB"[:col2], base)
-    safe(scr, y, rx + 2 + col2, f"USB: {usb}"[:col2], base)
+    _col3 = (col_w - 4) // 3
+    _sysline = (f"RAM: {avail} MB".ljust(_col3)[:_col3] +
+                f"USB: {usb}".ljust(_col3)[:_col3] +
+                f"CPU TEMP: {cputemp}\u00b0C")
+    safe(scr, y, rx + 2, _sysline[:col_w - 4], base)
 
     # BOTTOM row
     by = top_y + box_h
@@ -639,7 +649,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     def scell(key, label=None):
         lbl = label or key
         val = si.get(key, "?")
-        return f"{lbl}:{val}"[:col]
+        return f"{lbl}: {val}"[:col]
 
     realloc_n = sint("REALLOC") or 0
     pending_n = sint("PENDING") or 0
@@ -655,8 +665,8 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
 
     write_attr = curses.A_DIM if dim else (
         curses.color_pair(1) | curses.A_BOLD if disk > 0.01 else curses.color_pair(1))
-    safe(scr, y, dx + 2,       f"WRITE  : {disk:.2f} MB/s", write_attr)
-    safe(scr, y, dx + 2 + col, scell("DISK", "DISK  ")[:col],
+    safe(scr, y, dx + 2,       f"WRITE: {disk:.2f} MB/s", write_attr)
+    safe(scr, y, dx + 2 + col, scell("DISK")[:col],
          curses.A_DIM if dim else curses.color_pair(1))
     y += 1
 
@@ -664,8 +674,8 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     assess_attr = curses.A_DIM if dim else (
         curses.color_pair(1) | curses.A_BOLD if assess_val == "PASSED"
         else curses.color_pair(3) | curses.A_BOLD)
-    safe(scr, y, dx + 2,       f"ASSESS:{assess_val}"[:col], assess_attr)
-    safe(scr, y, dx + 2 + col, f"RISK:  {risk}"[:col], risk_attr)
+    safe(scr, y, dx + 2,       f"ASSESS: {assess_val}"[:col], assess_attr)
+    safe(scr, y, dx + 2 + col, f"RISK: {risk}"[:col], risk_attr)
     y += 1
 
     if warn_partial:
@@ -676,8 +686,8 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, dx + 2,       scell("REALLOC"), sattr("REALLOC"))
     safe(scr, y, dx + 2 + col, scell("PENDING"), sattr("PENDING"))
     y += 1
-    safe(scr, y, dx + 2,       scell("UNCORR", "UNCORR "), sattr("UNCORR"))
-    safe(scr, y, dx + 2 + col, scell("TEMP", "TEMP  "), base)
+    safe(scr, y, dx + 2,       scell("UNCORR"), sattr("UNCORR"))
+    safe(scr, y, dx + 2 + col, scell("DISK TEMP", "DISK TEMP"), base)
 
 
 def draw_footer(scr, editing):

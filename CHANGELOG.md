@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.8.0] - 2026-04-24
+### Added
+- camstack MESSAGE box: live pixelated webcam widget using halfblock ▀ rendering with oceanic/earth-tone palette (color when feed live, grayscale when hidden)
+- camstack broadcast editor: multiline support with Enter for newline, Ctrl+D to save & deliver, left/right cursor navigation, mid-text insert/delete
+- camstack footer: dynamic word wrap at • boundaries, two-row layout
+- Mute Buzzes button: now permanently blue (primary) for visual consistency
+- Blinking • bullet on LIVE status in camstack header
+
+### Changed
+- camstack snap_worker refresh interval: 5s (tuned from 2s for CPU stability)
+- Widget capture size increased to 80×26 for terminal resize support
+
 ## [2.7.9] - 2026-04-24
 ### Fixed
 - Repair completion status "OK" was overriding header sys_status, causing "OK | feed hidden" to display in red instead of falling back to base status (LIVE/CONNECTING/DOWN)
