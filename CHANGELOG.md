@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.8.2] - 2026-04-25
+### Added
+- Feed mode controls: Show / Cloak / Hide replacing single Hide Feed toggle
+- Cloak mode: client-side halfblock pixelation canvas overlay (color, live)
+- Cloak bridges to Hide: grayscale pixelation shown immediately on Hide to prevent flash of raw video while snapshot generates
+- confirm() dialog on Clear message button
+
+### Changed
+- Forced dark theme (no longer follows system preference)
+- Sidebar sections styled as cards
+- Button state logic: Save and Cancel blue only when changes pending; Clear blue when message exists; all always visible
+- block_art COLS reduced to 80 to match Cloak pixelation density
+- dark.png cache-busted on Hide with timestamp query string
+
+### Notes
+- Cloak is client-side only — a determined user can bypass via dev tools.
+  Future goal: server-side pixelated HLS stream via ffmpeg-cam-dark.service.
+
 ## [2.8.1] - 2026-04-24
 ### Added
 - camstack SYSTEM panel: CPU temperature display (coretemp sensor, falls back to "?" if unavailable)
