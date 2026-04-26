@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.8.5] - 2026-04-25
+### Fixed
+- Arch setup: pkg copy of hls-livecam-setup-arch had stale `hostname -I` — now matches installed fix from v2.8.4
+
 ## [2.8.4] - 2026-04-25
 ### Fixed
 - Arch setup: IP address empty in completion message — replaced `hostname -I` with `ip route get` fallback
