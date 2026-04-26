@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.8.3] - 2026-04-25
+### Fixed
+- Arch setup: `hostname` command not found — replaced with `hostnamectl hostname` with `/etc/hostname` fallback
+
 ## [2.8.2] - 2026-04-25
 ### Added
 - Feed mode controls: Show / Cloak / Hide replacing single Hide Feed toggle
