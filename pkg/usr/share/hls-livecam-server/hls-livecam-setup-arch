@@ -319,7 +319,7 @@ EOF
 fi
 
 # ── Done ──────────────────────────────────────────────────────
-IP=$(hostname -I | awk '{print $1}')
+IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
 echo ""
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}${BOLD}  hls-livecam-server is running!${NC}"
