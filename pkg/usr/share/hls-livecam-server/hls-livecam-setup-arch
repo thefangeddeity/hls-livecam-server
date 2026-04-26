@@ -221,7 +221,7 @@ echo -e "  ${GREEN}Services installed and started.${NC}"
 echo ""
 echo -e "${BOLD}Configuring nginx...${NC}"
 
-HOSTNAME_VAL=$(hostname)
+HOSTNAME_VAL=$(hostnamectl hostname 2>/dev/null || cat /etc/hostname)
 mkdir -p "$WEB_ROOT"
 mkdir -p "$LIB_DIR"
 
@@ -298,7 +298,7 @@ echo -e "  ${GREEN}nginx configured and serving.${NC}"
 # SUDO_USER_NAME already set above
 if [ -n "$SUDO_USER_NAME" ]; then
   # [h] hide/show feed
-  printf '%s ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\nhttp ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\n' "$SUDO_USER_NAME" > /etc/sudoers.d/hls-livecam-dark
+  printf '%s ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\nwww-data ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\n' "$SUDO_USER_NAME" > /etc/sudoers.d/hls-livecam-dark
   chown root:root /etc/sudoers.d/hls-livecam-dark
   chmod 440 /etc/sudoers.d/hls-livecam-dark
   # smartctl for SMART panel
@@ -307,10 +307,10 @@ if [ -n "$SUDO_USER_NAME" ]; then
   chmod 440 /etc/sudoers.d/camstack-smart
   # [s] service toggle
   cat > /etc/sudoers.d/hls-livecam-services << EOF
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl start mediamtx ffmpeg-cam nginx broadcast-api
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl mask ffmpeg-cam
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl unmask ffmpeg-cam
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl start mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
 EOF
   chown root:root /etc/sudoers.d/hls-livecam-services
   chmod 440 /etc/sudoers.d/hls-livecam-services
