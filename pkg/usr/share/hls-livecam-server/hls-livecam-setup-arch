@@ -214,6 +214,9 @@ fi
 systemctl daemon-reload
 systemctl enable --now mediamtx
 systemctl enable --now ffmpeg-cam
+# Arch uses http user, not www-data
+sed -i "s/User=www-data/User=http/" /usr/lib/systemd/system/broadcast-api.service
+systemctl daemon-reload
 systemctl enable --now broadcast-api
 echo -e "  ${GREEN}Services installed and started.${NC}"
 
@@ -299,7 +302,7 @@ echo -e "  ${GREEN}nginx configured and serving.${NC}"
 # SUDO_USER_NAME already set above
 if [ -n "$SUDO_USER_NAME" ]; then
   # [h] hide/show feed
-  printf '%s ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\nwww-data ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\n' "$SUDO_USER_NAME" > /etc/sudoers.d/hls-livecam-dark
+  printf '%s ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\nhttp ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\n' "$SUDO_USER_NAME" > /etc/sudoers.d/hls-livecam-dark
   chown root:root /etc/sudoers.d/hls-livecam-dark
   chmod 440 /etc/sudoers.d/hls-livecam-dark
   # smartctl for SMART panel
