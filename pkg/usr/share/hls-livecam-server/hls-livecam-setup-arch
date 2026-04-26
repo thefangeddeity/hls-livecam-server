@@ -249,6 +249,7 @@ open('$WEB_ROOT/dark.png','wb').write(raw)
 cp "$WEB_ROOT/dark.png" "$LIB_DIR/dark_orig.png" 2>/dev/null || true
 
 # Arch nginx: conf.d
+mkdir -p /etc/nginx/conf.d
 cat > "$NGINX_CONF" <<NGINXEOF
 server {
     listen 80 default_server;
