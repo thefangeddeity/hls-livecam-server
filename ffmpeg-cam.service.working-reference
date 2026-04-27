@@ -1,0 +1,19 @@
+[Unit]
+Description=FFmpeg Camera Capture (RTSP Producer)
+After=network-online.target mediamtx.service
+Wants=network-online.target
+
+[Service]
+User=mediamtx
+Group=video
+ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel info -f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 30 -thread_queue_size 512 -i /dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0 -c:v libx264 -preset ultrafast -tune zerolatency -vf format=yuv420p -profile:v high -level 4.0 -b:v 1500k -g 60 -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/cam
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ffmpeg-cam
+
+[Install]
+WantedBy=multi-user.target

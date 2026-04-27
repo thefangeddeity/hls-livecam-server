@@ -8,7 +8,7 @@ After=network-online.target mediamtx.service
 Wants=network-online.target
 
 [Service]
-User=mediamtx
+User=root
 Group=video
 
 # NOTE: ExecStart is fully literal — no ${VAR} expansion.
@@ -17,7 +17,7 @@ Group=video
 # to ffmpeg as a single token like "-input_format mjpeg" and rejected.
 # Setup substitutes @PLACEHOLDER@ values into this file at install time,
 # producing a unit file with a stable argv that systemd can exec cleanly.
-ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel info -f v4l2 @INPUT_FMT_ARGS@-video_size @VIDEO_SIZE@ -framerate @FRAMERATE@ -thread_queue_size 512 -i @VIDEO_DEVICE@ -c:v libx264 -preset ultrafast -tune zerolatency -vf "fps=@FRAMERATE@,format=yuv420p" -profile:v high -level 4.0 -b:v 1500k -g 60 -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/cam
+ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel info -f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 15 -thread_queue_size 512 -i /dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB_2.0_Camera_SN0001-video-index0 -c:v libx264 -preset ultrafast -tune zerolatency -vf "fps=15,format=yuv420p" -profile:v high -level 4.0 -b:v 1500k -g 60 -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/cam
 
 Restart=on-failure
 RestartSec=5
