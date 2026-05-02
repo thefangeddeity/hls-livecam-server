@@ -79,3 +79,8 @@
 - index.html: cancel button no longer lit on page load
 - ffmpeg-cam.service template: User=root (was mediamtx, cross-contamination fix)
 - camstack: version string updated to 2.8.8
+
+## [2.8.9] - 2026-05-02
+- index.html: feed mode button logic fixed (active=gray, inactive=blue)
+- index.html: cancel button no longer lit on page load
+- index.html: renamed CAM-01 to HLS Livecam
