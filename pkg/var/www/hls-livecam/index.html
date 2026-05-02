@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CAM-01</title>
+<title>HLS Livecam</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
 <style>
   :root {
@@ -365,7 +365,7 @@
 
 <header>
   <div class="brand">
-    <span>CAM-01</span>
+    <span>HLS Livecam</span>
     <span class="sep">//</span>
     <span class="host"></span>
   </div>
@@ -406,7 +406,7 @@
         <div class="msg-actions" id="msgActions" hidden>
           <button class="btn" id="saveBtn" onclick="sendMessage()">Save</button>
           <button class="btn" id="clearBtn" onclick="clearMessage()">Clear</button>
-          <button class="btn primary" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
+          <button class="btn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
         </div>
       </div>
 
@@ -476,7 +476,7 @@
   var hostEl = document.getElementById('hostVal');
   var protoEl = document.getElementById('protoVal');
   if (hostEl) hostEl.textContent = window.location.hostname;
-  document.title = 'CAM-01 — ' + window.location.hostname;
+  document.title = 'HLS Livecam — ' + window.location.hostname;
   if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
 
   // ── BUZZ ──
@@ -579,9 +579,9 @@
   }
 
   function updateFeedButtons() {
-    showBtn.className  = 'btn' + (feedMode === 'show'  ? ' primary' : '');
-    cloakBtn.className = 'btn' + (feedMode === 'cloak' ? ' primary' : '');
-    hideBtn.className  = 'btn' + (feedMode === 'hide'  ? ' primary' : '');
+    showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
+    cloakBtn.className = 'btn' + (feedMode === 'cloak' ? '' : ' primary');
+    hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
   }
   // NOTE: Cloak is currently client-side only -- canvas overlay at 64x36px scaled up.
   // A determined user with dev tools can remove it and see the raw stream.
