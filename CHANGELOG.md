@@ -72,3 +72,10 @@
 ## [2.7.8] - 2026-04-24
 ### Fixed
 - Packaging and setup audit: corrected dependency declarations, sudoers, service paths, and postinst to reach clean installable state on Debian and Arch
+
+## [2.8.8] - 2026-05-02
+- index.html: hostname now dynamic in title and header (works on any host)
+- index.html: feed mode buttons inverted logic fixed (active=gray, inactive=blue)
+- index.html: cancel button no longer lit on page load
+- ffmpeg-cam.service template: User=root (was mediamtx, cross-contamination fix)
+- camstack: version string updated to 2.8.8
