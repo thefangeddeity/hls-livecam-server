@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.8.7] - 2026-05-01
+### Fixed
+- camstack: `getdata()` → `tobytes()` (Pillow deprecation, Python 3.14)
+- Arch setup: move nginx default server from port 80 to 8080 so conf.d config wins
+- Arch setup: add `include conf.d/*.conf;` to nginx.conf if missing
+- Arch setup: create `/var/log/nginx/` if missing
+
+## [2.8.6] - 2026-04-26
+### Fixed
+- Arch setup: `User=www-data` → `User=http` in broadcast-api.service
+- Arch setup: sudoers entry updated from www-data to http
+- deb: version bumped, ffmpeg-cam.service synced to pkg
+
 ## [2.8.5] - 2026-04-25
 ### Fixed
 - Arch setup: pkg copy of hls-livecam-setup-arch had stale `hostname -I` — now matches installed fix from v2.8.4
