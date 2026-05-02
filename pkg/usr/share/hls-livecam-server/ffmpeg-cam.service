@@ -8,8 +8,7 @@ After=network-online.target mediamtx.service
 Wants=network-online.target
 
 [Service]
-User=mediamtx
-Group=video
+User=root
 
 # NOTE: ExecStart is fully literal — no ${VAR} expansion.
 # systemd's ExecStart does not perform shell-style word splitting on

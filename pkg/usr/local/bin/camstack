@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 camstack — hls-livecam-server monitor
-Version: 2.8.1
+Version: 2.8.8
 Launch with: camstack
 """
 import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap
