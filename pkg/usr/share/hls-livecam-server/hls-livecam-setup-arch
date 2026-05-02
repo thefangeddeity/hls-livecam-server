@@ -253,6 +253,12 @@ cp "$WEB_ROOT/dark.png" "$LIB_DIR/dark_orig.png" 2>/dev/null || true
 
 # Arch nginx: conf.d
 mkdir -p /etc/nginx/conf.d
+# Move default server off port 80 so our conf.d config wins
+sed -i 's/listen       80;/listen       8080;/' /etc/nginx/nginx.conf
+# Add conf.d include if missing
+grep -q "include conf.d" /etc/nginx/nginx.conf || sed -i '/include.*mime.types/a\    include conf.d/*.conf;' /etc/nginx/nginx.conf
+# Create log directory if missing
+mkdir -p /var/log/nginx
 cat > "$NGINX_CONF" <<NGINXEOF
 server {
     listen 80 default_server;

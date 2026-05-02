@@ -425,7 +425,7 @@ def snap_worker():
                 # ── Grayscale ──
                 gray = Image.open(WIDGET_SNAP).convert("L")
                 gray = gray.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
-                gdata = list(gray.getdata())
+                gdata = list(gray.tobytes())
                 s = sorted(gdata); n = len(s)
                 lo = s[int(n * 0.05)]; hi = s[int(n * 0.95)]
                 rng = (hi - lo) or 1
@@ -443,7 +443,7 @@ def snap_worker():
                 # ── Color ──
                 rgb = Image.open(WIDGET_SNAP).convert("RGB")
                 rgb = rgb.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
-                rdata = list(rgb.getdata())
+                rdata = list(rgb.tobytes())
                 cpx = []
                 for r in range(WIDGET_ROWS):
                     row = []
