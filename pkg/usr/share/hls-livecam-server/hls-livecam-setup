@@ -175,30 +175,20 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# ffmpeg-cam — uses device.env
-cat > /etc/systemd/system/ffmpeg-cam.service <<EOF
-[Unit]
-Description=FFmpeg Camera Capture (RTSP Producer)
-After=network-online.target mediamtx.service
-Wants=network-online.target
-
-[Service]
-EnvironmentFile=$DEVICE_ENV
-User=root
-ExecStart=/usr/bin/ffmpeg -hide_banner -loglevel info \
-  -f v4l2 \${V4L2_INPUT_FMT} -video_size \${VIDEO_SIZE} \
-  -framerate \${FRAMERATE} -thread_queue_size 512 \
-  -i \${VIDEO_DEVICE} \
-  -c:v libx264 -preset ultrafast -tune zerolatency \
-  -vf "fps=\${FRAMERATE},format=yuv420p" \
-  -profile:v high -level 4.0 -b:v 1500k -g 60 \
-  -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/cam
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# ffmpeg-cam — substitute placeholders into template (single-line ExecStart)
+# CRITICAL: systemd does not word-split ${VAR} in ExecStart.
+INPUT_FMT_ARGS="${INPUT_FMT:+${INPUT_FMT} }"
+sed \
+  -e "s|@INPUT_FMT_ARGS@|${INPUT_FMT_ARGS}|g" \
+  -e "s|@VIDEO_SIZE@|1280x720|g" \
+  -e "s|@FRAMERATE@|${FRAMERATE}|g" \
+  -e "s|@VIDEO_DEVICE@|${STABLE_DEV}|g" \
+  /usr/share/hls-livecam-server/ffmpeg-cam.service > /etc/systemd/system/ffmpeg-cam.service
+if grep '^ExecStart=' /etc/systemd/system/ffmpeg-cam.service | grep -q '@[A-Z_]*@'; then
+  echo -e "  ${RED}ERROR: unsubstituted placeholders in ffmpeg-cam.service${NC}"
+  exit 1
+fi
+echo "  ffmpeg-cam.service written."
 
 # ffmpeg-cam-dark and broadcast-api service files are installed by the
 # PKGBUILD to /etc/systemd/system/ — no copy needed here.
