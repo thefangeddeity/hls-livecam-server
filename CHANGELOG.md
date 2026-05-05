@@ -84,3 +84,20 @@
 - index.html: feed mode button logic fixed (active=gray, inactive=blue)
 - index.html: cancel button no longer lit on page load
 - index.html: renamed CAM-01 to HLS Livecam
+
+## [2.8.10] - 2026-05-04
+- setup-arch: fix nginx log dir, http user, conf.d handling (Arch-specific)
+- broadcast-api.service: revert DynamicUser, use www-data (setup substitutes http on Arch)
+
+## [2.8.11] - 2026-05-04
+- broadcast-api.service: revert DynamicUser, use www-data (setup substitutes http on Arch)
+
+## [2.8.12] - 2026-05-04
+- setup: use template for ffmpeg-cam.service (wrong file — patched hls-livecam-setup instead of hls-livecam-setup-arch, no effect)
+
+## [2.8.13] - 2026-05-04
+- setup-arch: use @PLACEHOLDER@ template for ffmpeg-cam.service ExecStart, eliminating ${VAR} word-splitting bug
+
+## [2.8.14] - 2026-05-04
+- index.html: remove hardcoded primary class from showBtn
+- index.html: rename Cloak to Blur
