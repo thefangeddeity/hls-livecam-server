@@ -681,15 +681,15 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 2, f"HLS:      {hls}", status_attr(hls, dim));                  y += 1
     safe(scr, y, 2, f"nginx:    {'LIVE' if nginx else 'DOWN'}",
          status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
-    safe(scr, y, 2, f"MSSG API: {'LIVE' if api else 'DOWN'}",
-         status_attr('LIVE' if api else 'DOWN', dim));  y += 1
-    safe(scr, y, 2, f"CAM:      {'LIVE' if v4l2 else 'NONE'}",
+    safe(scr, y, 2, f"MSSG API: {'LIVE' if api else 'DOWN'}" if svc else "MSSG API: N/A",
+         status_attr('LIVE' if api else 'DOWN', dim) if svc else curses.A_DIM);  y += 1
+    safe(scr, y, 2, f"CAM:      {'LIVE' if (v4l2 and svc) else 'FOUND' if v4l2 else 'NONE'}",
          status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
-    safe(scr, y, 2, f"DARK:     {'ON' if dark else 'OFF'}",
-         curses.A_DIM if dim else (curses.color_pair(2) | curses.A_BOLD if dark else curses.color_pair(1) | curses.A_BOLD)); y += 1
+    safe(scr, y, 2, f"DARK:     {'ON' if dark else 'OFF'}" if svc else "DARK:     N/A",
+         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if dark else curses.color_pair(1) | curses.A_BOLD)); y += 1
     fps_val = read_device_env().get("FRAMERATE", "?")
-    safe(scr, y, 2, f"FPS:      {fps_val}", status_attr('LIVE', dim));                               y += 1
-    safe(scr, y, 2, f"REPAIR:   {cur_repair}", status_attr(cur_repair, dim))
+    safe(scr, y, 2, f"FPS:      {fps_val}" if svc else "FPS:      N/A", status_attr('LIVE', dim) if svc else curses.A_DIM); y += 1
+    safe(scr, y, 2, f"REPAIR:   {cur_repair}" if svc else "REPAIR:   N/A", status_attr(cur_repair, dim) if svc else curses.A_DIM)
 
     # -- PROCESSES content --
     px         = cx + 2

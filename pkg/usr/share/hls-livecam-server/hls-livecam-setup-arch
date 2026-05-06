@@ -203,6 +203,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now mediamtx
+systemctl restart mediamtx
 systemctl enable --now ffmpeg-cam
 # Arch uses http user, not www-data
 sed -i "s/User=www-data/User=http/" /usr/lib/systemd/system/broadcast-api.service
@@ -309,6 +310,8 @@ if [ -n "$SUDO_USER_NAME" ]; then
   cat > /etc/sudoers.d/hls-livecam-services << EOF
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl start mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl disable --now mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl enable --now mediamtx ffmpeg-cam nginx broadcast-api
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
 EOF

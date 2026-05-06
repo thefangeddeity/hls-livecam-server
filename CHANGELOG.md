@@ -1,4 +1,12 @@
 # Changelog
+## [3.0.3] - 2026-05-06
+### Fixed
+- camdash: VIDEO STACK shows N/A for MSSG API, DARK, FPS, REPAIR when server is off ([o] toggle)
+- camdash: CAM shows FOUND (not LIVE) when server is off but camera is present
+- camdash: CAM shows LIVE only when server is on and camera is present
+- setup (Arch): mediamtx restarted after config write to avoid "path not configured" on fresh installs
+- setup (Arch): sudoers entries use `disable --now` / `enable --now` to match camdash [o] toggle
+
 
 ## [2.8.7] - 2026-05-01
 ### Fixed
