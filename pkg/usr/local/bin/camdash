@@ -1,0 +1,939 @@
+#!/usr/bin/env python3
+"""
+camdash — hls-livecam-server monitor
+Version: 3.0.0
+Launch with: camdash
+"""
+import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap, socket
+from PIL import Image
+
+# ---------- STATE ----------
+repair_status = "IDLE"
+repair_lock = threading.Lock()
+last_repair_time = 0
+
+last_disk = psutil.disk_io_counters()
+last_disk_time = time.time()
+
+smart_info = ["SMART: loading..."]
+smart_lock = threading.Lock()
+
+hls_state = "UNKNOWN"
+hls_lock = threading.Lock()
+
+cpu_samples = collections.deque(maxlen=5)
+
+# Broadcast state
+BROADCAST_FILE = "/var/www/hls-livecam/broadcast.txt"
+DARK_FLAG      = "/var/lib/hls-livecam/dark"
+broadcast_mode = False
+broadcast_buffer = ""
+broadcast_current = ""
+broadcast_error = ""
+widget_pixels_gray  = None
+widget_pixels_color = None
+confirm_repair  = False
+confirm_service = False
+confirm_onoff   = False
+
+SMARTCTL = "/usr/sbin/smartctl"
+
+psutil.cpu_percent(interval=None)
+
+# ---------- METRICS ----------
+def cpu():
+    val = psutil.cpu_percent(interval=None)
+    cpu_samples.append(val)
+    return sum(cpu_samples) / len(cpu_samples)
+
+def mem(): return psutil.virtual_memory().percent
+def load(): return os.getloadavg()[0]
+def uptime(): return int(time.time() - psutil.boot_time())
+
+def disk_write_mbs():
+    global last_disk, last_disk_time
+    now_counters = psutil.disk_io_counters()
+    now_time = time.time()
+    elapsed = now_time - last_disk_time
+    if elapsed <= 0:
+        return 0.0
+    delta_bytes = now_counters.write_bytes - last_disk.write_bytes
+    last_disk = now_counters
+    last_disk_time = now_time
+    return (delta_bytes / elapsed) / (1024 * 1024)
+
+def proc(name):
+    for p in psutil.process_iter(['name', 'cmdline']):
+        try:
+            cmdline = p.info['cmdline'] or []
+            pname = p.info['name'] or ""
+            if name == "ffmpeg":
+                if "ffmpeg" in pname or any("ffmpeg" in x for x in cmdline):
+                    if any("8554" in x for x in cmdline):
+                        return True
+                continue
+            if name in pname:
+                return True
+            if any(name in x for x in cmdline):
+                return True
+        except:
+            pass
+    return False
+
+# ---------- SYSTEM STATUS ----------
+def system_status(hls, ff, mm):
+    if hls == "LIVE":    return "LIVE"
+    if hls == "ERROR":   return "ERROR"
+    if ff or mm:         return "DEGRADED"
+    return "DOWN"
+
+# ---------- SWAP ----------
+def swap_type():
+    try:
+        with open("/proc/swaps") as f:
+            lines = f.readlines()[1:]
+        if not lines:           return "NONE"
+        if any("zram" in l for l in lines):  return "ZRAM"
+        if any("/dev/" in l for l in lines): return "DISK"
+        return "OTHER"
+    except:
+        return "UNKNOWN"
+
+# ---------- USB ----------
+def usb_power_state():
+    try:
+        base = "/sys/bus/usb/devices"
+        for d in sorted(os.listdir(base)):
+            p = f"{base}/{d}/power/control"
+            if os.path.exists(p):
+                with open(p) as f:
+                    v = f.read().strip()
+                if v in ("on", "auto"):
+                    return v.upper()
+    except:
+        return "ERROR"
+    return "UNKNOWN"
+
+# ---------- HLS WORKER ----------
+def hls_worker():
+    global hls_state
+    while True:
+        state = "DOWN"
+        try:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8888/cam/index.m3u8", timeout=2
+            ) as r:
+                state = "LIVE" if r.status == 200 else "ERROR"
+        except urllib.error.URLError:
+            state = "DOWN"
+        except Exception:
+            state = "ERROR"
+        with hls_lock:
+            hls_state = state
+        time.sleep(5)
+
+def get_hls():
+    with hls_lock:
+        return hls_state
+
+# ---------- SMART WORKER ----------
+def get_main_disk():
+    try:
+        out = subprocess.check_output(
+            ["lsblk", "-d", "-n", "-o", "NAME,TYPE"], text=True
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "disk":
+                return f"/dev/{parts[0]}"
+    except:
+        pass
+    return "/dev/sda"
+
+def read_smart():
+    disk = get_main_disk()
+    cmds = [
+        [SMARTCTL, "-a", disk],
+        ["sudo", "-n", SMARTCTL, "-a", disk],
+        ["sudo", "-n", SMARTCTL, "-a", "-d", "sat", disk],
+        ["sudo", "-n", SMARTCTL, "-a", "-d", "scsi", disk],
+    ]
+    for cmd in cmds:
+        try:
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=5
+            )
+            out = result.stdout.decode(errors="ignore")
+            if not out or len(out.splitlines()) < 5:
+                continue
+
+            health = realloc = temp = pending = uncorr = "?"
+            for line in out.splitlines():
+                if "SMART overall-health" in line:
+                    health = line.split(":")[-1].strip()
+                cols = line.split()
+                if len(cols) >= 10:
+                    aid = cols[0]
+                    if aid == "5": realloc = cols[-1]
+                    elif aid == "194" and "Temperature_Celsius" in line: temp = cols[9]
+                    elif aid == "197": pending = cols[-1]
+                    elif aid == "198": uncorr = cols[-1]
+                if "Temperature:" in line and temp == "?":
+                    try: temp = line.split(":")[-1].strip().split()[0]
+                    except: pass
+
+            data = [f"DISK:   {disk}", f"HEALTH: {health}"]
+            if result.returncode != 0:
+                data.append("SMART:  WARN (partial)")
+            data.append(f"REALLOC: {realloc}")
+            data.append(f"PENDING: {pending}")
+            data.append(f"UNCORR:  {uncorr}")
+            data.append(f"DISK TEMP: {temp}C" if temp != "?" else "DISK TEMP: UNKNOWN")
+
+            with smart_lock:
+                smart_info[:] = data
+            return
+        except:
+            continue
+
+    with smart_lock:
+        smart_info[:] = [
+            f"DISK:   {disk}",
+            "SMART:  NO ACCESS",
+            "HINT:   run as root or",
+            "        add smartctl to sudoers",
+        ]
+
+def smart_worker():
+    while True:
+        read_smart()
+        time.sleep(30)
+
+# ---------- DEVICE ENV ----------
+DEVICE_ENV = "/etc/hls-livecam/device.env"
+
+def read_device_env():
+    result = {}
+    try:
+        with open(DEVICE_ENV) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                k, _, v = line.partition("=")
+                result[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return result
+
+# ---------- PORT PROBE ----------
+def port_open(host, port, timeout=1):
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+# ---------- BROADCAST ----------
+def read_broadcast():
+    try:
+        with open(BROADCAST_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return ""
+
+def write_broadcast(msg):
+    try:
+        with open(BROADCAST_FILE, "w") as f:
+            f.write(msg)
+        return ""
+    except PermissionError:
+        return "permission denied"
+    except Exception as e:
+        return str(e)[:40]
+
+# ---------- REPAIR ----------
+def run_repair():
+    global repair_status, last_repair_time
+    with repair_lock:
+        if repair_status == "RUNNING":
+            return
+        repair_status = "RUNNING"
+    cmd = ["hls-livecam-repair"]
+    if os.geteuid() != 0:
+        cmd = ["sudo", "-n"] + cmd
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=60)
+        with repair_lock:
+            repair_status = "OK"
+    except Exception:
+        with repair_lock:
+            repair_status = "FAIL"
+    last_repair_time = time.time()
+
+# ---------- DARK TOGGLE ----------
+def run_dark_toggle():
+    cmd = ["hls-livecam-dark"]
+    if os.geteuid() != 0:
+        cmd = ["sudo", "-n"] + cmd
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=15)
+    except Exception:
+        pass
+
+# ---------- SERVICE TOGGLE ----------
+SERVICES = ["mediamtx", "ffmpeg-cam", "nginx", "broadcast-api"]
+
+def services_running():
+    return proc("mediamtx") or proc("nginx")
+
+def run_service_toggle():
+    if services_running():
+        try:
+            subprocess.run(["sudo", "-n", "systemctl", "stop"] + SERVICES,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+            subprocess.run(["sudo", "-n", "systemctl", "mask", "ffmpeg-cam"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(["sudo", "-n", "systemctl", "unmask", "ffmpeg-cam"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            subprocess.run(["sudo", "-n", "systemctl", "start"] + SERVICES,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        except Exception:
+            pass
+
+def services_enabled():
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-enabled", "nginx"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3)
+        return result.stdout.decode().strip() == "enabled"
+    except Exception:
+        return False
+
+def run_service_onoff():
+    if services_enabled():
+        try:
+            subprocess.run(["sudo", "-n", "systemctl", "disable", "--now"] + SERVICES,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+            subprocess.run(["sudo", "-n", "systemctl", "mask", "ffmpeg-cam"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(["sudo", "-n", "systemctl", "unmask", "ffmpeg-cam"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            subprocess.run(["sudo", "-n", "systemctl", "enable", "--now"] + SERVICES,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        except Exception:
+            pass
+
+# ---------- UI HELPERS ----------
+def safe(scr, y, x, s, a=0):
+    try:
+        scr.addstr(y, x, s[:max(0, scr.getmaxyx()[1] - x - 1)], a)
+    except:
+        pass
+
+def box(scr, y, x, h, w, title, a=0):
+    safe(scr, y, x, "┌" + "─" * (w - 2) + "┐", a)
+    safe(scr, y, x + 2, f" {title} ", a)
+    for i in range(1, h - 1):
+        safe(scr, y + i, x, "│", a)
+        safe(scr, y + i, x + w - 1, "│", a)
+    safe(scr, y + h - 1, x, "└" + "─" * (w - 2) + "┘", a)
+
+def bar(val, w):
+    filled = int((val / 100.0) * w)
+    return "\u2588" * filled + "\u2591" * (w - filled)
+
+def led(val, dim=False):
+    if dim:
+        return curses.A_DIM
+    if val < 50:   return curses.color_pair(1)
+    if val < 80:   return curses.color_pair(2) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+def status_attr(status, dim=False):
+    if dim:
+        return curses.A_DIM
+    if status in ("LIVE", "OK"):
+        return curses.color_pair(1) | curses.A_BOLD
+    if status in ("DEGRADED", "RUNNING"):
+        return curses.color_pair(2) | curses.A_BOLD
+    if status in ("ERROR", "DOWN", "FAIL"):
+        return curses.color_pair(3) | curses.A_BOLD
+    return curses.color_pair(1)
+
+def header_attr(sys_status, svc, dark, dim=False):
+    if dim:
+        return curses.A_DIM
+    if not svc:
+        if dark:
+            return curses.color_pair(2) | curses.A_BOLD
+        return curses.color_pair(1) | curses.A_BOLD
+    if sys_status == "LIVE":
+        if dark:
+            return curses.color_pair(2) | curses.A_BOLD
+        return curses.color_pair(3) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+def load_attr(l, cores, dim=False):
+    if dim:
+        return curses.A_DIM
+    if l < cores * 0.7:  return curses.color_pair(1)
+    if l <= cores:        return curses.color_pair(2) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+# ---------- DASHBOARD SNAPSHOT ----------
+def sample_metrics():
+    return {
+        "c":    cpu(),
+        "m":    mem(),
+        "l":    load(),
+        "up":   uptime(),
+        "ff":   proc("ffmpeg"),
+        "mm":   proc("mediamtx"),
+        "usb":  usb_power_state(),
+        "hls":  get_hls(),
+        "disk": disk_write_mbs(),
+        "cores": psutil.cpu_count(logical=True),
+        "swap": psutil.swap_memory(),
+        "stype": swap_type(),
+        "avail": psutil.virtual_memory().available // (1024 * 1024),
+        "nginx": proc("nginx"),
+        "rtsp":  port_open("127.0.0.1", 8554),
+        "api":   port_open("127.0.0.1", 5000),
+        "v4l2":  os.path.exists(read_device_env().get("VIDEO_DEVICE", "")),
+        "v4l2_dev": read_device_env().get("VIDEO_DEVICE", "?"),
+        "dark":  os.path.exists(DARK_FLAG),
+        "svc":   services_running(),
+        "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
+    }
+
+WIDGET_SNAP = "/tmp/camsnap_widget.jpg"
+WIDGET_RTSP = "rtsp://127.0.0.1:8554/cam"
+WIDGET_COLS = 110
+WIDGET_ROWS = 32
+GRAY_STEPS    = [232, 238, 244, 250, 254, 255]
+OCEAN_PALETTE = [232, 236, 240, 66, 95, 101, 102, 109, 137, 144, 246, 251]
+
+def snap_worker():
+    global widget_pixels_gray, widget_pixels_color
+    while True:
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-rtsp_transport", "tcp",
+                "-i", WIDGET_RTSP,
+                "-frames:v", "1", WIDGET_SNAP
+            ], timeout=6, capture_output=True)
+            if os.path.exists(WIDGET_SNAP):
+                # -- Grayscale --
+                gray = Image.open(WIDGET_SNAP).convert("L")
+                gray = gray.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
+                gdata = list(gray.tobytes())
+                s = sorted(gdata); n = len(s)
+                lo = s[int(n * 0.05)]; hi = s[int(n * 0.95)]
+                rng = (hi - lo) or 1
+                gpx = []
+                for r in range(WIDGET_ROWS):
+                    row = []
+                    for c in range(WIDGET_COLS):
+                        top = gdata[(r * 2)     * WIDGET_COLS + c]
+                        bot = gdata[(r * 2 + 1) * WIDGET_COLS + c]
+                        fg_i = max(0, min(5, int((top - lo) / rng * 1.4 * 6)))
+                        bg_i = max(0, min(5, int((bot - lo) / rng * 6)))
+                        row.append((fg_i, bg_i))
+                    gpx.append(row)
+                widget_pixels_gray = gpx
+                # -- Color --
+                rgb = Image.open(WIDGET_SNAP).convert("RGB")
+                rgb = rgb.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
+                rdata = list(rgb.tobytes())
+                cpx = []
+                for r in range(WIDGET_ROWS):
+                    row = []
+                    for c in range(WIDGET_COLS):
+                        tr, tg, tb = rdata[(r * 2)     * WIDGET_COLS + c]
+                        br, bg_c, bb = rdata[(r * 2 + 1) * WIDGET_COLS + c]
+                        tlum = int(tr * 0.299 + tg * 0.587 + tb * 0.114)
+                        blum = int(br * 0.299 + bg_c * 0.587 + bb * 0.114)
+                        fg_oi = max(0, min(11, int(tlum / 255 * 11.99)))
+                        bg_oi = max(0, min(11, int(blum / 255 * 11.99)))
+                        row.append((fg_oi, bg_oi))
+                    cpx.append(row)
+                widget_pixels_color = cpx
+        except Exception:
+            pass
+        _interval = 2
+        try:
+            with open("/var/lib/hls-livecam/snap_interval") as _f:
+                _interval = int(_f.read().strip())
+        except Exception:
+            pass
+        time.sleep(_interval)
+
+
+# ---------- LAYOUT HELPERS ----------
+def layout(h, w):
+    """Return layout constants for the given terminal size."""
+    left_w   = max(22, w // 5)
+    center_w = max(10, (w - left_w - 3) // 2)
+    right_w  = center_w
+    center_x = left_w + 1
+    right_x  = center_x + center_w + 1
+    top_y    = 2
+    top_h    = (h - 4) // 2
+    bot_y    = top_y + top_h
+    bot_h    = max(5, h - bot_y - 2)
+    return dict(
+        left_w=left_w, center_w=center_w, right_w=right_w,
+        center_x=center_x, right_x=right_x,
+        top_y=top_y, top_h=top_h,
+        bot_y=bot_y, bot_h=bot_h,
+    )
+
+
+def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
+    h, w = scr.getmaxyx()
+    base = curses.A_DIM if dim else 0
+    L = layout(h, w)
+
+    c = snap["c"]; m = snap["m"]; l = snap["l"]
+    up = snap["up"]; ff = snap["ff"]; mm = snap["mm"]
+    usb = snap["usb"]; hls = snap["hls"]; disk = snap["disk"]
+    cores = snap["cores"]; swap = snap["swap"]; stype = snap["stype"]
+    avail = snap["avail"]
+    nginx = snap["nginx"]; rtsp = snap["rtsp"]
+    api   = snap["api"];   v4l2 = snap["v4l2"]
+    dark  = snap["dark"];  svc  = snap["svc"];  cputemp = snap["cputemp"]
+
+    base_status = system_status(hls, ff, mm)
+    sys_status = base_status if cur_repair in ("IDLE", "OK") else cur_repair
+
+    # -- HEADER --
+    safe(scr, 0, 2,
+         f"Webcam Server Stack  \u2022  uptime {up // 3600}h {(up % 3600) // 60}m",
+         base)
+    qualifiers = []
+    if not svc:
+        qualifiers.append("services stopped")
+    elif base_status in ("DEGRADED", "ERROR", "DOWN"):
+        qualifiers.append("suggest repair")
+    if dark:
+        qualifiers.append("feed hidden")
+    mid = "\u2022 " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else "")
+    _mid_x = w // 2 - len(mid) // 2
+    _hattr = header_attr(sys_status, svc, dark, dim)
+    if sys_status == "LIVE" and not dim:
+        safe(scr, 0, _mid_x, "\u2022", _hattr | curses.A_BLINK)
+        safe(scr, 0, _mid_x + 1,
+             " " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else ""),
+             _hattr)
+    else:
+        safe(scr, 0, _mid_x, mid, _hattr)
+    _hostname = socket.gethostname()
+    _ts = time.strftime("%H:%M %d-%b-%y")
+    _hdr_right = f'"{_hostname}" {_ts}'
+    safe(scr, 0, w - len(_hdr_right) - 2, _hdr_right,
+         curses.A_DIM if dim else curses.color_pair(4))
+
+    top_y = L["top_y"]; top_h = L["top_h"]
+    bot_y = L["bot_y"]; bot_h = L["bot_h"]
+    lw    = L["left_w"]; cx = L["center_x"]; cw = L["center_w"]
+    rx    = L["right_x"]; rw = L["right_w"]
+
+    # ============================================================
+    # TOP ROW: DISK/SMART | FEED | SYSTEM
+    # ============================================================
+    _use_color = not dark and widget_pixels_color is not None
+    _use_gray  = dark  and widget_pixels_gray  is not None
+    has_feed   = (_use_color or _use_gray) and not dim
+    box(scr, top_y, 0,  top_h, lw, "DISK / SMART", base)
+    if has_feed:
+        box(scr, top_y, cx, top_h, cw, "FEED",      base)
+    box(scr, top_y, rx, top_h, rw, "SYSTEM",         base)
+
+    # -- DISK/SMART content --
+    with smart_lock:
+        si_raw = list(smart_info)
+    si = {}
+    warn_partial = False
+    for entry in si_raw:
+        if "WARN (partial)" in entry:
+            warn_partial = True
+        if ":" in entry:
+            k, _, v = entry.partition(":")
+            si[k.strip()] = v.strip()
+
+    def sint(key):
+        try: return int(si.get(key, "x"))
+        except: return None
+
+    def sattr(key):
+        if dim: return curses.A_DIM
+        n = sint(key)
+        if n is None: return 0
+        return curses.color_pair(3 if n > 0 else 1) | curses.A_BOLD
+
+    realloc_n = sint("REALLOC") or 0
+    pending_n = sint("PENDING") or 0
+    uncorr_n  = sint("UNCORR")  or 0
+    if realloc_n > 100 or pending_n > 0 or uncorr_n > 0:
+        risk, risk_attr = "HIGH", curses.color_pair(3) | curses.A_BOLD
+    elif realloc_n > 0:
+        risk, risk_attr = "WARN", curses.color_pair(2) | curses.A_BOLD
+    else:
+        risk, risk_attr = "OK",   curses.color_pair(1) | curses.A_BOLD
+    if dim:
+        risk_attr = curses.A_DIM
+
+    write_attr = curses.A_DIM if dim else (
+        curses.color_pair(1) | curses.A_BOLD if disk > 0.01 else curses.color_pair(1))
+    assess_val  = si.get("HEALTH", "?")
+    assess_attr = curses.A_DIM if dim else (
+        curses.color_pair(1) | curses.A_BOLD if assess_val == "PASSED"
+        else curses.color_pair(3) | curses.A_BOLD)
+
+    _clip = lw - 3
+    dy = top_y + 1
+    safe(scr, dy, 2, f"DISK: {si.get('DISK','?')}"[:_clip],
+         curses.A_DIM if dim else curses.color_pair(1));                         dy += 1
+    safe(scr, dy, 2, f"ASSESS: {assess_val}"[:_clip],    assess_attr);          dy += 1
+    safe(scr, dy, 2, f"RISK: {risk}"[:_clip],            risk_attr);            dy += 1
+    if warn_partial:
+        safe(scr, dy, 2, "SMART: WARN"[:_clip],
+             curses.A_DIM if dim else curses.color_pair(2) | curses.A_BOLD);    dy += 1
+    safe(scr, dy, 2, f"REALLOC: {si.get('REALLOC','?')}"[:_clip], sattr("REALLOC")); dy += 1
+    safe(scr, dy, 2, f"PENDING: {si.get('PENDING','?')}"[:_clip], sattr("PENDING")); dy += 1
+    safe(scr, dy, 2, f"UNCORR: {si.get('UNCORR','?')}"[:_clip],   sattr("UNCORR"));  dy += 1
+    temp_val = si.get("DISK TEMP", "?")
+    temp_clean = temp_val.rstrip("C") if temp_val != "?" else "?"
+    tstr = f"TEMP: {temp_clean}°C" if temp_clean != "?" else "TEMP: ?"
+    safe(scr, dy, 2, tstr[:_clip], base);                                       dy += 1
+    safe(scr, dy, 2, f"WRITE: {disk:.2f} MB/s"[:_clip], write_attr)
+
+    # -- FEED content (block art) --
+    feed_inner_w = cw - 2
+    feed_inner_h = top_h - 2
+    if has_feed:
+        _wpx = widget_pixels_color if _use_color else widget_pixels_gray
+        for _wr, _row in enumerate(_wpx[:feed_inner_h]):
+            for _wc, (_fgi, _bgi) in enumerate(_row[:feed_inner_w]):
+                _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
+                try:
+                    safe(scr, top_y + 1 + _wr, cx + 1 + _wc, "\u2580", curses.color_pair(_pair))
+                except curses.error:
+                    pass
+
+    # -- SYSTEM content --
+    sys_inner_w = rw - 4
+    y = top_y + 1
+    safe(scr, y, rx + 2, f"CPU   {c:5.1f}%", base);                             y += 1
+    safe(scr, y, rx + 2, bar(c, sys_inner_w), led(c, dim));                      y += 2
+    safe(scr, y, rx + 2, f"MEM   {m:5.1f}%", base);                             y += 1
+    safe(scr, y, rx + 2, bar(m, sys_inner_w), led(m, dim));                      y += 2
+    safe(scr, y, rx + 2, f"SWAP  {swap.percent:5.1f}% [{stype}]", base);        y += 1
+    safe(scr, y, rx + 2, bar(swap.percent, sys_inner_w), led(swap.percent, dim)); y += 2
+    safe(scr, y, rx + 2, f"LOAD  {l:.2f}/{cores}", base);                        y += 1
+    safe(scr, y, rx + 2, bar(min(l / cores * 100, 100), sys_inner_w),
+         load_attr(l, cores, dim));                                                y += 2
+    _col3 = sys_inner_w // 3
+    _sysline = (f"RAM: {avail} MB".ljust(_col3)[:_col3] +
+                f"USB: {usb}".ljust(_col3)[:_col3] +
+                f"CPU TEMP: {cputemp}\u00b0C")
+    safe(scr, y, rx + 2, _sysline[:sys_inner_w], base)
+
+    # ============================================================
+    # BOTTOM ROW: STACK | PROCESSES | MESSAGE
+    # ============================================================
+    editing_msg = editing_buffer is not None
+    msg_border  = curses.color_pair(2) if editing_msg else base
+
+    # STACK shares left column width; PROCESSES shares center; MESSAGE shares right
+    box(scr, bot_y, 0,  bot_h, lw, "STACK",     base)
+    _proc_y = bot_y if has_feed else top_y
+    _proc_h = bot_h if has_feed else top_h + bot_h
+    box(scr, _proc_y, cx, _proc_h, cw, "PROCESSES", base)
+    box(scr, bot_y, rx, bot_h, rw, "MESSAGE",   msg_border)
+
+    # -- STACK content --
+    y = bot_y + 1
+    safe(scr, y, 2, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
+         status_attr('LIVE' if ff else 'DOWN', dim));   y += 1
+    safe(scr, y, 2, f"RTSP:     {'LIVE' if rtsp else 'DOWN'}",
+         status_attr('LIVE' if rtsp else 'DOWN', dim)); y += 1
+    safe(scr, y, 2, f"mediamtx: {'LIVE' if mm else 'DOWN'}",
+         status_attr('LIVE' if mm else 'DOWN', dim));   y += 1
+    safe(scr, y, 2, f"HLS:      {hls}", status_attr(hls, dim));                  y += 1
+    safe(scr, y, 2, f"nginx:    {'LIVE' if nginx else 'DOWN'}",
+         status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
+    safe(scr, y, 2, f"MSSG API: {'LIVE' if api else 'DOWN'}",
+         status_attr('LIVE' if api else 'DOWN', dim));  y += 1
+    fps_val = read_device_env().get("FRAMERATE", "?")
+    safe(scr, y, 2, f"FPS:      {fps_val}", base);                               y += 1
+    safe(scr, y, 2, f"REPAIR:   {cur_repair}", status_attr(cur_repair, dim)); y += 1
+    safe(scr, y, 2, f"CAM:      {'LIVE' if v4l2 else 'MISS'}",
+         status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
+    safe(scr, y, 2, f"DARK:     {'ON' if dark else 'OFF'}",
+         curses.A_DIM if dim else (curses.color_pair(2) | curses.A_BOLD if dark else curses.color_pair(1) | curses.A_BOLD))
+
+    # -- PROCESSES content --
+    px         = cx + 2
+    right_edge = cx + cw - 2
+    cpu_w      = 6
+    pname_w    = max(4, right_edge - px - cpu_w - 1)
+    top8 = sorted(
+        psutil.process_iter(['name', 'cpu_percent']),
+        key=lambda p: p.info['cpu_percent'] or 0,
+        reverse=True
+    )[:_proc_h - 2]
+    for i, p in enumerate(top8):
+        try:
+            name = (p.info['name'] or "")[:pname_w]
+            cpuv = p.info['cpu_percent'] or 0.0
+            proc_attr = curses.A_DIM if dim else (
+                curses.color_pair(3) | curses.A_BOLD if cpuv > 30 else
+                curses.color_pair(2) | curses.A_BOLD if cpuv > 10 else
+                curses.color_pair(4) | curses.A_BOLD if cpuv > 2 else
+                curses.A_DIM)
+            safe(scr, _proc_y + 1 + i, px,               f"{name:<{pname_w}}", proc_attr)
+            safe(scr, _proc_y + 1 + i, right_edge - cpu_w, f"{cpuv:5.1f}%",   proc_attr)
+        except:
+            pass
+
+    # -- MESSAGE content --
+    msg_inner_w = rw - 4
+    msg_inner_h = bot_h - 2
+    display_text = editing_buffer if editing_msg else broadcast_current
+    if display_text:
+        msg_lines = []
+        for _para in display_text.split('\n'):
+            msg_lines.extend(textwrap.wrap(_para, msg_inner_w) or [''])
+        for i, line in enumerate(msg_lines[:msg_inner_h]):
+            attr = (curses.color_pair(2) | curses.A_BOLD if editing_msg
+                    else curses.color_pair(4) | curses.A_BOLD)
+            safe(scr, bot_y + 1 + i, rx + 2, line, attr)
+        if editing_msg:
+            remaining = 140 - len(editing_buffer)
+            ctr = str(remaining)
+            ctr_attr = (curses.color_pair(1) if remaining > 20 else
+                        curses.color_pair(2) | curses.A_BOLD if remaining > 0 else
+                        curses.color_pair(3) | curses.A_BOLD)
+            safe(scr, bot_y + 1, rx + rw - len(ctr) - 2, ctr, ctr_attr)
+    else:
+        hint = "(editing \u2014 type message)" if editing_msg else "(no message)"
+        safe(scr, bot_y + 1, rx + 2, hint, curses.A_DIM)
+
+
+def draw_footer(scr, editing):
+    global confirm_repair, confirm_service
+    h, w = scr.getmaxyx()
+    if confirm_repair:
+        safe(scr, h - 1, 2,
+             "REPAIR: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if confirm_service:
+        safe(scr, h - 1, 2,
+             "PAUSE: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if confirm_onoff:
+        safe(scr, h - 1, 2,
+             "SERVER ON/OFF: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if editing:
+        footer1 = "BROADCAST: type message  \u2022  [Enter] newline  \u2022  [Ctrl+U] clear  \u2022  [Ctrl+D] save & deliver"
+        footer2 = "[Esc] cancel"
+    else:
+        footer1 = "systemd auto-restarts on failure  \u2022  [m] message  \u2022  [h] show/hide feed"
+        footer2 = "[p] pause/resume  \u2022  [o] server on/off  \u2022  [r] force repair  \u2022  [q] quit"
+    _fw = w - 4
+    _items = (footer1 + "  \u2022  " + footer2).split("  \u2022  ")
+    _all = []
+    _cur = ""
+    for _item in _items:
+        _add = (_cur + "  \u2022  " + _item) if _cur else _item
+        if len(_add) <= _fw:
+            _cur = _add
+        else:
+            if _cur:
+                _all.append(_cur)
+            _cur = _item
+    if _cur:
+        _all.append(_cur)
+    for _i, _line in enumerate(_all[-(h - 2):]):
+        safe(scr, h - len(_all) + _i, 2, _line, curses.color_pair(4))
+
+
+# ---------- MAIN ----------
+def main(scr):
+    global repair_status, broadcast_mode, broadcast_buffer
+    global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff
+
+    threading.Thread(target=smart_worker, daemon=True).start()
+    threading.Thread(target=hls_worker,   daemon=True).start()
+    threading.Thread(target=snap_worker,  daemon=True).start()
+
+    curses.curs_set(0)
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_GREEN,  -1)
+    curses.init_pair(2, curses.COLOR_YELLOW, -1)
+    curses.init_pair(3, curses.COLOR_RED,    -1)
+    curses.init_pair(4, curses.COLOR_WHITE,  -1)
+    curses.init_pair(5, curses.COLOR_CYAN,   -1)
+    _gp = 10
+    for _fg in GRAY_STEPS:
+        for _bg in GRAY_STEPS:
+            curses.init_pair(_gp, _fg, _bg)
+            _gp += 1
+    _cp = 50
+    for _fg in OCEAN_PALETTE:
+        for _bg in OCEAN_PALETTE:
+            curses.init_pair(_cp, _fg, _bg)
+            _cp += 1
+
+    frozen_snap   = None
+    frozen_repair = "IDLE"
+    broadcast_cursor = 0
+
+    while True:
+        if broadcast_mode:
+            scr.timeout(-1)
+            curses.curs_set(1)
+
+            scr.erase()
+            draw_dashboard(scr, frozen_snap, frozen_repair,
+                           dim=True, editing_buffer=broadcast_buffer)
+            draw_footer(scr, editing=True)
+            scr.refresh()
+
+            _h, _w = scr.getmaxyx()
+            L = layout(_h, _w)
+            _rx          = L["right_x"]
+            _rw          = L["right_w"]
+            _bot_y       = L["bot_y"]
+            _bot_h       = L["bot_h"]
+            _msg_inner_w = _rw - 4
+            _msg_inner_h = _bot_h - 2
+            _buf_before  = broadcast_buffer[:broadcast_cursor]
+            _cur_lines   = []
+            for _para in _buf_before.split('\n'):
+                _cur_lines.extend(textwrap.wrap(_para, _msg_inner_w) or [''])
+            _cur_row = min(len(_cur_lines) - 1, _msg_inner_h - 1) if _cur_lines else 0
+            _cur_col = len(_cur_lines[-1]) if _cur_lines else 0
+            try:
+                scr.move(_bot_y + 1 + _cur_row,
+                         min(_rx + 2 + _cur_col, _w - 1))
+            except curses.error:
+                pass
+
+            k = scr.getch()
+
+            if k in (10, 13):
+                broadcast_buffer = broadcast_buffer[:broadcast_cursor] + '\n' + broadcast_buffer[broadcast_cursor:]
+                broadcast_cursor += 1
+            elif k == 4:
+                err = write_broadcast(broadcast_buffer)
+                if err:
+                    broadcast_error = "ERR: " + err
+                else:
+                    broadcast_current = broadcast_buffer
+                    broadcast_error = ""
+                broadcast_mode = False
+                broadcast_buffer = ""
+                broadcast_cursor = 0
+                curses.curs_set(0)
+            elif k == 27:
+                broadcast_mode = False
+                broadcast_buffer = ""
+                broadcast_cursor = 0
+                curses.curs_set(0)
+            elif k in (curses.KEY_BACKSPACE, 127, 8):
+                if broadcast_cursor > 0:
+                    broadcast_buffer = broadcast_buffer[:broadcast_cursor-1] + broadcast_buffer[broadcast_cursor:]
+                    broadcast_cursor -= 1
+            elif k == 21:
+                broadcast_buffer = ""
+                broadcast_cursor = 0
+            elif k == curses.KEY_LEFT:
+                broadcast_cursor = max(0, broadcast_cursor - 1)
+            elif k == curses.KEY_RIGHT:
+                broadcast_cursor = min(len(broadcast_buffer), broadcast_cursor + 1)
+            elif 32 <= k <= 126:
+                if len(broadcast_buffer) < 140:
+                    broadcast_buffer = broadcast_buffer[:broadcast_cursor] + chr(k) + broadcast_buffer[broadcast_cursor:]
+                    broadcast_cursor += 1
+            continue
+
+        # -- LIVE DASHBOARD MODE --
+        if confirm_repair or confirm_service or confirm_onoff:
+            scr.timeout(-1)
+        else:
+            scr.timeout(500)
+
+        k = scr.getch()
+        if k in (ord('q'), 3):
+            break
+        if confirm_repair:
+            if k == ord('y'):
+                with repair_lock:
+                    can_manual = repair_status != "RUNNING"
+                if can_manual:
+                    threading.Thread(target=run_repair, daemon=True).start()
+                confirm_repair = False
+            elif k != -1:
+                confirm_repair = False
+        elif confirm_service:
+            if k == ord('y'):
+                threading.Thread(target=run_service_toggle, daemon=True).start()
+            confirm_service = False
+        elif confirm_onoff:
+            if k == ord('y'):
+                threading.Thread(target=run_service_onoff, daemon=True).start()
+            confirm_onoff = False
+        elif k == ord('r'):
+            confirm_repair = True
+        elif k == ord('p'):
+            confirm_service = True
+        elif k == ord('o'):
+            confirm_onoff = True
+        elif k == ord('h'):
+            threading.Thread(target=run_dark_toggle, daemon=True).start()
+        elif k == ord('m'):
+            frozen_snap = sample_metrics()
+            with repair_lock:
+                frozen_repair = repair_status
+            broadcast_mode = True
+            broadcast_buffer = broadcast_current
+            broadcast_cursor = len(broadcast_current)
+            broadcast_error = ""
+            continue
+
+        snap = sample_metrics()
+        with repair_lock:
+            cur_repair = repair_status
+        broadcast_current = read_broadcast()
+
+        scr.erase()
+        draw_dashboard(scr, snap, cur_repair, dim=False)
+        draw_footer(scr, editing=False)
+        scr.refresh()
+
+
+if __name__ == "__main__":
+    curses.wrapper(main)

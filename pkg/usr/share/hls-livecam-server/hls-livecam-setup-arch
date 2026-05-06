@@ -294,7 +294,7 @@ systemctl enable --now nginx
 systemctl reload nginx
 echo -e "  ${GREEN}nginx configured and serving.${NC}"
 
-# ── Sudoers: passwordless sudo for camstack [h], [s], and SMART ─
+# ── Sudoers: passwordless sudo for camdash [h], [s], and SMART ─
 # SUDO_USER_NAME already set above
 if [ -n "$SUDO_USER_NAME" ]; then
   # [h] hide/show feed
@@ -302,9 +302,9 @@ if [ -n "$SUDO_USER_NAME" ]; then
   chown root:root /etc/sudoers.d/hls-livecam-dark
   chmod 440 /etc/sudoers.d/hls-livecam-dark
   # smartctl for SMART panel
-  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camstack-smart
-  chown root:root /etc/sudoers.d/camstack-smart
-  chmod 440 /etc/sudoers.d/camstack-smart
+  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camdash-smart
+  chown root:root /etc/sudoers.d/camdash-smart
+  chmod 440 /etc/sudoers.d/camdash-smart
   # [s] service toggle
   cat > /etc/sudoers.d/hls-livecam-services << EOF
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api
@@ -331,7 +331,7 @@ echo ""
 echo -e "  Video: ${CYAN}$STABLE_DEV${NC}"
 echo -e "  Host:  ${CYAN}${HOSTNAME_VAL}${NC}"
 echo ""
-echo -e "Monitor:        ${YELLOW}camstack${NC}"
+echo -e "Monitor:        ${YELLOW}camdash${NC}"
 echo -e "Services:       ${YELLOW}systemctl status mediamtx ffmpeg-cam${NC}"
 echo -e "Logs:           ${YELLOW}journalctl -u ffmpeg-cam -f${NC}"
 echo -e "To repair:      ${YELLOW}sudo hls-livecam-repair${NC}"

@@ -26,9 +26,9 @@ systemctl daemon-reload 2>/dev/null || true
 # Remove sudoers entries written by hls-livecam-setup.
 rm -f /etc/sudoers.d/hls-livecam-dark
 rm -f /etc/sudoers.d/hls-livecam-services
-# camstack-smart may have been written by setup — remove it too.
-# The shipped /etc/sudoers.d/camstack-smart is removed by dpkg automatically.
-rm -f /etc/sudoers.d/camstack-smart
+# camdash-smart may have been written by setup — remove it too.
+# The shipped /etc/sudoers.d/camdash-smart is removed by dpkg automatically.
+rm -f /etc/sudoers.d/camdash-smart
 
 # NOTE: /etc/hls-livecam/ is intentionally NOT removed here.
 # User config (device.env) should survive `dpkg -r` and only

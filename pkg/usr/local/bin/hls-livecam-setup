@@ -296,7 +296,7 @@ echo -e "${BOLD}Configuring nginx...${NC}"
 mkdir -p "$WEB_ROOT"
 
 # ── Broadcast file (user-writable by www-data group) ──
-# camstack (running as the logged-in user) writes here when the operator
+# camdash (running as the logged-in user) writes here when the operator
 # sends a broadcast message. nginx serves it to the web viewer with
 # no-cache headers. File is group-writable by www-data so any user in
 # that group can send broadcasts without sudo.
@@ -388,17 +388,17 @@ systemctl enable --now nginx
 systemctl reload nginx
 echo -e "  ${GREEN}nginx configured and serving.${NC}"
 
-# ── Sudoers: passwordless sudo for camstack [h] and [s] ──────
+# ── Sudoers: passwordless sudo for camdash [h] and [s] ──────
 SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
 if [ -n "$SUDO_USER_NAME" ]; then
-  # [h] hide/show feed — both the installing user (camstack) and www-data (broadcast-api) need this
+  # [h] hide/show feed — both the installing user (camdash) and www-data (broadcast-api) need this
   printf '%s ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\nwww-data ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\n' "$SUDO_USER_NAME" > /etc/sudoers.d/hls-livecam-dark
   chown root:root /etc/sudoers.d/hls-livecam-dark
   chmod 440 /etc/sudoers.d/hls-livecam-dark
-  # smartctl for camstack SMART panel
-  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camstack-smart
-  chown root:root /etc/sudoers.d/camstack-smart
-  chmod 440 /etc/sudoers.d/camstack-smart
+  # smartctl for camdash SMART panel
+  echo "$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/sbin/smartctl" > /etc/sudoers.d/camdash-smart
+  chown root:root /etc/sudoers.d/camdash-smart
+  chmod 440 /etc/sudoers.d/camdash-smart
   # [s] service toggle
   cat > /etc/sudoers.d/hls-livecam-services << EOF
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api

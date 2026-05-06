@@ -43,7 +43,7 @@ fi
 # ─── Fix sudoers file ownership ─────────────────────────────────
 # dpkg extracts files with the installing user's uid if run as non-root
 # via sudo. Force root ownership on all sudoers files we ship.
-for f in /etc/sudoers.d/hls-livecam-dark /etc/sudoers.d/camstack-smart; do
+for f in /etc/sudoers.d/hls-livecam-dark /etc/sudoers.d/camdash-smart; do
     if [ -f "$f" ]; then
         chown root:root "$f"
         chmod 440 "$f"
