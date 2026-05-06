@@ -205,8 +205,6 @@ systemctl daemon-reload
 systemctl enable --now mediamtx
 systemctl restart mediamtx
 systemctl enable --now ffmpeg-cam
-# Arch uses http user, not www-data
-sed -i "s/User=www-data/User=http/" /usr/lib/systemd/system/broadcast-api.service
 systemctl daemon-reload
 systemctl enable --now broadcast-api
 echo -e "  ${GREEN}Services installed and started.${NC}"
