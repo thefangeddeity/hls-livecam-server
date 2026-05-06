@@ -576,6 +576,7 @@
     if (isDark) return;
     if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
     darkOverlay.classList.remove('visible');
+    if (hls === null && video.readyState === 0) initHLS();
   }
 
   function updateFeedButtons() {
