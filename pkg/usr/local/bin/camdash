@@ -664,7 +664,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     msg_border  = curses.color_pair(2) if editing_msg else base
 
     # STACK shares left column width; PROCESSES shares center; MESSAGE shares right
-    box(scr, bot_y, 0,  bot_h, lw, "STACK",     base)
+    box(scr, bot_y, 0,  bot_h, lw, "VIDEO STACK", base)
     _proc_y = bot_y if has_feed else top_y
     _proc_h = bot_h if has_feed else top_h + bot_h
     box(scr, _proc_y, cx, _proc_h, cw, "PROCESSES", base)
@@ -683,13 +683,13 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
          status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
     safe(scr, y, 2, f"MSSG API: {'LIVE' if api else 'DOWN'}",
          status_attr('LIVE' if api else 'DOWN', dim));  y += 1
-    fps_val = read_device_env().get("FRAMERATE", "?")
-    safe(scr, y, 2, f"FPS:      {fps_val}", base);                               y += 1
-    safe(scr, y, 2, f"REPAIR:   {cur_repair}", status_attr(cur_repair, dim)); y += 1
     safe(scr, y, 2, f"CAM:      {'LIVE' if v4l2 else 'NONE'}",
          status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
     safe(scr, y, 2, f"DARK:     {'ON' if dark else 'OFF'}",
-         curses.A_DIM if dim else (curses.color_pair(2) | curses.A_BOLD if dark else curses.color_pair(1) | curses.A_BOLD))
+         curses.A_DIM if dim else (curses.color_pair(2) | curses.A_BOLD if dark else curses.color_pair(1) | curses.A_BOLD)); y += 1
+    fps_val = read_device_env().get("FRAMERATE", "?")
+    safe(scr, y, 2, f"FPS:      {fps_val}", status_attr('LIVE', dim));                               y += 1
+    safe(scr, y, 2, f"REPAIR:   {cur_repair}", status_attr(cur_repair, dim))
 
     # -- PROCESSES content --
     px         = cx + 2
