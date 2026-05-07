@@ -2,32 +2,29 @@
 """
 broadcast-api -- hls-livecam-server studio pipeline + message/dark/buzz endpoints
 
-Studio model: one persistent publisher ffmpeg (rawvideo pipe -> mediamtx),
-one camera reader ffmpeg (v4l2 -> rawvideo), drain thread caches latest frame.
-Writer thread decides content based on mode. No restarts, no HLS gaps.
+Studio model: pyfakewebcam writes frames to v4l2loopback (/dev/video10).
+Publisher ffmpeg reads from loopback, pushes to mediamtx. Non-blocking.
 """
 from flask import Flask, request, abort
-import os, subprocess, time, sys, random, threading, io
-
+import os, subprocess, time, sys, threading, io
+import numpy as np
+import pyfakewebcam
 sys.path.insert(0, '/usr/share/hls-livecam-server')
 import block_art as _ba
 from PIL import Image
 
 app = Flask(__name__)
 
-BROADCAST_FILE = "/var/www/hls-livecam/broadcast.txt"
-BUZZ_FILE      = "/var/www/hls-livecam/buzz.txt"
-DARK_FLAG      = "/var/lib/hls-livecam/dark"
-MAX_LEN        = 140
-DEVICE_ENV     = '/etc/hls-livecam/device.env'
-FRAME_W        = 1280
-FRAME_H        = 720
-FRAME_BYTES    = FRAME_W * FRAME_H * 3
-GOL_COLS       = 80
-GOL_ROWS       = int(GOL_COLS * (FRAME_H / FRAME_W) * 0.5)
-GOL_CELLS      = GOL_COLS * GOL_ROWS
-GOL_DEAD       = int(GOL_CELLS * 0.02)
-
+BROADCAST_FILE  = "/var/www/hls-livecam/broadcast.txt"
+BUZZ_FILE       = "/var/www/hls-livecam/buzz.txt"
+DARK_FLAG       = "/var/lib/hls-livecam/dark"
+MAX_LEN         = 140
+DEVICE_ENV      = '/etc/hls-livecam/device.env'
+LOOPBACK_DEVICE = '/dev/video10'
+FRAME_W         = 1280
+FRAME_H         = 720
+FRAME_BYTES     = FRAME_W * FRAME_H * 3
+GOL_COLS        = 80
 
 def _read_device_env():
     env = {}
@@ -42,68 +39,29 @@ def _read_device_env():
         pass
     return env
 
-
 # -- Mode state --
 _mode      = 'show'
 _mode_lock = threading.Lock()
 _bw_mode   = False
 
-
 # -- Camera frame cache --
 _cam_frame      = None
 _cam_frame_lock = threading.Lock()
 
-
-# -- GoL helpers --
-def _random_seed():
-    return [1 if random.random() < 0.35 else 0 for _ in range(GOL_CELLS)]
-
-
-def _raw_to_gol_seed(raw_bytes):
-    img = Image.frombytes('RGB', (FRAME_W, FRAME_H), raw_bytes)
-    img = img.convert('L').resize((GOL_COLS, GOL_ROWS), Image.LANCZOS)
-    px  = list(img.getdata())
-    s   = sorted(px)
-    lo  = s[int(len(s) * 0.05)]
-    hi  = s[int(len(s) * 0.95)]
-    thr = lo + ((hi - lo) or 1) * 0.5
-    return [1 if p > thr else 0 for p in px]
-
-
-def _gol_step(grid):
-    new = [0] * GOL_CELLS
-    for r in range(GOL_ROWS):
-        for col in range(GOL_COLS):
-            n = sum(
-                grid[((r + dr) % GOL_ROWS) * GOL_COLS + (col + dc) % GOL_COLS]
-                for dr in (-1, 0, 1) for dc in (-1, 0, 1)
-                if not (dr == 0 and dc == 0)
-            )
-            alive = grid[r * GOL_COLS + col]
-            new[r * GOL_COLS + col] = 1 if (alive and n in (2, 3)) or (not alive and n == 3) else 0
-    return new
-
-
 def _png_to_raw(png_bytes):
     return Image.open(io.BytesIO(png_bytes)).convert('RGB').tobytes()
 
-
-# -- Subprocess launchers --
-def _start_publisher(denv):
+def _start_loopback_publisher(denv):
     fr = int(denv.get('FRAMERATE', 15))
     return subprocess.Popen([
         'ffmpeg', '-hide_banner', '-loglevel', 'error',
-        '-f', 'rawvideo', '-pix_fmt', 'rgb24',
-        '-video_size', f'{FRAME_W}x{FRAME_H}',
-        '-framerate', str(fr),
-        '-i', 'pipe:0',
+        '-f', 'v4l2', '-i', LOOPBACK_DEVICE,
         '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-vf', f'fps={fr},format=yuv420p',
         '-profile:v', 'high', '-level', '4.0',
         '-b:v', '1500k', '-g', str(fr * 4),
         '-rtsp_transport', 'tcp', '-f', 'rtsp', 'rtsp://127.0.0.1:8554/cam'
-    ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def _start_cam_reader(denv):
     device = denv.get('VIDEO_DEVICE', '/dev/video0')
@@ -119,8 +77,6 @@ def _start_cam_reader(denv):
         'pipe:1'
     ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
-
-# -- Camera drain thread: always reads, caches latest frame --
 def _drain_loop(cam_holder, denv):
     global _cam_frame
     while True:
@@ -136,92 +92,61 @@ def _drain_loop(cam_holder, denv):
         except Exception:
             time.sleep(1.0)
 
-
-# -- Writer thread: one publisher, mode-driven content, no restarts --
 def _writer_loop():
     denv  = _read_device_env()
     fr    = int(denv.get('FRAMERATE', 15))
     delay = 1.0 / fr
 
-    # Take over from ffmpeg-cam.service
     subprocess.run(['sudo', '-n', '/bin/systemctl', 'stop', 'ffmpeg-cam'],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
 
-    pub_holder = [_start_publisher(denv)]
+    # Init loopback writer before publisher so ffmpeg can connect
+    loop_cam = pyfakewebcam.FakeWebcam(LOOPBACK_DEVICE, FRAME_W, FRAME_H)
+
     cam_holder = [_start_cam_reader(denv)]
     threading.Thread(target=_drain_loop, args=(cam_holder, denv), daemon=True).start()
-    time.sleep(1.0)  # let camera warm up
 
-    gol_grid  = None
-    last_mode = None
+    pub_holder = [_start_loopback_publisher(denv)]
+    time.sleep(1.0)
 
     while True:
         with _mode_lock:
             mode = _mode
 
-        # Seed GoL from last camera frame on first hide tick
-        if mode == 'hide' and last_mode != 'hide':
-            with _cam_frame_lock:
-                seed_raw = _cam_frame
-            gol_grid = _raw_to_gol_seed(seed_raw) if seed_raw else _random_seed()
-        elif mode != 'hide':
-            gol_grid = None
-
-        last_mode = mode
+        if pub_holder[0].poll() is not None:
+            pub_holder[0] = _start_loopback_publisher(denv)
+            time.sleep(0.5)
 
         try:
+            with _cam_frame_lock:
+                raw = _cam_frame
+            if raw is None:
+                time.sleep(delay)
+                continue
+
             if mode == 'show':
-                with _cam_frame_lock:
-                    raw = _cam_frame
-                if raw is None:
-                    time.sleep(delay)
-                    continue
-                pub_holder[0].stdin.write(raw)
-                pub_holder[0].stdin.flush()
-
+                frame_arr = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
             elif mode == 'cloak':
-                with _cam_frame_lock:
-                    raw = _cam_frame
-                if raw is None:
-                    time.sleep(delay)
-                    continue
                 if _bw_mode:
-                    frame = _png_to_raw(_ba.render_cloak_bytes_bw(raw, FRAME_W, FRAME_H, GOL_COLS))
+                    rendered = _png_to_raw(_ba.render_cloak_bytes_bw(raw, FRAME_W, FRAME_H, GOL_COLS))
                 else:
-                    frame = _png_to_raw(_ba.render_cloak_bytes(raw, FRAME_W, FRAME_H, GOL_COLS))
-                pub_holder[0].stdin.write(frame)
-                pub_holder[0].stdin.flush()
-
+                    rendered = _png_to_raw(_ba.render_cloak_bytes(raw, FRAME_W, FRAME_H, GOL_COLS))
+                frame_arr = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3)
             else:  # hide
-                frame = _png_to_raw(_ba.render_gol_to_bytes(gol_grid, GOL_COLS, GOL_ROWS))
-                pub_holder[0].stdin.write(frame)
-                pub_holder[0].stdin.flush()
-                gol_grid = _gol_step(gol_grid)
-                if sum(gol_grid) < GOL_DEAD:
-                    gol_grid = _random_seed()
+                rendered = _png_to_raw(_ba.render_cloak_bytes_bw(raw, FRAME_W, FRAME_H, GOL_COLS))
+                frame_arr = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3)
 
-        except BrokenPipeError:
-            try:
-                pub_holder[0].stdin.close()
-            except Exception:
-                pass
-            pub_holder[0].terminate()
-            time.sleep(0.5)
-            pub_holder[0] = _start_publisher(denv)
-            time.sleep(1.0)
-            continue
+            loop_cam.schedule_frame(frame_arr)
+
         except Exception:
             time.sleep(0.1)
             continue
 
         time.sleep(delay)
 
-
 threading.Thread(target=_writer_loop, daemon=True).start()
 
-
-# -- Routes --
 @app.route('/api/bw-mode', methods=['GET'])
 def bw_mode_get():
     return ('true' if _bw_mode else 'false'), 200
@@ -237,7 +162,6 @@ def feed_mode_get():
     with _mode_lock:
         return _mode, 200
 
-
 @app.route('/api/feed-mode', methods=['POST'])
 def feed_mode_post():
     global _mode
@@ -247,7 +171,6 @@ def feed_mode_post():
     with _mode_lock:
         _mode = new_mode
     return new_mode, 200
-
 
 @app.route('/api/broadcast', methods=['POST'])
 def broadcast():
@@ -262,11 +185,9 @@ def broadcast():
     except Exception:
         abort(500)
 
-
 @app.route('/api/dark', methods=['GET'])
 def dark_get():
     return ('true' if os.path.exists(DARK_FLAG) else 'false'), 200
-
 
 @app.route('/api/dark', methods=['POST'])
 def dark_post():
@@ -281,7 +202,6 @@ def dark_post():
     except Exception:
         abort(500)
 
-
 @app.route('/api/buzz', methods=['POST'])
 def buzz_post():
     try:
@@ -293,7 +213,6 @@ def buzz_post():
         abort(403)
     except Exception:
         abort(500)
-
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000)

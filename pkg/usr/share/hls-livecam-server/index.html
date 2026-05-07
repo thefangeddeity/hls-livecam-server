@@ -150,6 +150,7 @@
     object-fit: cover;
     display: block;
     background: #000;
+    transition: opacity 1s ease;
   }
   .dark-overlay {
     position: absolute; inset: 0;
@@ -173,6 +174,27 @@
     letter-spacing: 0.02em;
     opacity: 0.85;
     pointer-events: none;
+  }
+  .switch-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px;
+    pointer-events: none;
+    z-index: 20;
+  }
+  .switch-overlay.visible { display: flex; }
+  .switch-count {
+    font-size: 48px; font-weight: 700;
+    color: rgba(255,255,255,0.5);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .switch-label {
+    font-size: 13px;
+    color: rgba(255,255,255,0.3);
+    letter-spacing: 0.04em;
   }
   .error-overlay {
     position: absolute; inset: 0;
@@ -371,7 +393,6 @@
   </div>
   <div class="status-bar">
     <span class="live-pill" id="liveIndicator">CONNECTING</span>
-    <span id="clockDisplay" class="desktop-only">--:--:--</span>
   </div>
 </header>
 
@@ -387,6 +408,10 @@
         <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
       </svg>
     </button>
+    <div class="switch-overlay" id="switchOverlay">
+      <div class="switch-count" id="switchCount"></div>
+      <div class="switch-label">Switching feed…</div>
+    </div>
     <div class="error-overlay" id="errorOverlay">
       <div class="title">Signal lost</div>
       <div class="sub">Retrying…</div>
@@ -422,7 +447,7 @@
           </div>
           <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
           <label class="mute-label">
-            <input type="checkbox" id="bwCheck" onchange="toggleBW()"> B&W only
+            <input type="checkbox" id="bwCheck" onchange="toggleBW()"> B&W Blur
           </label>
           <label class="mute-label">
             <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
@@ -473,6 +498,7 @@
   var recovering = false, retryTimer = null;
   var liveAt = null, uptimeInterval = null;
   var feedMode = 'show'; // 'show' | 'cloak' | 'hide'
+  var fadeInTimer = null;
 
   var hostEl = document.getElementById('hostVal');
   var protoEl = document.getElementById('protoVal');
@@ -541,6 +567,7 @@
   var bwMode = false;
   function updateBWBtn() { document.getElementById('bwCheck').checked = bwMode; }
   function toggleBW() {
+    if (feedMode === 'cloak') fadeOut();
     fetch('/api/bw-mode', { method: 'POST' })
       .then(function(r) { return r.ok ? r.text() : null; })
       .catch(function() { return null; })
@@ -589,6 +616,29 @@
   setInterval(pollBuzz, 1000);
 
 
+  var switchOverlay = document.getElementById('switchOverlay');
+  var switchCount   = document.getElementById('switchCount');
+  var countInterval = null;
+
+  function fadeOut() {
+    video.style.opacity = '0';
+    if (fadeInTimer) clearTimeout(fadeInTimer);
+    if (countInterval) clearInterval(countInterval);
+    var secs = 16;
+    switchCount.textContent = secs;
+    switchOverlay.classList.add('visible');
+    countInterval = setInterval(function() {
+      secs--;
+      switchCount.textContent = secs > 0 ? secs : '';
+      if (secs <= 0) { clearInterval(countInterval); countInterval = null; }
+    }, 1000);
+    fadeInTimer = setTimeout(function() {
+      video.style.opacity = '1';
+      switchOverlay.classList.remove('visible');
+      fadeInTimer = null;
+    }, 16000);
+  }
+
   function updateFeedButtons() {
     showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
     cloakBtn.className = 'btn' + (feedMode === 'cloak' ? '' : ' primary');
@@ -597,6 +647,7 @@
   // ── FEED MODE — server-side ──
   function setFeedMode(mode) {
     if (mode === feedMode) return;
+    fadeOut();
     showBtn.disabled = true; cloakBtn.disabled = true; hideBtn.disabled = true;
     fetch('/api/feed-mode', {
       method: 'POST',
@@ -609,9 +660,7 @@
       if (m) {
         feedMode = m.trim();
         updateFeedButtons();
-        if (feedMode !== 'show') {
-          reloadStream();
-        }
+        setTimeout(reloadStream, 1000);
       }
       showBtn.disabled = false; cloakBtn.disabled = false; hideBtn.disabled = false;
     });
@@ -683,7 +732,7 @@
             video.removeEventListener('click', handler);
           });
         });
-        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); }, { once: true });
+        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live');; }, { once: true });
         video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
       } else { setStatus('UNSUPPORTED'); showError(); }
       return;
@@ -700,7 +749,7 @@
     hls.loadSource(HLS_URL);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function() { setStatus('BUFFERING'); video.play().catch(function(){}); });
-    hls.on(Hls.Events.FRAG_LOADED, function() { if (liveInd.textContent !== 'LIVE') setStatus('LIVE', 'live'); });
+    hls.on(Hls.Events.FRAG_LOADED, function() { if (liveInd.textContent !== 'LIVE') setStatus('LIVE', 'live');; });
     hls.on(Hls.Events.ERROR, function(e, data) {
       if (!data.fatal) { scheduleRetry(3000); return; }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovering) {
