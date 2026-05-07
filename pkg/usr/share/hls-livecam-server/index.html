@@ -422,6 +422,9 @@
           </div>
           <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
           <label class="mute-label">
+            <input type="checkbox" id="bwCheck" onchange="toggleBW()"> B&W only
+          </label>
+          <label class="mute-label">
             <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
           </label>
           <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
@@ -469,9 +472,7 @@
   var hls = null;
   var recovering = false, retryTimer = null;
   var liveAt = null, uptimeInterval = null;
-  var isDark = false;
   var feedMode = 'show'; // 'show' | 'cloak' | 'hide'
-  var cloakCanvas = null, cloakInterval = null;
 
   var hostEl = document.getElementById('hostVal');
   var protoEl = document.getElementById('protoVal');
@@ -537,6 +538,24 @@
     muteCheck.checked = buzzMuted;
   }
 
+  var bwMode = false;
+  function updateBWBtn() { document.getElementById('bwCheck').checked = bwMode; }
+  function toggleBW() {
+    fetch('/api/bw-mode', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(v) { if (v !== null) { bwMode = v.trim() === 'true'; updateBWBtn(); } });
+  }
+  function pollBWMode() {
+    fetch('/api/bw-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(v) { if (v !== null) { bwMode = v.trim() === 'true'; updateBWBtn(); } });
+  }
+  pollBWMode();
+  setInterval(pollBWMode, 5000);
+  updateBWBtn();
+
   function toggleMute() {
     buzzMuted = !buzzMuted;
     localStorage.setItem('buzzMuted', buzzMuted);
@@ -569,134 +588,51 @@
   updateMuteBtn();
   setInterval(pollBuzz, 1000);
 
-  // ── DARK MODE ──
-  var darkLiftTimer = null;
-
-  function liftDarkOverlay() {
-    if (isDark) return;
-    if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
-    darkOverlay.classList.remove('visible');
-    if (hls === null && video.readyState === 0) initHLS();
-  }
 
   function updateFeedButtons() {
     showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
     cloakBtn.className = 'btn' + (feedMode === 'cloak' ? '' : ' primary');
     hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
   }
-  // NOTE: Cloak is currently client-side only -- canvas overlay at 64x36px scaled up.
-  // A determined user with dev tools can remove it and see the raw stream.
-  // Future goal: route Cloak through server-side pixelated HLS stream via
-  // ffmpeg-cam-dark.service so no raw feed reaches the browser. See parked ideas.
-  var offCanvas = null;
-  function startCloak() {
-    if (!cloakCanvas) {
-      cloakCanvas = document.createElement('canvas');
-      cloakCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;image-rendering:pixelated;z-index:5;';
-      document.getElementById('videoContainer').appendChild(cloakCanvas);
-      offCanvas = document.createElement('canvas');
-    }
-    cloakCanvas.style.display = 'block';
-    cloakInterval = setInterval(function() {
-      var cols = 80, rows = 22;
-      var cw = 1280, ch = 720;
-      var cellW = cw / cols, cellH = ch / rows;
-      offCanvas.width = cols; offCanvas.height = rows * 2;
-      var octx = offCanvas.getContext('2d');
-      octx.drawImage(video, 0, 0, cols, rows * 2);
-      var src = octx.getImageData(0, 0, cols, rows * 2).data;
-      cloakCanvas.width = cw; cloakCanvas.height = ch;
-      var ctx = cloakCanvas.getContext('2d');
-      for (var r = 0; r < rows; r++) {
-        for (var c = 0; c < cols; c++) {
-          var ti = ((r*2)   * cols + c) * 4;
-          var bi = ((r*2+1) * cols + c) * 4;
-          var x = c * cellW, y = r * cellH;
-          ctx.fillStyle = 'rgb('+src[bi]+','+src[bi+1]+','+src[bi+2]+')';
-          ctx.fillRect(x, y, cellW, cellH);
-          ctx.fillStyle = 'rgb('+src[ti]+','+src[ti+1]+','+src[ti+2]+')';
-          ctx.fillRect(x, y, cellW, cellH * 0.5);
-        }
-      }
-    }, 100);
-  }
-  function stopCloak() {
-    if (cloakCanvas) { cloakCanvas.style.display = 'none'; cloakCanvas.style.filter = ''; }
-    if (cloakInterval) { clearInterval(cloakInterval); cloakInterval = null; }
-  }
+  // ── FEED MODE — server-side ──
   function setFeedMode(mode) {
     if (mode === feedMode) return;
-    if (mode === 'hide') {
-      if (isDark) { feedMode = 'hide'; updateFeedButtons(); return; }
-      hideBtn.disabled = true;
-      startCloak();
-      if (cloakCanvas) cloakCanvas.style.filter = 'grayscale(1)';
-      fetch('/api/dark', { method: 'POST' })
-        .then(function(r) { return r.ok ? r.text() : null; })
-        .catch(function() { return null; })
-        .then(function(text) {
-          if (text !== null) applyDark(true);
-          else hideBtn.disabled = false;
-        });
-    } else {
-      if (mode === 'cloak') startCloak(); else stopCloak();
-      if (isDark) {
-        fetch('/api/dark', { method: 'POST' })
-          .then(function(r) { return r.ok ? r.text() : null; })
-          .catch(function() { return null; })
-          .then(function() {
-            isDark = false;
-            if (darkLiftTimer) clearTimeout(darkLiftTimer);
-            darkLiftTimer = setTimeout(liftDarkOverlay, 15000);
-            feedMode = mode; updateFeedButtons();
-          });
-      } else {
-        feedMode = mode; updateFeedButtons();
+    showBtn.disabled = true; cloakBtn.disabled = true; hideBtn.disabled = true;
+    fetch('/api/feed-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: mode
+    })
+    .then(function(r) { return r.ok ? r.text() : null; })
+    .catch(function() { return null; })
+    .then(function(m) {
+      if (m) {
+        feedMode = m.trim();
+        updateFeedButtons();
+        if (feedMode !== 'show') {
+          reloadStream();
+        }
       }
-    }
-  }
-  function applyDark(dark) {
-    isDark = dark;
-    hideBtn.disabled = false;
-    if (dark) {
-      feedMode = 'hide';
-      stopCloak();
-      if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
-      darkOverlay.querySelector('img').src = '/dark.png?t=' + Date.now();
-      darkOverlay.classList.add('visible');
-      liveInd.textContent = 'DARK';
-      liveInd.className = 'live-pill dark-mode';
-    } else {
-      if (feedMode === 'hide') feedMode = 'show';
-      if (!darkLiftTimer) darkLiftTimer = setTimeout(liftDarkOverlay, 15000);
-    }
-    updateFeedButtons();
+      showBtn.disabled = false; cloakBtn.disabled = false; hideBtn.disabled = false;
+    });
   }
 
-  function pollDark() {
-    fetch('/api/dark', { cache: 'no-store' })
+  function pollFeedMode() {
+    fetch('/api/feed-mode', { cache: 'no-store' })
       .then(function(r) { return r.ok ? r.text() : null; })
       .catch(function() { return null; })
-      .then(function(text) {
-        if (text === null) return;
-        var serverDark = text.trim() === 'true';
-        if (serverDark !== isDark) applyDark(serverDark);
+      .then(function(m) {
+        if (m && m.trim() !== feedMode) { feedMode = m.trim(); updateFeedButtons(); }
       });
   }
-
-
-
-  pollDark();
-  setInterval(pollDark, 5000);
+  setInterval(pollFeedMode, 3000);
 
   // ── HLS ──
   function setStatus(text, mode) {
-    if (isDark && mode !== 'live') return;
     liveInd.textContent = text;
     liveInd.className = 'live-pill' + (mode ? ' ' + mode : '');
-    if (mode === 'live' && !isDark) {
+    if (mode === 'live') {
       errorOverlay.classList.remove('visible');
-      liftDarkOverlay();
       reconnectBtn.hidden = true;
       if (!liveAt) {
         liveAt = Date.now();
@@ -712,7 +648,6 @@
   }
 
   function showError() {
-    if (isDark) return;
     errorOverlay.classList.add('visible');
     reconnectBtn.hidden = false;
   }
@@ -748,7 +683,7 @@
             video.removeEventListener('click', handler);
           });
         });
-        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); if (!isDark) liftDarkOverlay(); }, { once: true });
+        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); }, { once: true });
         video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
       } else { setStatus('UNSUPPORTED'); showError(); }
       return;
@@ -914,6 +849,7 @@
     if (e.key === 'Escape') { cancelEdit(); }
   });
 
+  updateFeedButtons();
   initHLS();
 </script>
 </body>
