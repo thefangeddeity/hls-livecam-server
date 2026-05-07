@@ -193,11 +193,22 @@ echo "  ffmpeg-cam.service written."
 # ffmpeg-cam-dark and broadcast-api service files are installed by the
 # PKGBUILD to /etc/systemd/system/ — no copy needed here.
 
+# ── v4l2loopback persistent config ──────────────────────────────────
+echo "v4l2loopback" > /etc/modules-load.d/v4l2loopback.conf
+echo "options v4l2loopback devices=1 video_nr=10 card_label=\"hls-livecam-loop\" exclusive_caps=1" \
+  > /etc/modprobe.d/v4l2loopback.conf
+modprobe v4l2loopback devices=1 video_nr=10 card_label="hls-livecam-loop" exclusive_caps=1 2>/dev/null || true
+echo "  v4l2loopback configured."
+
 # Add installing user to required groups
 SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
 if [ -n "$SUDO_USER_NAME" ]; then
   usermod -aG video "$SUDO_USER_NAME" 2>/dev/null || true
   usermod -aG wheel "$SUDO_USER_NAME" 2>/dev/null || true
+fi
+usermod -aG video http 2>/dev/null || true
+echo -e "  ${GREEN}Added http to video group.${NC}"
+if [ -n "$SUDO_USER_NAME" ]; then
   echo -e "  ${GREEN}Added $SUDO_USER_NAME to video and wheel groups.${NC}"
 fi
 
