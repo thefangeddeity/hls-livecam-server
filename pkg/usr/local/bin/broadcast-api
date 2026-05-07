@@ -43,6 +43,7 @@ def _read_device_env():
 _mode      = 'show'
 _mode_lock = threading.Lock()
 _bw_mode   = False
+_msg_lock  = False
 
 # -- Camera frame cache --
 _cam_frame      = None
@@ -213,6 +214,16 @@ def buzz_post():
         abort(403)
     except Exception:
         abort(500)
+
+@app.route('/api/msg-lock', methods=['GET'])
+def msg_lock_get():
+    return ('true' if _msg_lock else 'false'), 200
+
+@app.route('/api/msg-lock', methods=['POST'])
+def msg_lock_post():
+    global _msg_lock
+    _msg_lock = not _msg_lock
+    return ('true' if _msg_lock else 'false'), 200
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000)

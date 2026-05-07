@@ -332,6 +332,7 @@
     cursor: text; font-style: normal; color: var(--text);
   }
   .msg-actions { display: grid; gap: 6px; grid-template-columns: 1fr 1fr 1fr; max-width: 100%; }
+  .msg-actions[hidden] { display: none; }
   .msg-actions .btn { padding: 6px 6px; font-size: 12px; }
 
   .msg-hint {
@@ -448,6 +449,9 @@
           <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
           <label class="mute-label">
             <input type="checkbox" id="bwCheck" onchange="toggleBW()"> B&W Blur
+          </label>
+          <label class="mute-label">
+            <input type="checkbox" id="lockCheck" onchange="toggleLock()"> Lock message
           </label>
           <label class="mute-label">
             <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
@@ -582,6 +586,40 @@
   pollBWMode();
   setInterval(pollBWMode, 5000);
   updateBWBtn();
+
+  var msgLock = false;
+  function updateLockBtn() { document.getElementById('lockCheck').checked = msgLock; }
+  var msgActions = document.getElementById('msgActions');
+  function applyLock(locked) {
+    msgLock = locked;
+    updateLockBtn();
+    if (locked) {
+      cancelEdit();
+      msgActions.hidden = true;
+      msgBox.setAttribute('readonly', '');
+      msgBox.style.cursor = 'default';
+    } else {
+      msgBox.style.cursor = '';
+      msgActions.hidden = false;
+    }
+  }
+  function showMsgActions() {
+    if (!msgLock && editing) msgActions.hidden = false;
+  }
+  function toggleLock() {
+    fetch('/api/msg-lock', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(v) { if (v !== null) applyLock(v.trim() === 'true'); });
+  }
+  function pollLock() {
+    fetch('/api/msg-lock', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(v) { if (v !== null) applyLock(v.trim() === 'true'); });
+  }
+  pollLock();
+  setInterval(pollLock, 5000);
 
   function toggleMute() {
     buzzMuted = !buzzMuted;
@@ -807,7 +845,6 @@
   var currentMsg = '';
   var editing = false;
   var msgBox     = document.getElementById('msgBox');
-  var msgActions = document.getElementById('msgActions');
   var msgHint    = document.getElementById('msgHint');
 
   function updateClearBtn() {
@@ -834,6 +871,7 @@
   }
 
   function enterEdit() {
+    if (msgLock) return;
     editing = true;
     msgBox.value = currentMsg;
     msgBox.classList.remove('empty');
@@ -841,6 +879,7 @@
     msgBox.removeAttribute('readonly');
     msgBox.focus();
     setHint('Esc = cancel');
+    if (!msgLock) msgActions.hidden = false;
     updateClearBtn();
   }
 
@@ -879,11 +918,14 @@
   }
 
   function sendMessage() {
+    if (!editing) return;
     var text = msgBox.value.trim();
+    if (text === '') { cancelEdit(); return; }
     doPost(text, function() { cancelEdit(); showDisplay(text); setHint('Saved', 'ok'); });
   }
 
   function clearMessage() {
+    if (msgLock) return;
     if (!confirm('Clear the current message?')) return;
     doPost('', function() { cancelEdit(); showDisplay(''); setHint('Cleared', 'ok'); });
   }
