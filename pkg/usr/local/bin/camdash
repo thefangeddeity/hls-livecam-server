@@ -396,6 +396,15 @@ def load_attr(l, cores, dim=False):
     return curses.color_pair(3) | curses.A_BOLD
 
 # ---------- DASHBOARD SNAPSHOT ----------
+def _api_get(endpoint, default):
+    import urllib.request
+    try:
+        return urllib.request.urlopen(
+            f"http://127.0.0.1:5000/api/{endpoint}", timeout=1
+        ).read().decode().strip()
+    except Exception:
+        return default
+
 def sample_metrics():
     return {
         "c":    cpu(),
@@ -417,12 +426,8 @@ def sample_metrics():
         "v4l2":  os.path.exists(read_device_env().get("VIDEO_DEVICE", "")),
         "v4l2_dev": read_device_env().get("VIDEO_DEVICE", "?"),
         "dark":  os.path.exists(DARK_FLAG),
-        "feed_mode": (lambda: (__import__("urllib.request", fromlist=["urlopen"])
-            .urlopen("http://127.0.0.1:5000/api/feed-mode", timeout=1)
-            .read().decode().strip()))() if True else "show",
-        "msg_lock": (lambda: (__import__("urllib.request", fromlist=["urlopen"])
-            .urlopen("http://127.0.0.1:5000/api/msg-lock", timeout=1)
-            .read().decode().strip()))() if True else "false",
+        "feed_mode": _api_get("feed-mode", "show"),
+        "msg_lock":  _api_get("msg-lock", "false"),
         "svc":   services_running(),
         "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
     }
