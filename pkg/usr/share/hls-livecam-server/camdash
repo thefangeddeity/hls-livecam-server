@@ -420,6 +420,9 @@ def sample_metrics():
         "feed_mode": (lambda: (__import__("urllib.request", fromlist=["urlopen"])
             .urlopen("http://127.0.0.1:5000/api/feed-mode", timeout=1)
             .read().decode().strip()))() if True else "show",
+        "msg_lock": (lambda: (__import__("urllib.request", fromlist=["urlopen"])
+            .urlopen("http://127.0.0.1:5000/api/msg-lock", timeout=1)
+            .read().decode().strip()))() if True else "false",
         "svc":   services_running(),
         "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
     }
@@ -689,12 +692,18 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 2, f"CAM:      {'LIVE' if (v4l2 and svc) else 'FOUND' if v4l2 else 'NONE'}",
          status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
     _feed_mode = snap.get('feed_mode', 'show')
-    _hiding = _feed_mode == 'hide'
+    _showing  = _feed_mode == 'show'
     _cloaking = _feed_mode == 'cloak'
-    safe(scr, y, 2, f"HIDE:     {'ON' if _hiding else 'OFF'}" if svc else "HIDE:     N/A",
-         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _hiding else curses.color_pair(1) | curses.A_BOLD)); y += 1
+    _hiding   = _feed_mode == 'hide'
+    _msg_locked = snap.get('msg_lock', 'false') == 'true'
+    safe(scr, y, 2, f"SHOW:     {'ON' if _showing else 'OFF'}" if svc else "SHOW:     N/A",
+         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _showing else curses.color_pair(1) | curses.A_BOLD)); y += 1
     safe(scr, y, 2, f"BLUR:     {'ON' if _cloaking else 'OFF'}" if svc else "BLUR:     N/A",
          curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _cloaking else curses.color_pair(1) | curses.A_BOLD)); y += 1
+    safe(scr, y, 2, f"HIDE:     {'ON' if _hiding else 'OFF'}" if svc else "HIDE:     N/A",
+         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _hiding else curses.color_pair(1) | curses.A_BOLD)); y += 1
+    safe(scr, y, 2, f"MSSG LCK: {'ON' if _msg_locked else 'OFF'}" if svc else "MSSG LCK: N/A",
+         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _msg_locked else curses.color_pair(1) | curses.A_BOLD)); y += 1
     fps_val = read_device_env().get("FRAMERATE", "?")
     safe(scr, y, 2, f"FPS:      {fps_val}" if svc else "FPS:      N/A", status_attr('LIVE', dim) if svc else curses.A_DIM); y += 1
     safe(scr, y, 2, f"REPAIR:   {cur_repair}" if svc else "REPAIR:   N/A", status_attr(cur_repair, dim) if svc else curses.A_DIM)
@@ -769,7 +778,7 @@ def draw_footer(scr, editing):
         footer1 = "BROADCAST: type message  \u2022  [Enter] newline  \u2022  [Ctrl+U] clear  \u2022  [Ctrl+D] save & deliver"
         footer2 = "[Esc] cancel"
     else:
-        footer1 = "systemd auto-restarts on failure  \u2022  [m] message  \u2022  [h] hide/show  \u2022  [b] blur/show"
+        footer1 = "systemd auto-restarts on failure  \u2022  [m] message  \u2022  [s] show  \u2022  [b] blur  \u2022  [h] hide"
         footer2 = "[p] pause/resume  \u2022  [o] server on/off  \u2022  [r] force repair  \u2022  [q] quit"
     _fw = w - 4
     _items = (footer1 + "  \u2022  " + footer2).split("  \u2022  ")
@@ -922,28 +931,33 @@ def main(scr):
             confirm_service = True
         elif k == ord('o'):
             confirm_onoff = True
-        elif k == ord('h'):
-            def _toggle_hide():
+        elif k == ord('s'):
+            def _set_show():
                 import urllib.request
                 try:
-                    cur = urllib.request.urlopen('http://127.0.0.1:5000/api/feed-mode', timeout=1).read().decode().strip()
-                    nxt = 'show' if cur == 'hide' else 'hide'
-                    req = urllib.request.Request('http://127.0.0.1:5000/api/feed-mode', data=nxt.encode(), method='POST')
+                    req = urllib.request.Request('http://127.0.0.1:5000/api/feed-mode', data=b'show', method='POST')
                     urllib.request.urlopen(req, timeout=1)
                 except Exception:
                     pass
-            threading.Thread(target=_toggle_hide, daemon=True).start()
+            threading.Thread(target=_set_show, daemon=True).start()
         elif k == ord('b'):
-            def _toggle_blur():
+            def _set_blur():
                 import urllib.request
                 try:
-                    cur = urllib.request.urlopen('http://127.0.0.1:5000/api/feed-mode', timeout=1).read().decode().strip()
-                    nxt = 'show' if cur == 'cloak' else 'cloak'
-                    req = urllib.request.Request('http://127.0.0.1:5000/api/feed-mode', data=nxt.encode(), method='POST')
+                    req = urllib.request.Request('http://127.0.0.1:5000/api/feed-mode', data=b'cloak', method='POST')
                     urllib.request.urlopen(req, timeout=1)
                 except Exception:
                     pass
-            threading.Thread(target=_toggle_blur, daemon=True).start()
+            threading.Thread(target=_set_blur, daemon=True).start()
+        elif k == ord('h'):
+            def _set_hide():
+                import urllib.request
+                try:
+                    req = urllib.request.Request('http://127.0.0.1:5000/api/feed-mode', data=b'hide', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_set_hide, daemon=True).start()
         elif k == ord('m'):
             frozen_snap = sample_metrics()
             with repair_lock:
