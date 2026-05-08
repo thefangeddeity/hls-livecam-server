@@ -44,6 +44,7 @@ _mode      = 'show'
 _mode_lock = threading.Lock()
 _bw_mode   = False
 _msg_lock  = False
+_hide_frame     = None
 
 # -- Camera frame cache --
 _cam_frame      = None
@@ -51,6 +52,17 @@ _cam_frame_lock = threading.Lock()
 
 def _png_to_raw(png_bytes):
     return Image.open(io.BytesIO(png_bytes)).convert('RGB').tobytes()
+
+def _apply_svhs_warp(arr):
+    import math
+    rng = np.random.default_rng(42)
+    order = rng.permutation(arr.shape[0])
+    shuffled = arr[order]
+    out = np.empty_like(shuffled)
+    for y in range(shuffled.shape[0]):
+        shift = int(180 * math.sin(2 * math.pi * y / 120))
+        out[y] = np.roll(shuffled[y], shift, axis=0)
+    return out
 
 def _start_loopback_publisher(denv):
     fr = int(denv.get('FRAMERATE', 15))
@@ -94,6 +106,7 @@ def _drain_loop(cam_holder, denv):
             time.sleep(1.0)
 
 def _writer_loop():
+    global _hide_frame
     denv  = _read_device_env()
     fr    = int(denv.get('FRAMERATE', 15))
     delay = 1.0 / fr
@@ -111,6 +124,7 @@ def _writer_loop():
     pub_holder = [_start_loopback_publisher(denv)]
     time.sleep(1.0)
 
+    prev_mode = None
     while True:
         with _mode_lock:
             mode = _mode
@@ -135,8 +149,12 @@ def _writer_loop():
                     rendered = _png_to_raw(_ba.render_cloak_bytes(raw, FRAME_W, FRAME_H, GOL_COLS))
                 frame_arr = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3)
             else:  # hide
-                rendered = _png_to_raw(_ba.render_cloak_bytes_bw(raw, FRAME_W, FRAME_H, GOL_COLS))
-                frame_arr = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3)
+                if prev_mode != 'hide':
+                    warped_arr = _apply_svhs_warp(np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3))
+                    rendered = _png_to_raw(_ba.render_cloak_bytes_bw(warped_arr.tobytes(), FRAME_W, FRAME_H, GOL_COLS))
+                    _hide_frame = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3).copy()
+                frame_arr = _hide_frame
+            prev_mode = mode
 
             loop_cam.schedule_frame(frame_arr)
 
@@ -224,6 +242,19 @@ def msg_lock_post():
     global _msg_lock
     _msg_lock = not _msg_lock
     return ('true' if _msg_lock else 'false'), 200
+
+@app.route('/api/info', methods=['GET'])
+def info():
+    import socket, subprocess, re
+    hostname = socket.gethostname()
+    tailscale = ''
+    try:
+        out = subprocess.run(['ip', 'addr', 'show'], capture_output=True, text=True).stdout
+        m = re.search(r'inet (100\.\d+\.\d+\.\d+)', out)
+        if m: tailscale = m.group(1)
+    except Exception:
+        pass
+    return {'hostname': hostname, 'tailscale': tailscale}
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000)
