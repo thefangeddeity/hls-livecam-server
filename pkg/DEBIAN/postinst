@@ -1,49 +1,64 @@
 #!/bin/bash
 set -e
-
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
+# --- Ensure www-data is in video group --------------------------
+usermod -aG video www-data
 
-# ─── Create dedicated service user (DEFECT-04) ──────────────────
-# MediaMTX and ffmpeg-cam both run as this user. No shell, no home.
-if ! id -u mediamtx >/dev/null 2>&1; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin \
-            --comment "MediaMTX streaming service" mediamtx
+# --- Install pyfakewebcam via pip -------------------------------
+if ! python3 -c "import pyfakewebcam" 2>/dev/null; then
+    pip3 install pyfakewebcam --break-system-packages --quiet || \
+    pip install pyfakewebcam --break-system-packages --quiet || true
 fi
 
-# ffmpeg needs /dev/video* access; 'video' group grants it.
-usermod -aG video mediamtx
+# --- Patch pyfakewebcam tostring() -> tobytes() -----------------
+python3 - << 'INNEREOF'
+import glob
+patterns = [
+    '/usr/local/lib/python3*/dist-packages/pyfakewebcam/pyfakewebcam.py',
+    '/usr/lib/python3*/dist-packages/pyfakewebcam/pyfakewebcam.py',
+    '/usr/local/lib/python3*/site-packages/pyfakewebcam/pyfakewebcam.py',
+]
+patched = 0
+for pattern in patterns:
+    for path in glob.glob(pattern):
+        with open(path, 'r') as f:
+            src = f.read()
+        if 'tostring()' in src:
+            src = src.replace('tostring()', 'tobytes()')
+            with open(path, 'w') as f:
+                f.write(src)
+            print(f'  patched: {path}')
+            patched += 1
+        else:
+            print(f'  already OK: {path}')
+if patched == 0 and not any(glob.glob(p) for p in patterns):
+    print('  pyfakewebcam not yet installed -- tobytes fix will apply on next run')
+INNEREOF
 
-# ─── Ensure persistent config directory exists ──────────────────
-# device.env lives here. This directory ships with the package
-# but we re-enforce ownership on upgrade in case it was touched.
+# --- Persistent config directory --------------------------------
 mkdir -p /etc/hls-livecam
-chown mediamtx:mediamtx /etc/hls-livecam
 chmod 755 /etc/hls-livecam
 
-# ─── State directory for dark mode flag and dark_orig.png ───────
+# --- State directory --------------------------------------------
 mkdir -p /var/lib/hls-livecam
 chmod 755 /var/lib/hls-livecam
 
-# ─── Web root pre-creation ──────────────────────────────────────
+# --- Web root ---------------------------------------------------
 mkdir -p /var/www/hls-livecam
 chown root:www-data /var/www/hls-livecam
 chmod 775 /var/www/hls-livecam
 
-# /usr/local/etc holds mediamtx.yml after setup writes it.
-# Pre-create and set ownership so setup can write as mediamtx later
-# if ever refactored; harmless if already correct.
+# --- mediamtx.yml directory -------------------------------------
 mkdir -p /usr/local/etc
 if [ -f /usr/local/etc/mediamtx.yml ]; then
-    chown mediamtx:mediamtx /usr/local/etc/mediamtx.yml
+    chown root:root /usr/local/etc/mediamtx.yml
 fi
 
-# ─── Fix sudoers file ownership ─────────────────────────────────
-# dpkg extracts files with the installing user's uid if run as non-root
-# via sudo. Force root ownership on all sudoers files we ship.
-for f in /etc/sudoers.d/hls-livecam-dark /etc/sudoers.d/camdash-smart; do
+# --- Fix sudoers file ownership ---------------------------------
+for f in /etc/sudoers.d/hls-livecam-dark /etc/sudoers.d/camstack-smart; do
     if [ -f "$f" ]; then
         chown root:root "$f"
         chmod 440 "$f"
@@ -56,7 +71,4 @@ echo ""
 echo "Run the setup wizard to configure your webcam:"
 echo ""
 echo -e "  ${YELLOW}sudo hls-livecam-setup${NC}"
-echo ""
-echo "This will auto-detect your webcam, configure MediaMTX,"
-echo "and start the stream."
 echo ""

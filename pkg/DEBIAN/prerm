@@ -15,6 +15,7 @@ rm -f /etc/nginx/sites-available/hls-livecam
 nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
 
 # Stop and disable our own services only.
+systemctl unmask ffmpeg-cam 2>/dev/null || true
 systemctl stop ffmpeg-cam 2>/dev/null || true
 systemctl disable ffmpeg-cam 2>/dev/null || true
 systemctl stop mediamtx 2>/dev/null || true

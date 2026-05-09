@@ -576,7 +576,12 @@
   }
 
   var bwMode = false;
-  function updateBWBtn() { document.getElementById('bwCheck').checked = bwMode; }
+  function updateBWBtn() {
+    var cb = document.getElementById('bwCheck');
+    cb.checked = bwMode;
+    cb.disabled = (feedMode !== 'cloak');
+    cb.parentElement.style.opacity = (feedMode !== 'cloak') ? '0.4' : '1';
+  }
   function toggleBW() {
     if (feedMode === 'cloak') fadeOut();
     fetch('/api/bw-mode', { method: 'POST' })
@@ -705,6 +710,7 @@
       if (m) {
         feedMode = m.trim();
         updateFeedButtons();
+        updateBWBtn();
         setTimeout(reloadStream, 1000);
       }
       showBtn.disabled = false; cloakBtn.disabled = false; hideBtn.disabled = false;

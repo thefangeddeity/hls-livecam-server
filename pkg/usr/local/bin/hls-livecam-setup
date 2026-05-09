@@ -19,7 +19,7 @@ SHARE_DIR="/usr/share/hls-livecam-server"
 DEVICE_ENV_DIR="/etc/hls-livecam"
 DEVICE_ENV="${DEVICE_ENV_DIR}/device.env"
 FFMPEG_UNIT_TEMPLATE="${SHARE_DIR}/ffmpeg-cam.service"
-FFMPEG_UNIT_DST="/etc/systemd/system/ffmpeg-cam.service"
+FFMPEG_UNIT_DST="/usr/lib/systemd/system/ffmpeg-cam.service"
 MEDIAMTX_UNIT_DST="/etc/systemd/system/mediamtx.service"
 INDEX_TEMPLATE="${SHARE_DIR}/index.html"
 
@@ -31,12 +31,6 @@ echo ""
 
 [ "$EUID" -ne 0 ] && { echo -e "${RED}Run as root: sudo hls-livecam-setup${NC}"; exit 1; }
 
-if ! id -u mediamtx >/dev/null 2>&1; then
-  echo -e "${RED}The 'mediamtx' system user is missing.${NC}"
-  echo "This means the package postinst did not run correctly."
-  echo "Try: sudo apt install --reinstall hls-livecam-server"
-  exit 1
-fi
 
 # ── Detect video devices ──────────────────────────────────────
 echo -e "${BOLD}Detecting webcams...${NC}"
@@ -182,7 +176,7 @@ assert 'runOnInit: ' not in tail or all(
 ), "FATAL: non-empty runOnInit value survives in our paths: section"
 print("  OK: passive paths block appended, no active runOnInit in our section")
 PYEOF
-chown mediamtx:mediamtx "$MEDIAMTX_CONF"
+chown root:root "$MEDIAMTX_CONF"
 chmod 0644 "$MEDIAMTX_CONF"
 
 
@@ -194,7 +188,7 @@ echo "  2) Low   (15 fps)"
 read -rp "  Choice [1/2, default 1]: " PERF_CHOICE
 case "$PERF_CHOICE" in
   2) FRAMERATE=15 ;;
-  *) FRAMERATE=30 ;;
+  *) FRAMERATE=15 ;;
 esac
 echo -e "  ${GREEN}Framerate: ${FRAMERATE} fps${NC}"
 
@@ -217,7 +211,7 @@ V4L2_INPUT_FMT=${INPUT_FMT_ARGS% }
 VIDEO_SIZE=1280x720
 FRAMERATE=${FRAMERATE}
 EOF
-chown mediamtx:mediamtx "$DEVICE_ENV_DIR" "$DEVICE_ENV"
+chown root:root "$DEVICE_ENV_DIR" "$DEVICE_ENV"
 chmod 0755 "$DEVICE_ENV_DIR"
 chmod 0644 "$DEVICE_ENV"
 
@@ -231,8 +225,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=mediamtx
-Group=mediamtx
+User=root
 ExecStart=/usr/local/bin/mediamtx ${MEDIAMTX_CONF}
 Restart=on-failure
 RestartSec=5
@@ -277,14 +270,42 @@ grep '^ExecStart=' "$FFMPEG_UNIT_DST" | sed 's/^/    /' | fold -s -w 78 | sed '2
 
 # ── Activate services ────────────────────────────────────────
 systemctl daemon-reload
-systemctl enable mediamtx ffmpeg-cam broadcast-api
+# -- v4l2loopback setup -----------------------------------------
+echo ""
+echo -e "${BOLD}Setting up v4l2loopback...${NC}"
+if ! modinfo v4l2loopback >/dev/null 2>&1; then
+    echo -e "${RED}ERROR: v4l2loopback module not found.${NC}"
+    echo "Install with:"
+    echo "  sudo apt install v4l2loopback-dkms linux-headers-$(uname -r)"
+    exit 1
+fi
+if ! python3 -c "import pyfakewebcam" 2>/dev/null; then
+    echo -e "${RED}ERROR: pyfakewebcam not installed.${NC}"
+    echo "Install with: sudo pip3 install pyfakewebcam --break-system-packages"
+    exit 1
+fi
+cat > /etc/modules-load.d/v4l2loopback.conf << 'EOF'
+v4l2loopback
+EOF
+cat > /etc/modprobe.d/v4l2loopback.conf << 'EOF'
+options v4l2loopback devices=1 video_nr=10 card_label="hls-livecam-loop" exclusive_caps=1
+EOF
+modprobe -r v4l2loopback 2>/dev/null || true
+modprobe v4l2loopback devices=1 video_nr=10 card_label="hls-livecam-loop" exclusive_caps=1
+if [ ! -e /dev/video10 ]; then
+    echo -e "${RED}ERROR: /dev/video10 not present after modprobe.${NC}"
+    exit 1
+fi
+usermod -aG video www-data
+echo -e "  ${GREEN}v4l2loopback loaded on /dev/video10. www-data added to video group.${NC}"
+
+systemctl enable mediamtx broadcast-api
+rm -f /etc/systemd/system/ffmpeg-cam.service
+systemctl mask ffmpeg-cam
 systemctl restart mediamtx
-# Brief pause so mediamtx binds :8554 before ffmpeg-cam starts.
-# ffmpeg's own RTSP retry handles any residual race.
 sleep 2
-systemctl restart ffmpeg-cam
 systemctl restart broadcast-api
-echo -e "  ${GREEN}mediamtx + ffmpeg-cam + broadcast-api started.${NC}"
+echo -e "  ${GREEN}mediamtx + broadcast-api started. ffmpeg-cam masked (owned by broadcast-api).${NC}"
 
 # ── nginx ─────────────────────────────────────────────────────
 # Use enable --now to ensure nginx is running before we try to reload it.
@@ -410,6 +431,16 @@ EOF
   chmod 440 /etc/sudoers.d/hls-livecam-services
   echo -e "  ${GREEN}Sudoers entries written for $SUDO_USER_NAME.${NC}"
 fi
+
+# -- Studio sudoers: www-data can mask/unmask ffmpeg-cam ---------
+cat > /etc/sudoers.d/hls-livecam-studio << 'EOF'
+www-data ALL=(ALL) NOPASSWD: /bin/systemctl stop ffmpeg-cam
+www-data ALL=(ALL) NOPASSWD: /bin/systemctl start ffmpeg-cam
+www-data ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
+www-data ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
+EOF
+chown root:root /etc/sudoers.d/hls-livecam-studio
+chmod 440 /etc/sudoers.d/hls-livecam-studio
 
 # ── Done ──────────────────────────────────────────────────────
 IP=$(hostname -I | awk '{print $1}')

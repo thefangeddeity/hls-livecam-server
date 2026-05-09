@@ -4,7 +4,7 @@ After=network.target nginx.service
 
 [Service]
 Type=simple
-User=http
+User=www-data
 ExecStart=/usr/bin/python3 /usr/local/bin/broadcast-api
 Restart=on-failure
 RestartSec=5

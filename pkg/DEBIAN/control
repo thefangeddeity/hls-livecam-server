@@ -1,9 +1,9 @@
 Package: hls-livecam-server
-Version: 3.0.2
+Version: 4.4.1
 Section: video
 Priority: optional
 Architecture: amd64
-Depends: ffmpeg, nginx, v4l-utils, python3, python3-psutil, python3-flask, python3-pil, wget, ca-certificates
+Depends: ffmpeg, nginx, v4l-utils, python3, python3-psutil, python3-flask, python3-pil, python3-numpy, wget, ca-certificates
 Recommends: curl, smartmontools
 Maintainer: hls-livecam-server maintainers <hls-livecam@example.org>
 Description: HLS webcam streaming server with web viewer
