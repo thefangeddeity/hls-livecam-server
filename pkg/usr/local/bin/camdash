@@ -413,7 +413,6 @@ def sample_metrics():
         "up":   uptime(),
         "ff":   proc("ffmpeg"),
         "mm":   proc("mediamtx"),
-        "usb":  usb_power_state(),
         "hls":  get_hls(),
         "disk": disk_write_mbs(),
         "cores": psutil.cpu_count(logical=True),
@@ -525,7 +524,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
 
     c = snap["c"]; m = snap["m"]; l = snap["l"]
     up = snap["up"]; ff = snap["ff"]; mm = snap["mm"]
-    usb = snap["usb"]; hls = snap["hls"]; disk = snap["disk"]
+    hls = snap["hls"]; disk = snap["disk"]
     cores = snap["cores"]; swap = snap["swap"]; stype = snap["stype"]
     avail = snap["avail"]
     nginx = snap["nginx"]; rtsp = snap["rtsp"]
@@ -662,9 +661,8 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, rx + 2, f"LOAD  {l:.2f}/{cores}", base);                        y += 1
     safe(scr, y, rx + 2, bar(min(l / cores * 100, 100), sys_inner_w),
          load_attr(l, cores, dim));                                                y += 2
-    _col3 = sys_inner_w // 3
-    _sysline = (f"RAM: {avail} MB".ljust(_col3)[:_col3] +
-                f"USB: {usb}".ljust(_col3)[:_col3] +
+    _col2 = sys_inner_w // 2
+    _sysline = (f"RAM: {avail} MB".ljust(_col2)[:_col2] +
                 f"CPU TEMP: {cputemp}\u00b0C")
     safe(scr, y, rx + 2, _sysline[:sys_inner_w], base)
 
