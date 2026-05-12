@@ -452,6 +452,15 @@ WIDGET_ROWS = 32
 GRAY_STEPS    = [232, 238, 244, 250, 254, 255]
 OCEAN_PALETTE = [232, 236, 240, 66, 95, 101, 102, 109, 137, 144, 246, 251]
 
+
+def _fit_crop(img, w, h):
+    iw, ih = img.size
+    scale = max(w / iw, h / ih)
+    img = img.resize((int(iw * scale), int(ih * scale)), Image.LANCZOS)
+    nw, nh = img.size
+    left = (nw - w) // 2
+    top  = (nh - h) // 2
+    return img.crop((left, top, left + w, top + h))
 def snap_worker():
     global widget_pixels_gray, widget_pixels_color
     while True:
@@ -464,8 +473,7 @@ def snap_worker():
             ], timeout=6, capture_output=True)
             if os.path.exists(WIDGET_SNAP):
                 # -- Grayscale --
-                gray = Image.open(WIDGET_SNAP).convert("L")
-                gray = gray.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
+                gray = _fit_crop(Image.open(WIDGET_SNAP).convert("L"), WIDGET_COLS, WIDGET_ROWS * 2)
                 gdata = list(gray.tobytes())
                 s = sorted(gdata); n = len(s)
                 lo = s[int(n * 0.05)]; hi = s[int(n * 0.95)]
@@ -482,8 +490,7 @@ def snap_worker():
                     gpx.append(row)
                 widget_pixels_gray = gpx
                 # -- Color --
-                rgb = Image.open(WIDGET_SNAP).convert("RGB")
-                rgb = rgb.resize((WIDGET_COLS, WIDGET_ROWS * 2), Image.LANCZOS)
+                rgb = _fit_crop(Image.open(WIDGET_SNAP).convert("RGB"), WIDGET_COLS, WIDGET_ROWS * 2)
                 rdata = rgb.tobytes()
                 cpx = []
                 for r in range(WIDGET_ROWS):
