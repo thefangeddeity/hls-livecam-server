@@ -259,6 +259,23 @@ sed -i 's/listen       80;/listen       8080;/' /etc/nginx/nginx.conf
 grep -q "include conf.d" /etc/nginx/nginx.conf || sed -i '/include.*mime.types/a\    include conf.d/*.conf;' /etc/nginx/nginx.conf
 # Create log directory if missing
 mkdir -p /var/log/nginx
+
+# ── Port 80 conflict check ────────────────────────────────────
+PORT80_PID=$(ss -tlnp 'sport = :80' 2>/dev/null | awk 'NR>1 && /LISTEN/ {match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
+if [ -n "$PORT80_PID" ]; then
+  PORT80_PROC=$(ps -p "$PORT80_PID" -o comm= 2>/dev/null || echo "unknown")
+  if [ "$PORT80_PROC" != "nginx" ]; then
+    echo -e "  ${YELLOW}WARNING: port 80 is in use by '$PORT80_PROC' (PID $PORT80_PID).${NC}"
+    echo -e "  nginx will fail to start unless this is resolved."
+    echo -n "  Continue anyway? [y/N] "
+    read -r REPLY
+    if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
+      echo "Aborted."
+      exit 1
+    fi
+  fi
+fi
+
 cat > "$NGINX_CONF" <<NGINXEOF
 server {
     listen 80 default_server;

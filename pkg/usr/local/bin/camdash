@@ -167,6 +167,20 @@ def read_smart():
             out = result.stdout.decode(errors="ignore")
             if not out or len(out.splitlines()) < 5:
                 continue
+            if ("SMART support is:  Unavailable" in out or
+                    "SMART support is: Unknown" in out or
+                    "Device does not support SMART" in out or
+                    "Unavailable - device lacks SMART capability" in out):
+                with smart_lock:
+                    smart_info[:] = [
+                        f"DISK:   {disk}",
+                        "SMART:  N/A",
+                        "REALLOC: N/A",
+                        "PENDING: N/A",
+                        "UNCORR:  N/A",
+                        "DISK TEMP: N/A",
+                    ]
+                return
 
             health = realloc = temp = pending = uncorr = "?"
             for line in out.splitlines():
