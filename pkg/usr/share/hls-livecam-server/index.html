@@ -612,7 +612,7 @@
       msgBox.style.cursor = 'default';
     } else {
       msgBox.style.cursor = '';
-      msgActions.hidden = !editing;
+      msgActions.hidden = false;
     }
   }
   function showMsgActions() {
@@ -898,7 +898,6 @@
 
   function cancelEdit() {
     editing = false;
-    msgActions.hidden = true;
     msgBox.setAttribute('readonly', '');
     msgBox.classList.remove('editing');
     showDisplay(currentMsg);
