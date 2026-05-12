@@ -329,6 +329,16 @@ EOF
   echo -e "  ${GREEN}Sudoers entries written for $SUDO_USER_NAME.${NC}"
 fi
 
+# -- Studio sudoers: http can mask/unmask ffmpeg-cam ----------
+cat > /etc/sudoers.d/hls-livecam-studio << 'SUDOEOF'
+http ALL=(ALL) NOPASSWD: /bin/systemctl stop ffmpeg-cam
+http ALL=(ALL) NOPASSWD: /bin/systemctl start ffmpeg-cam
+http ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
+http ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
+SUDOEOF
+chown root:root /etc/sudoers.d/hls-livecam-studio
+chmod 440 /etc/sudoers.d/hls-livecam-studio
+
 # ── Done ──────────────────────────────────────────────────────
 IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
 echo ""
