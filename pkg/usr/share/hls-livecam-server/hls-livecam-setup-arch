@@ -39,6 +39,26 @@ done
 
 [ ${#VIDEO_DEVICES[@]} -eq 0 ] && { echo -e "${RED}No webcam found.${NC}"; exit 1; }
 
+# Deduplicate: multiple /dev/videoN nodes often map to the same physical camera.
+# Keep only index0 entries; present true multi-camera choices only when distinct.
+if [ ${#VIDEO_DEVICES[@]} -gt 1 ]; then
+  DEDUPED=()
+  for entry in "${VIDEO_DEVICES[@]}"; do
+    dev=$(echo "$entry" | cut -d' ' -f1)
+    by_id=""
+    for link in /dev/v4l/by-id/*; do
+      [ -e "$link" ] || continue
+      if [ "$(readlink -f "$link")" = "$(readlink -f "$dev")" ]; then
+        by_id="$link"; break
+      fi
+    done
+    if [ -z "$by_id" ] || echo "$by_id" | grep -q "index0"; then
+      DEDUPED+=("$entry")
+    fi
+  done
+  [ ${#DEDUPED[@]} -gt 0 ] && VIDEO_DEVICES=("${DEDUPED[@]}")
+fi
+
 if [ ${#VIDEO_DEVICES[@]} -eq 1 ]; then
   VIDEO_DEV=$(echo "${VIDEO_DEVICES[0]}" | cut -d' ' -f1)
   echo -e "  ${GREEN}Using: $VIDEO_DEV${NC}"
@@ -49,6 +69,7 @@ else
     VIDEO_DEV=$(echo "$opt" | cut -d' ' -f1); break
   done
 fi
+[ -z "$VIDEO_DEV" ] && { echo -e "${RED}No device selected. Aborting.${NC}"; exit 1; }
 
 # ── Stable by-id path ─────────────────────────────────────────
 echo ""
@@ -215,7 +236,9 @@ fi
 systemctl daemon-reload
 systemctl enable --now mediamtx
 systemctl restart mediamtx
-systemctl enable --now ffmpeg-cam
+rm -f /etc/systemd/system/ffmpeg-cam.service
+systemctl mask ffmpeg-cam
+chage -E -1 http
 systemctl daemon-reload
 systemctl enable --now broadcast-api
 echo -e "  ${GREEN}Services installed and started.${NC}"
