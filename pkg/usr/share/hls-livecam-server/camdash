@@ -32,6 +32,8 @@ broadcast_current = ""
 broadcast_error = ""
 widget_pixels_gray  = None
 widget_pixels_color = None
+widget_box_dims    = [None]
+widget_pan_cols    = [0]
 confirm_repair  = False
 confirm_service = False
 confirm_onoff   = False
@@ -334,7 +336,7 @@ def draw_camhub_pane(scr, y, x, h, w, base):
         hint = "editing {}  \u2022  [Tab] next  \u2022  [Enter] save  \u2022  [Esc] cancel".format(fnames[camhub_edit_field])
         hint_attr = curses.color_pair(4) | curses.A_BOLD
     else:
-        hint = "[e] edit  \u2022  [p] pin  \u2022  [d] clear  \u2022  [U/D] reorder  \u2022  [c/Esc] close"
+        hint = "[e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder  \u2022  [c/Esc] close"
         hint_attr = curses.A_DIM
     _items = hint.split("  \u2022  ")
     _all = []
@@ -536,18 +538,20 @@ GRAY_STEPS    = [232, 238, 244, 250, 254, 255]
 OCEAN_PALETTE = [232, 236, 240, 66, 95, 101, 102, 109, 137, 144, 246, 251]
 
 
-def _fit_crop(img, w, h):
+def _fit_height(img, target_h):
     iw, ih = img.size
-    scale = max(w / iw, h / ih)
-    img = img.resize((int(iw * scale), int(ih * scale)), Image.LANCZOS)
-    nw, nh = img.size
-    left = (nw - w) // 2
-    top  = (nh - h) // 2
-    return img.crop((left, top, left + w, top + h))
+    scale = target_h / ih
+    nw = max(1, int(iw * scale))
+    return img.resize((nw, target_h), Image.LANCZOS)
 def snap_worker():
     global widget_pixels_gray, widget_pixels_color
     while True:
         try:
+            dims = widget_box_dims[0]
+            if dims is None:
+                time.sleep(0.5)
+                continue
+            _box_w, box_h = dims
             subprocess.run([
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-rtsp_transport", "tcp",
@@ -556,31 +560,33 @@ def snap_worker():
             ], timeout=6, capture_output=True)
             if os.path.exists(WIDGET_SNAP):
                 # -- Grayscale --
-                gray = _fit_crop(Image.open(WIDGET_SNAP).convert("L"), WIDGET_COLS, WIDGET_ROWS * 2)
+                gray = _fit_height(Image.open(WIDGET_SNAP).convert("L"), box_h * 2)
+                iw, _ih = gray.size
                 gdata = list(gray.tobytes())
                 s = sorted(gdata); n = len(s)
                 lo = s[int(n * 0.05)]; hi = s[int(n * 0.95)]
                 rng = (hi - lo) or 1
                 gpx = []
-                for r in range(WIDGET_ROWS):
+                for r in range(box_h):
                     row = []
-                    for c in range(WIDGET_COLS):
-                        top = gdata[(r * 2)     * WIDGET_COLS + c]
-                        bot = gdata[(r * 2 + 1) * WIDGET_COLS + c]
+                    for c in range(iw):
+                        top = gdata[(r * 2)     * iw + c]
+                        bot = gdata[(r * 2 + 1) * iw + c]
                         fg_i = max(0, min(5, int((top - lo) / rng * 1.4 * 6)))
                         bg_i = max(0, min(5, int((bot - lo) / rng * 6)))
                         row.append((fg_i, bg_i))
                     gpx.append(row)
                 widget_pixels_gray = gpx
                 # -- Color --
-                rgb = _fit_crop(Image.open(WIDGET_SNAP).convert("RGB"), WIDGET_COLS, WIDGET_ROWS * 2)
+                rgb = _fit_height(Image.open(WIDGET_SNAP).convert("RGB"), box_h * 2)
+                iw2, _ih2 = rgb.size
                 rdata = rgb.tobytes()
                 cpx = []
-                for r in range(WIDGET_ROWS):
+                for r in range(box_h):
                     row = []
-                    for c in range(WIDGET_COLS):
-                        _ti = ((r * 2)     * WIDGET_COLS + c) * 3
-                        _bi = ((r * 2 + 1) * WIDGET_COLS + c) * 3
+                    for c in range(iw2):
+                        _ti = ((r * 2)     * iw2 + c) * 3
+                        _bi = ((r * 2 + 1) * iw2 + c) * 3
                         tr, tg, tb = rdata[_ti], rdata[_ti+1], rdata[_ti+2]
                         br, bg_c, bb = rdata[_bi], rdata[_bi+1], rdata[_bi+2]
                         tlum = int(tr * 0.299 + tg * 0.587 + tb * 0.114)
@@ -745,15 +751,21 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     # -- FEED content (block art) --
     feed_inner_w = cw - 2
     feed_inner_h = top_h - 2
+    widget_box_dims[0] = (feed_inner_w, feed_inner_h)
     if has_feed:
         _wpx = widget_pixels_color if _use_color else widget_pixels_gray
-        for _wr, _row in enumerate(_wpx[:feed_inner_h]):
-            for _wc, (_fgi, _bgi) in enumerate(_row[:feed_inner_w]):
-                _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
-                try:
-                    safe(scr, top_y + 1 + _wr, cx + 1 + _wc, "\u2580", curses.color_pair(_pair))
-                except curses.error:
-                    pass
+        if _wpx and _wpx[0]:
+            _raster_w = len(_wpx[0])
+            _pan = max(0, min(widget_pan_cols[0], max(0, _raster_w - feed_inner_w)))
+            widget_pan_cols[0] = _pan
+            for _wr, _row in enumerate(_wpx[:feed_inner_h]):
+                _sliced = _row[_pan:_pan + feed_inner_w]
+                for _wc, (_fgi, _bgi) in enumerate(_sliced):
+                    _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
+                    try:
+                        safe(scr, top_y + 1 + _wr, cx + 1 + _wc, "\u2580", curses.color_pair(_pair))
+                    except curses.error:
+                        pass
 
     # -- SYSTEM content --
     sys_inner_w = rw - 4
@@ -884,13 +896,13 @@ def draw_footer(scr, editing):
              curses.color_pair(1) | curses.A_BOLD)
         return
     if camhub_mode and not editing:
-        footer1 = "[\u2191\u2193] navigate  \u2022  [e] edit  \u2022  [p] pin  \u2022  [d] clear  \u2022  [U/D] reorder"
+        footer1 = "[\u2191\u2193] navigate  \u2022  [e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder"
         footer2 = "[c] / [Esc] close"
     elif editing:
         footer1 = "BROADCAST: type message  \u2022  [Enter] newline  \u2022  [Ctrl+U] clear  \u2022  [Ctrl+D] save & deliver"
         footer2 = "[Esc] cancel"
     else:
-        footer1 = "systemd auto-restarts on failure  \u2022  [c] cams  \u2022  [m] message  \u2022  [s] show  \u2022  [b] blur  \u2022  [h] hide"
+        footer1 = "systemd auto-restarts on failure  \u2022  [c] cams  \u2022  [\u2190\u2192] pan  \u2022  [m] message  \u2022  [s] show  \u2022  [b] blur  \u2022  [h] hide"
         footer2 = "[p] pause/resume  \u2022  [o] server on/off  \u2022  [r] force repair  \u2022  [q] quit"
     _fw = w - 4
     _items = (footer1 + "  \u2022  " + footer2).split("  \u2022  ")
@@ -1054,7 +1066,7 @@ def main(scr):
                 elif k == ord('p'):
                     camhub_slots[camhub_cursor]["pinned"] = not camhub_slots[camhub_cursor].get("pinned", False)
                     write_cams(camhub_slots)
-                elif k == ord('d'):
+                elif k == curses.KEY_DC:
                     camhub_confirm_clear = True
                 elif camhub_confirm_clear:
                     if k == ord('y'):
@@ -1148,6 +1160,10 @@ def main(scr):
             camhub_edit_buf = ""
             camhub_mode = True
             continue
+        elif k == curses.KEY_LEFT:
+            widget_pan_cols[0] = max(0, widget_pan_cols[0] - 2)
+        elif k == curses.KEY_RIGHT:
+            widget_pan_cols[0] = widget_pan_cols[0] + 2
 
         snap = sample_metrics()
         with repair_lock:

@@ -126,8 +126,12 @@ def main():
     # This is the producer peer. v2.0.0 restarted mediamtx and
     # relied on MediaMTX's runOnInit to respawn ffmpeg; now that
     # runOnInit is gone, we must restart ffmpeg-cam directly.
-    print("\n[4] Restarting ffmpeg-cam.service...")
-    run("systemctl restart ffmpeg-cam", check=False)
+    r_masked = subprocess.run("systemctl is-enabled ffmpeg-cam", shell=True, capture_output=True, text=True)
+    if r_masked.stdout.strip() == "masked":
+        print("\n[4] ffmpeg-cam.service is masked (studio pipeline active) — skipping.")
+    else:
+        print("\n[4] Restarting ffmpeg-cam.service...")
+        run("systemctl restart ffmpeg-cam", check=False)
 
     print("    Waiting 15s for pipeline to converge...")
     run("sleep 15")
