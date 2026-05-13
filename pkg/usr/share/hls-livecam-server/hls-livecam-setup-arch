@@ -32,6 +32,7 @@ for dev in /dev/video*; do
   [ -e "$dev" ] || continue
   if v4l2-ctl --device="$dev" --info 2>/dev/null | grep -q "Video Capture"; then
     NAME=$(v4l2-ctl --device="$dev" --info 2>/dev/null | grep "Card type" | cut -d: -f2 | xargs)
+    echo "$NAME" | grep -q "hls-livecam-loop" && continue
     VIDEO_DEVICES+=("$dev ($NAME)")
     echo "  Found: $dev — $NAME"
   fi
