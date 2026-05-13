@@ -302,13 +302,13 @@ def draw_camhub_pane(scr, y, x, h, w, base):
     global camhub_slots, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_confirm_clear
     box(scr, y, x, h, w, "CAMS", base)
     inner_w = w - 4
-    col_w = [10, 15, max(1, inner_w - 30)]
+    col_w = [10, 15]
     for i in range(4):
         slot = camhub_slots[i] if i < len(camhub_slots) else {"label":"","ip":"","stream_path":"","pinned":False}
         row_y = y + 2 + i
         pin = "*" if slot.get("pinned") else " "
         if camhub_editing and i == camhub_cursor:
-            parts = [slot.get("label",""), slot.get("ip",""), slot.get("stream_path","")]
+            parts = [slot.get("label",""), slot.get("ip","")]
             parts[camhub_edit_field] = camhub_edit_buf
             col = x + 2
             safe(scr, row_y, col, f"[{pin}] ", curses.color_pair(2) | curses.A_BOLD)
@@ -330,7 +330,7 @@ def draw_camhub_pane(scr, y, x, h, w, base):
         hint = "clear this slot?  \u2022  [y] yes  \u2022  [any other key] cancel"
         hint_attr = curses.color_pair(3) | curses.A_BOLD
     elif camhub_editing:
-        fnames = ["label", "ip", "path"]
+        fnames = ["label", "ip"]
         hint = "editing {}  \u2022  [Tab] next  \u2022  [Enter] save  \u2022  [Esc] cancel".format(fnames[camhub_edit_field])
         hint_attr = curses.color_pair(4) | curses.A_BOLD
     else:
@@ -1026,7 +1026,7 @@ def main(scr):
             if camhub_editing:
                 if k == 9:
                     camhub_slots[camhub_cursor][["label","ip","stream_path"][camhub_edit_field]] = camhub_edit_buf
-                    camhub_edit_field = (camhub_edit_field + 1) % 3
+                    camhub_edit_field = (camhub_edit_field + 1) % 2
                     camhub_edit_buf = camhub_slots[camhub_cursor].get(["label","ip","stream_path"][camhub_edit_field], "")
                 elif k in (10, 13):
                     camhub_slots[camhub_cursor][["label","ip","stream_path"][camhub_edit_field]] = camhub_edit_buf
