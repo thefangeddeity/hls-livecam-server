@@ -36,6 +36,14 @@ confirm_repair  = False
 confirm_service = False
 confirm_onoff   = False
 
+camhub_mode       = False
+camhub_cursor     = 0
+camhub_editing    = False
+camhub_edit_field = 0
+camhub_edit_buf   = ""
+camhub_slots      = []
+camhub_confirm_clear = False
+
 SMARTCTL = "/usr/sbin/smartctl"
 
 psutil.cpu_percent(interval=None)
@@ -269,6 +277,81 @@ def write_broadcast(msg):
         return "permission denied"
     except Exception as e:
         return str(e)[:40]
+
+# ---------- CAMHUB ----------
+CAMS_JSON = "/var/www/hls-livecam/cams/cams.json"
+
+def read_cams():
+    import json
+    try:
+        with open(CAMS_JSON) as f:
+            return json.load(f)
+    except Exception:
+        return [{"label":"","ip":"","stream_path":"","pinned":False} for _ in range(4)]
+
+def write_cams(slots):
+    import json
+    try:
+        with open(CAMS_JSON, "w") as f:
+            json.dump(slots, f, indent=2)
+        return ""
+    except Exception as e:
+        return str(e)[:40]
+
+def draw_camhub_pane(scr, y, x, h, w, base):
+    global camhub_slots, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_confirm_clear
+    box(scr, y, x, h, w, "CAMS", base)
+    inner_w = w - 4
+    col_w = [10, 15, max(1, inner_w - 30)]
+    for i in range(4):
+        slot = camhub_slots[i] if i < len(camhub_slots) else {"label":"","ip":"","stream_path":"","pinned":False}
+        row_y = y + 2 + i
+        pin = "*" if slot.get("pinned") else " "
+        if camhub_editing and i == camhub_cursor:
+            parts = [slot.get("label",""), slot.get("ip",""), slot.get("stream_path","")]
+            parts[camhub_edit_field] = camhub_edit_buf
+            col = x + 2
+            safe(scr, row_y, col, f"[{pin}] ", curses.color_pair(2) | curses.A_BOLD)
+            col += 4
+            for fi, (val, cw_) in enumerate(zip(parts, col_w)):
+                if fi == camhub_edit_field:
+                    display = f"{(val + chr(0x258c)):<{cw_}}"[:cw_]
+                    safe(scr, row_y, col, display, curses.A_REVERSE)
+                else:
+                    safe(scr, row_y, col, f"{val:<{cw_}}"[:cw_], curses.color_pair(2) | curses.A_BOLD)
+                col += cw_ + 1
+        else:
+            label = slot.get("label","") or "(empty)"
+            ip    = slot.get("ip","") or ""
+            line  = "[{}] {:<10} {}".format(pin, label[:10], ip[:15])
+            attr  = (curses.color_pair(2) | curses.A_BOLD) if i == camhub_cursor else base
+            safe(scr, row_y, x + 2, line[:inner_w], attr)
+    if camhub_confirm_clear:
+        hint = "clear this slot?  \u2022  [y] yes  \u2022  [any other key] cancel"
+        hint_attr = curses.color_pair(3) | curses.A_BOLD
+    elif camhub_editing:
+        fnames = ["label", "ip", "path"]
+        hint = "editing {}  \u2022  [Tab] next  \u2022  [Enter] save  \u2022  [Esc] cancel".format(fnames[camhub_edit_field])
+        hint_attr = curses.color_pair(4) | curses.A_BOLD
+    else:
+        hint = "[e] edit  \u2022  [p] pin  \u2022  [d] clear  \u2022  [U/D] reorder  \u2022  [c/Esc] close"
+        hint_attr = curses.A_DIM
+    _items = hint.split("  \u2022  ")
+    _all = []
+    _cur = ""
+    for _item in _items:
+        _add = (_cur + "  \u2022  " + _item) if _cur else _item
+        if len(_add) <= inner_w:
+            _cur = _add
+        else:
+            if _cur:
+                _all.append(_cur)
+            _cur = _item
+    if _cur:
+        _all.append(_cur)
+    for _i, _line in enumerate(_all):
+        _hy = y + h - 1 - len(_all) + _i
+        safe(scr, _hy, x + 2, _line[:inner_w], hint_attr)
 
 # ---------- REPAIR ----------
 def run_repair():
@@ -592,11 +675,13 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     # ============================================================
     _use_color = not dark and widget_pixels_color is not None
     _use_gray  = dark  and widget_pixels_gray  is not None
-    has_feed   = (_use_color or _use_gray) and not dim
+    has_feed   = (_use_color or _use_gray) and not dim and not camhub_mode
     box(scr, top_y, 0,  top_h, lw, "DISK / SMART", base)
     if has_feed:
         box(scr, top_y, cx, top_h, cw, "FEED",      base)
     box(scr, top_y, rx, top_h, rw, "SYSTEM",         base)
+    if camhub_mode:
+        draw_camhub_pane(scr, top_y, cx, top_h, cw, base)
 
     # -- DISK/SMART content --
     with smart_lock:
@@ -695,8 +780,8 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
 
     # STACK shares left column width; PROCESSES shares center; MESSAGE shares right
     box(scr, bot_y, 0,  bot_h, lw, "VIDEO STACK", base)
-    _proc_y = bot_y if has_feed else top_y
-    _proc_h = bot_h if has_feed else top_h + bot_h
+    _proc_y = bot_y if (has_feed or camhub_mode) else top_y
+    _proc_h = bot_h if (has_feed or camhub_mode) else top_h + bot_h
     box(scr, _proc_y, cx, _proc_h, cw, "PROCESSES", base)
     box(scr, bot_y, rx, bot_h, rw, "MESSAGE",   msg_border)
 
@@ -798,11 +883,14 @@ def draw_footer(scr, editing):
              "SERVER ON/OFF: are you sure?  [y] yes  [any other key] cancel",
              curses.color_pair(1) | curses.A_BOLD)
         return
-    if editing:
+    if camhub_mode and not editing:
+        footer1 = "[\u2191\u2193] navigate  \u2022  [e] edit  \u2022  [p] pin  \u2022  [d] clear  \u2022  [U/D] reorder"
+        footer2 = "[c] / [Esc] close"
+    elif editing:
         footer1 = "BROADCAST: type message  \u2022  [Enter] newline  \u2022  [Ctrl+U] clear  \u2022  [Ctrl+D] save & deliver"
         footer2 = "[Esc] cancel"
     else:
-        footer1 = "systemd auto-restarts on failure  \u2022  [m] message  \u2022  [s] show  \u2022  [b] blur  \u2022  [h] hide"
+        footer1 = "systemd auto-restarts on failure  \u2022  [c] cams  \u2022  [m] message  \u2022  [s] show  \u2022  [b] blur  \u2022  [h] hide"
         footer2 = "[p] pause/resume  \u2022  [o] server on/off  \u2022  [r] force repair  \u2022  [q] quit"
     _fw = w - 4
     _items = (footer1 + "  \u2022  " + footer2).split("  \u2022  ")
@@ -826,6 +914,7 @@ def draw_footer(scr, editing):
 def main(scr):
     global repair_status, broadcast_mode, broadcast_buffer
     global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff
+    global camhub_mode, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_slots, camhub_confirm_clear
 
     threading.Thread(target=smart_worker, daemon=True).start()
     threading.Thread(target=hls_worker,   daemon=True).start()
@@ -923,6 +1012,67 @@ def main(scr):
                     broadcast_cursor += 1
             continue
 
+        if camhub_mode:
+            snap = sample_metrics()
+            with repair_lock:
+                cur_repair = repair_status
+            broadcast_current = read_broadcast()
+            scr.erase()
+            draw_dashboard(scr, snap, cur_repair, dim=False)
+            draw_footer(scr, editing=False)
+            scr.refresh()
+            scr.timeout(-1 if camhub_confirm_clear else 500)
+            k = scr.getch()
+            if camhub_editing:
+                if k == 9:
+                    camhub_slots[camhub_cursor][["label","ip","stream_path"][camhub_edit_field]] = camhub_edit_buf
+                    camhub_edit_field = (camhub_edit_field + 1) % 3
+                    camhub_edit_buf = camhub_slots[camhub_cursor].get(["label","ip","stream_path"][camhub_edit_field], "")
+                elif k in (10, 13):
+                    camhub_slots[camhub_cursor][["label","ip","stream_path"][camhub_edit_field]] = camhub_edit_buf
+                    write_cams(camhub_slots)
+                    camhub_editing = False
+                    camhub_edit_buf = ""
+                elif k == 27:
+                    camhub_editing = False
+                    camhub_edit_buf = ""
+                elif k in (curses.KEY_BACKSPACE, 127, 8):
+                    camhub_edit_buf = camhub_edit_buf[:-1]
+                elif 32 <= k <= 126:
+                    camhub_edit_buf += chr(k)
+            else:
+                if k in (ord('c'), 27):
+                    camhub_mode = False
+                elif k == curses.KEY_UP:
+                    camhub_cursor = max(0, camhub_cursor - 1)
+                elif k == curses.KEY_DOWN:
+                    camhub_cursor = min(3, camhub_cursor + 1)
+                elif k == ord('e'):
+                    camhub_editing = True
+                    camhub_edit_field = 0
+                    camhub_edit_buf = camhub_slots[camhub_cursor].get("label", "")
+                elif k == ord('p'):
+                    camhub_slots[camhub_cursor]["pinned"] = not camhub_slots[camhub_cursor].get("pinned", False)
+                    write_cams(camhub_slots)
+                elif k == ord('d'):
+                    camhub_confirm_clear = True
+                elif camhub_confirm_clear:
+                    if k == ord('y'):
+                        camhub_slots[camhub_cursor] = {"label":"","ip":"","stream_path":"","pinned":False}
+                        write_cams(camhub_slots)
+                    camhub_confirm_clear = False
+                elif k == ord('U'):
+                    if camhub_cursor > 0:
+                        camhub_slots[camhub_cursor-1], camhub_slots[camhub_cursor] = camhub_slots[camhub_cursor], camhub_slots[camhub_cursor-1]
+                        camhub_cursor -= 1
+                        write_cams(camhub_slots)
+                elif k == ord('D'):
+                    if camhub_cursor < 3:
+                        camhub_slots[camhub_cursor+1], camhub_slots[camhub_cursor] = camhub_slots[camhub_cursor], camhub_slots[camhub_cursor+1]
+                        camhub_cursor += 1
+                        write_cams(camhub_slots)
+            continue
+
         # -- LIVE DASHBOARD MODE --
         if confirm_repair or confirm_service or confirm_onoff:
             scr.timeout(-1)
@@ -990,6 +1140,13 @@ def main(scr):
             broadcast_buffer = broadcast_current
             broadcast_cursor = len(broadcast_current)
             broadcast_error = ""
+            continue
+        elif k == ord('c'):
+            camhub_slots = read_cams()
+            camhub_cursor = 0
+            camhub_editing = False
+            camhub_edit_buf = ""
+            camhub_mode = True
             continue
 
         snap = sample_metrics()

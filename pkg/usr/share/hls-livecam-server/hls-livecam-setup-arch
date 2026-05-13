@@ -255,6 +255,13 @@ mkdir -p "$LIB_DIR"
 cp /usr/share/hls-livecam-server/index.html "$WEB_ROOT/index.html"
 sed -i "s/@HOSTNAME@/$HOSTNAME_VAL/g" "$WEB_ROOT/index.html"
 
+# Cams viewer
+mkdir -p "$WEB_ROOT/cams"
+cp /usr/share/hls-livecam-server/cams/cams.html "$WEB_ROOT/cams/cams.html"
+[ -f "$WEB_ROOT/cams/cams.json" ] || echo '[]' > "$WEB_ROOT/cams/cams.json"
+chown root:http "$WEB_ROOT/cams/cams.json" 2>/dev/null || true
+chmod 0664 "$WEB_ROOT/cams/cams.json"
+
 # broadcast.txt and buzz.txt
 touch "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt"
 chown root:www-data "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt" 2>/dev/null || \
@@ -311,6 +318,7 @@ server {
         add_header Last-Modified "" always;
         add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
         add_header Pragma "no-cache" always;
+        add_header Access-Control-Allow-Origin "*" always;
         default_type text/plain;
     }
 
@@ -326,6 +334,21 @@ server {
         proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
+    }
+
+    location = /cams/cams.json {
+        etag off;
+        if_modified_since off;
+        add_header Last-Modified "" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        default_type application/json;
+    }
+
+    location /cams {
+        index cams.html;
+        try_files \$uri \$uri/ =404;
     }
 
     location / {
