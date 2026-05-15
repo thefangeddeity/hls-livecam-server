@@ -9,8 +9,9 @@ usermod -aG video www-data
 
 # --- Install pyfakewebcam via pip -------------------------------
 if ! python3 -c "import pyfakewebcam" 2>/dev/null; then
-    pip3 install pyfakewebcam --break-system-packages --quiet || \
-    pip install pyfakewebcam --break-system-packages --quiet || true
+    python3 -m pip --version >/dev/null 2>&1 || apt install -y python3-pip
+    python3 -m pip install pyfakewebcam --break-system-packages --quiet 2>/dev/null || \
+    python3 -m pip install pyfakewebcam --quiet || true
 fi
 
 # --- Patch pyfakewebcam tostring() -> tobytes() -----------------
