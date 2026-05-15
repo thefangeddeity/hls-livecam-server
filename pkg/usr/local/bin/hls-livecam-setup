@@ -305,9 +305,12 @@ if ! modinfo v4l2loopback >/dev/null 2>&1; then
     fi
 fi
 if ! python3 -c "import pyfakewebcam" 2>/dev/null; then
-    echo -e "${RED}ERROR: pyfakewebcam not installed.${NC}"
-    echo "Install with: sudo pip3 install pyfakewebcam --break-system-packages"
-    exit 1
+    echo "pyfakewebcam not found -- installing..."
+    pip3 install pyfakewebcam --break-system-packages
+    if ! python3 -c "import pyfakewebcam" 2>/dev/null; then
+        echo -e "${RED}ERROR: pyfakewebcam still not available after install.${NC}"
+        exit 1
+    fi
 fi
 cat > /etc/modules-load.d/v4l2loopback.conf << 'EOF'
 v4l2loopback
