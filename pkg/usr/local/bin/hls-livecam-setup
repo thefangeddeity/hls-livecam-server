@@ -482,6 +482,7 @@ echo -e "  ${GREEN}nginx configured and serving.${NC}"
 # ── Sudoers: passwordless sudo for camdash [h] and [s] ──────
 SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
 if [ -n "$SUDO_USER_NAME" ]; then
+  usermod -aG www-data "$SUDO_USER_NAME"
   # [h] hide/show feed — both the installing user (camdash) and www-data (broadcast-api) need this
   printf '%s ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\nwww-data ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark\n' "$SUDO_USER_NAME" > /etc/sudoers.d/hls-livecam-dark
   chown root:root /etc/sudoers.d/hls-livecam-dark
