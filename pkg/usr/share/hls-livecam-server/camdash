@@ -338,7 +338,7 @@ def draw_camhub_pane(scr, y, x, h, w, base):
         hint = "editing {}  \u2022  [Tab] next  \u2022  [Enter] save  \u2022  [Esc] cancel".format(fnames[camhub_edit_field])
         hint_attr = curses.color_pair(4) | curses.A_BOLD
     else:
-        hint = "[e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder  \u2022  [c/Esc] close"
+        hint = "[e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder  \u2022  [i/Esc] close"
         hint_attr = curses.A_DIM
     _items = hint.split("  \u2022  ")
     _all = []
@@ -528,6 +528,7 @@ def sample_metrics():
         "dark":  os.path.exists(DARK_FLAG),
         "feed_mode": _api_get("feed-mode", "show"),
         "msg_lock":  _api_get("msg-lock", "false"),
+        "bw_mode":   _api_get("bw-mode", "false"),
         "svc":   services_running(),
         "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
     }
@@ -825,12 +826,15 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     hide_a   = curses.A_REVERSE if (svc and _hiding)   else curses.A_DIM
     repair_a = curses.color_pair(2) | curses.A_BOLD if cur_repair == 'RUNNING' else curses.A_DIM
     safe(scr, y, 2, "[ Show   ]", show_a);   y += 1
-    safe(scr, y, 2, "[ Blur   ]", blur_a);   y += 1
-    safe(scr, y, 2, "[ Hide   ]", hide_a);   y += 1
-    safe(scr, y, 2, "[ Repair ]", repair_a); y += 2
     bw_cb = "[*]" if _bw_mode else "[ ]"
     bw_a  = curses.color_pair(2) | curses.A_BOLD if (svc and _bw_mode) else curses.A_DIM
-    safe(scr, y, 2, f"{bw_cb} B&W", bw_a)
+    if _cloaking:
+        safe(scr, y, 2, "[ Blur   ]", blur_a)
+        safe(scr, y, 13, f"{bw_cb} B&W", bw_a); y += 1
+    else:
+        safe(scr, y, 2, "[ Blur   ]", blur_a);   y += 1
+    safe(scr, y, 2, "[ Hide   ]", hide_a);   y += 1
+    safe(scr, y, 2, "[ Repair ]", repair_a); y += 1
     svc_a = curses.color_pair(1) | curses.A_BOLD if svc else curses.color_pair(3) | curses.A_BOLD
     safe(scr, bot_y + bot_h - 3, 2, f"FPS:    {fps_val}" if svc else "FPS:    N/A", curses.A_DIM)
     safe(scr, bot_y + bot_h - 2, 2, f"SERVER: {'ON' if svc else 'OFF'}", svc_a)
@@ -896,17 +900,17 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     # message buttons - three states
     btn_y = ta_y + TA_H + 1
     if editing_msg:
-        _save_a   = curses.A_REVERSE if (editing_buffer != broadcast_current) else curses.A_DIM
+        _save_a   = curses.A_REVERSE if (api and editing_buffer != broadcast_current) else curses.A_DIM
         _clear_a  = curses.A_REVERSE if editing_buffer else curses.A_DIM
         _cancel_a = curses.A_REVERSE
-        _save_g   = curses.color_pair(4) | curses.A_BOLD if (editing_buffer != broadcast_current) else curses.A_DIM
+        _save_g   = curses.color_pair(4) | curses.A_BOLD if (api and editing_buffer != broadcast_current) else curses.A_DIM
         _clear_g  = curses.color_pair(4) | curses.A_BOLD if editing_buffer else curses.A_DIM
         _cancel_g = curses.color_pair(4) | curses.A_BOLD
-        safe(scr, btn_y,     ta_x + 1,  "[Ctrl+D]",  _save_a)
+        safe(scr, btn_y,     ta_x + 1,  "[Ctrl+S]",  _save_a)
         safe(scr, btn_y,     ta_x + 11, "[Ctrl+U]",  _clear_a)
         safe(scr, btn_y,     ta_x + 21, "[Esc]",     _cancel_a)
         safe(scr, btn_y,     ta_x + 28, "[Enter]",   curses.A_DIM)
-        safe(scr, btn_y + 1, ta_x + 2,  "Deliver", _save_g)
+        safe(scr, btn_y + 1, ta_x + 2,  "Save",    _save_g)
         safe(scr, btn_y + 1, ta_x + 12, "Clear",   _clear_g)
         safe(scr, btn_y + 1, ta_x + 21, "Cancel",  _cancel_g)
         safe(scr, btn_y + 1, ta_x + 29, "Newline", curses.A_DIM)
@@ -918,11 +922,11 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     # footer: lock + MESSAGE API pinned to bottom
     lock_cb = "[*]" if _msg_locked else "[ ]"
     safe(scr, bot_y + bot_h - 3, ta_x + 1, f"{lock_cb} Lock message", curses.A_DIM)
-    api_footer_a = status_attr('LIVE' if api else 'DOWN', dim) if svc else curses.A_DIM
-    safe(scr, bot_y + bot_h - 2, ta_x + 1, f"MESSAGE API: {'LIVE' if api else 'DOWN'}" if svc else "MESSAGE API: N/A", api_footer_a)
+    api_footer_a = curses.color_pair(1) | curses.A_BOLD if api else curses.color_pair(3) | curses.A_BOLD
+    safe(scr, bot_y + bot_h - 2, ta_x + 1, f"MESSAGE API: {'UP' if api else 'DOWN'}", api_footer_a)
 
 
-def draw_footer(scr, editing):
+def draw_footer(scr, editing, svc=False):
     global confirm_repair, confirm_service, confirm_clear, _footer_locked
     h, w = scr.getmaxyx()
     if confirm_clear:
@@ -947,16 +951,20 @@ def draw_footer(scr, editing):
         return
     if camhub_mode and not editing:
         footer1 = "[\u2191\u2193] navigate  \u2022  [e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder"
-        footer2 = "[c] / [Esc] close"
+        footer2 = "[i/Esc] close"
     elif editing:
         footer1 = "• Leave viewers a message or describe what they are seeing •"
         footer2 = ""
     else:
-        if _footer_locked:
+        if not svc:
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
+            footer2 = ""
+        elif _footer_locked:
             footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
         else:
             footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [m] mssg edit \u2022 [l] mssg lock \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
-        footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
+            footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
     _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
     _all = []
@@ -1016,7 +1024,7 @@ def main(scr):
             scr.erase()
             draw_dashboard(scr, frozen_snap, frozen_repair,
                            dim=True, editing_buffer=broadcast_buffer)
-            draw_footer(scr, editing=True)
+            draw_footer(scr, editing=True, svc=snap.get("svc", False))
             scr.refresh()
 
             _h, _w = scr.getmaxyx()
@@ -1050,7 +1058,7 @@ def main(scr):
             if k in (10, 13):
                 broadcast_buffer = broadcast_buffer[:broadcast_cursor] + '\n' + broadcast_buffer[broadcast_cursor:]
                 broadcast_cursor += 1
-            elif k == 4:
+            elif k == 19:
                 err = write_broadcast(broadcast_buffer)
                 if err:
                     broadcast_error = "ERR: " + err
@@ -1090,7 +1098,7 @@ def main(scr):
             broadcast_current = read_broadcast()
             scr.erase()
             draw_dashboard(scr, snap, cur_repair, dim=False)
-            draw_footer(scr, editing=False)
+            draw_footer(scr, editing=False, svc=snap.get("svc", False))
             scr.refresh()
             scr.timeout(-1 if camhub_confirm_clear else 500)
             k = scr.getch()
@@ -1112,7 +1120,7 @@ def main(scr):
                 elif 32 <= k <= 126:
                     camhub_edit_buf += chr(k)
             else:
-                if k in (ord('c'), 27):
+                if k in (ord('i'), 27):
                     camhub_mode = False
                 elif k == curses.KEY_UP:
                     camhub_cursor = max(0, camhub_cursor - 1)
@@ -1227,6 +1235,15 @@ def main(scr):
                 except Exception:
                     pass
             threading.Thread(target=_toggle_lock, daemon=True).start()
+        elif k == ord('w'):
+            def _toggle_bw():
+                import urllib.request
+                try:
+                    req = urllib.request.Request('http://127.0.0.1:5000/api/bw-mode', data=b'', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_toggle_bw, daemon=True).start()
         elif k == ord('z'):
             def _buzz():
                 import urllib.request
@@ -1260,7 +1277,7 @@ def main(scr):
 
         scr.erase()
         draw_dashboard(scr, snap, cur_repair, dim=False)
-        draw_footer(scr, editing=False)
+        draw_footer(scr, editing=False, svc=snap.get("svc", False))
         scr.refresh()
 
 
