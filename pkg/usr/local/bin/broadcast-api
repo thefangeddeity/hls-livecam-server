@@ -6,7 +6,7 @@ Studio model: pyfakewebcam writes frames to v4l2loopback (/dev/video10).
 Publisher ffmpeg reads from loopback, pushes to mediamtx. Non-blocking.
 """
 from flask import Flask, request, abort
-import os, subprocess, time, sys, threading, io
+import os, subprocess, time, sys, threading, io, signal
 import numpy as np
 import pyfakewebcam
 sys.path.insert(0, '/usr/share/hls-livecam-server')
@@ -18,12 +18,15 @@ app = Flask(__name__)
 BROADCAST_FILE  = "/var/www/hls-livecam/broadcast.txt"
 BUZZ_FILE       = "/var/www/hls-livecam/buzz.txt"
 DARK_FLAG       = "/var/lib/hls-livecam/dark"
-MAX_LEN         = 140
+LOCK_FILE       = "/var/lib/hls-livecam/msg_lock"
+MAX_LEN         = 120
 DEVICE_ENV      = '/etc/hls-livecam/device.env'
 LOOPBACK_DEVICE = '/dev/video10'
 FRAME_W         = 1280
 FRAME_H         = 720
 FRAME_BYTES     = FRAME_W * FRAME_H * 3
+_cam_proc = None
+_pub_proc = None
 GOL_COLS        = 80
 
 def _read_device_env():
@@ -43,7 +46,9 @@ def _read_device_env():
 _mode      = 'show'
 _mode_lock = threading.Lock()
 _bw_mode   = False
-_msg_lock  = False
+try:
+    with open(LOCK_FILE) as _f: _msg_lock = _f.read().strip() == "true"
+except FileNotFoundError: _msg_lock = True
 _hide_frame     = None
 
 # -- Camera frame cache --
@@ -91,7 +96,7 @@ def _start_cam_reader(denv):
     ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 def _drain_loop(cam_holder, denv):
-    global _cam_frame
+    global _cam_frame, _cam_proc
     while True:
         try:
             raw = cam_holder[0].stdout.read(FRAME_BYTES)
@@ -102,6 +107,7 @@ def _drain_loop(cam_holder, denv):
                 time.sleep(2.0)
                 cam_holder[0].terminate()
                 cam_holder[0] = _start_cam_reader(denv)
+                _cam_proc = cam_holder[0]
         except Exception:
             time.sleep(1.0)
 
@@ -118,10 +124,13 @@ def _writer_loop():
     # Init loopback writer before publisher so ffmpeg can connect
     loop_cam = pyfakewebcam.FakeWebcam(LOOPBACK_DEVICE, FRAME_W, FRAME_H)
 
+    global _cam_proc, _pub_proc
     cam_holder = [_start_cam_reader(denv)]
+    _cam_proc = cam_holder[0]
     threading.Thread(target=_drain_loop, args=(cam_holder, denv), daemon=True).start()
 
     pub_holder = [_start_loopback_publisher(denv)]
+    _pub_proc = pub_holder[0]
     time.sleep(1.0)
 
     prev_mode = None
@@ -131,6 +140,7 @@ def _writer_loop():
 
         if pub_holder[0].poll() is not None:
             pub_holder[0] = _start_loopback_publisher(denv)
+            _pub_proc = pub_holder[0]
             time.sleep(0.5)
 
         try:
@@ -241,6 +251,9 @@ def msg_lock_get():
 def msg_lock_post():
     global _msg_lock
     _msg_lock = not _msg_lock
+    try:
+        with open(LOCK_FILE, 'w') as f: f.write('true' if _msg_lock else 'false')
+    except Exception: pass
     return ('true' if _msg_lock else 'false'), 200
 
 @app.route('/api/info', methods=['GET'])
@@ -256,5 +269,13 @@ def info():
         pass
     return {'hostname': hostname, 'tailscale': tailscale}
 
+def _shutdown(signum, frame):
+    for p in (_pub_proc, _cam_proc):
+        if p:
+            try: p.terminate()
+            except Exception: pass
+    sys.exit(0)
+
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, _shutdown)
     app.run(host='127.0.0.1', port=5000)

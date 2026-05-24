@@ -312,7 +312,7 @@
   .message-section { display: flex; flex-direction: column; gap: 8px; }
   .msg-box-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   textarea.msg-box {
-    height: 120px;
+    height: 87px;
     overflow-y: auto;
     flex: none;
     width: 100%;
@@ -327,6 +327,8 @@
     cursor: default;
   }
   textarea.msg-box.empty { color: var(--text-muted); font-style: italic; }
+  .char-count { text-align: right; font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+  .char-count.warn { color: var(--warn); }
   textarea.msg-box.editing {
     border-color: var(--accent);
     background: var(--panel);
@@ -426,9 +428,10 @@
       <!-- MESSAGE -->
       <div class="section message-section">
         <div class="section-title">Message <span id="msgHint" class="msg-hint"></span></div>
-        <div class="feed-mode-label">Leave a message for viewers</div>
+        <div class="feed-mode-label">Leave a note for viewers</div>
         <div class="msg-box-wrap">
           <textarea class="msg-box empty" id="msgBox" readonly>(no message)</textarea>
+          <div class="char-count" id="charCount" style="display:none">0/120</div>
         </div>
         <div class="msg-actions" id="msgActions" hidden>
           <button class="btn" id="saveBtn" onclick="sendMessage()">Save</button>
@@ -894,6 +897,8 @@
     setHint('Esc = cancel');
     if (!msgLock) msgActions.hidden = false;
     updateClearBtn();
+    charCount.style.display = 'block';
+    updateCharCount();
   }
 
   function cancelEdit() {
@@ -903,6 +908,7 @@
     showDisplay(currentMsg);
     setHint('');
     updateClearBtn();
+    charCount.style.display = 'none';
   }
 
   function pollBroadcast() {
@@ -943,7 +949,14 @@
     doPost('', function() { cancelEdit(); showDisplay(''); setHint('Cleared', 'ok'); });
   }
 
-  msgBox.addEventListener('input', function() { if (editing) updateClearBtn(); });
+  var charCount = document.getElementById('charCount');
+  function updateCharCount() {
+    var n = msgBox.value.length;
+    if (n > 120) { msgBox.value = msgBox.value.slice(0, 120); n = 120; }
+    charCount.textContent = n + '/120';
+    charCount.classList.toggle('warn', n >= 100);
+  }
+  msgBox.addEventListener('input', function() { if (editing) { updateClearBtn(); updateCharCount(); } });
   msgBox.addEventListener('click', function() { if (!editing) enterEdit(); });
   msgBox.addEventListener('touchend', function(e) {
     if (!editing) { e.preventDefault(); enterEdit(); }
