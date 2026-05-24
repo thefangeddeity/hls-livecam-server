@@ -836,7 +836,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 2, "[ Hide   ]", hide_a);   y += 1
     safe(scr, y, 2, "[ Repair ]", repair_a); y += 1
     svc_a = curses.color_pair(1) | curses.A_BOLD if svc else curses.color_pair(3) | curses.A_BOLD
-    safe(scr, bot_y + bot_h - 3, 2, f"FPS:    {fps_val}" if svc else "FPS:    N/A", curses.A_DIM)
+    safe(scr, bot_y + bot_h - 3, 2, f"FPS:    {fps_val}" if svc else "FPS:    N/A", curses.color_pair(4) | curses.A_BOLD)
     safe(scr, bot_y + bot_h - 2, 2, f"SERVER: {'ON' if svc else 'OFF'}", svc_a)
 
     # -- PROCESSES content --
@@ -921,9 +921,11 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
         safe(scr, btn_y, ta_x + 23, "[ Cancel ]", curses.A_DIM)
     # footer: lock + MESSAGE API pinned to bottom
     lock_cb = "[*]" if _msg_locked else "[ ]"
-    safe(scr, bot_y + bot_h - 3, ta_x + 1, f"{lock_cb} Lock message", curses.A_DIM)
+    lock_attr = curses.color_pair(2) | curses.A_BOLD if _msg_locked else curses.color_pair(4) | curses.A_BOLD
+    safe(scr, bot_y + bot_h - 3, ta_x + 1, f"{lock_cb} Lock message", lock_attr)
     api_footer_a = curses.color_pair(1) | curses.A_BOLD if api else curses.color_pair(3) | curses.A_BOLD
     safe(scr, bot_y + bot_h - 2, ta_x + 1, f"MESSAGE API: {'UP' if api else 'DOWN'}", api_footer_a)
+    safe(scr, bot_y + bot_h - 2, rx + rw - 9, "GPL 3.0", curses.A_DIM)
 
 
 def draw_footer(scr, editing, svc=False):
@@ -963,7 +965,7 @@ def draw_footer(scr, editing, svc=False):
             footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
         else:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [m] mssg edit \u2022 [l] mssg lock \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
     _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
@@ -1217,7 +1219,7 @@ def main(scr):
                 except Exception:
                     pass
             threading.Thread(target=_set_hide, daemon=True).start()
-        elif k == ord('m'):
+        elif k == ord('m') and snap.get('msg_lock', 'false') != 'true':
             frozen_snap = sample_metrics()
             with repair_lock:
                 frozen_repair = repair_status
