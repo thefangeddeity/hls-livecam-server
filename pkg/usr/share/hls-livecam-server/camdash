@@ -37,6 +37,8 @@ widget_pan_cols    = [0]
 confirm_repair  = False
 confirm_service = False
 confirm_onoff   = False
+confirm_clear   = False
+_footer_locked  = False
 
 camhub_mode       = False
 camhub_cursor     = 0
@@ -791,7 +793,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     msg_border  = curses.color_pair(2) if editing_msg else base
 
     # STACK shares left column width; PROCESSES shares center; MESSAGE shares right
-    box(scr, bot_y, 0,  bot_h, lw, "VIDEO STACK", base)
+    box(scr, bot_y, 0,  bot_h, lw, "VIDEO", base)
     _proc_y = bot_y if (has_feed or camhub_mode) else top_y
     _proc_h = bot_h if (has_feed or camhub_mode) else top_h + bot_h
     box(scr, _proc_y, cx, _proc_h, cw, "PROCESSES", base)
@@ -799,6 +801,9 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
 
     # -- STACK content --
     y = bot_y + 1
+    safe(scr, y, 2, f"CAM:      {'LIVE' if (v4l2 and svc) else 'FOUND' if v4l2 else 'NONE'}",
+         status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
+    fps_val = read_device_env().get("FRAMERATE", "?")
     safe(scr, y, 2, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
          status_attr('LIVE' if ff else 'DOWN', dim));   y += 1
     safe(scr, y, 2, f"RTSP:     {'LIVE' if rtsp else 'DOWN'}",
@@ -808,26 +813,27 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 2, f"HLS:      {hls}", status_attr(hls, dim));                  y += 1
     safe(scr, y, 2, f"nginx:    {'LIVE' if nginx else 'DOWN'}",
          status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
-    safe(scr, y, 2, f"MSSG API: {'LIVE' if api else 'DOWN'}" if svc else "MSSG API: N/A",
-         status_attr('LIVE' if api else 'DOWN', dim) if svc else curses.A_DIM);  y += 1
-    safe(scr, y, 2, f"CAM:      {'LIVE' if (v4l2 and svc) else 'FOUND' if v4l2 else 'NONE'}",
-         status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
     _feed_mode = snap.get('feed_mode', 'show')
     _showing  = _feed_mode == 'show'
     _cloaking = _feed_mode == 'cloak'
     _hiding   = _feed_mode == 'hide'
     _msg_locked = snap.get('msg_lock', 'false') == 'true'
-    safe(scr, y, 2, f"SHOW:     {'ON' if _showing else 'OFF'}" if svc else "SHOW:     N/A",
-         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _showing else curses.color_pair(1) | curses.A_BOLD)); y += 1
-    safe(scr, y, 2, f"BLUR:     {'ON' if _cloaking else 'OFF'}" if svc else "BLUR:     N/A",
-         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _cloaking else curses.color_pair(1) | curses.A_BOLD)); y += 1
-    safe(scr, y, 2, f"HIDE:     {'ON' if _hiding else 'OFF'}" if svc else "HIDE:     N/A",
-         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _hiding else curses.color_pair(1) | curses.A_BOLD)); y += 1
-    safe(scr, y, 2, f"MSSG LCK: {'ON' if _msg_locked else 'OFF'}" if svc else "MSSG LCK: N/A",
-         curses.A_DIM if (dim or not svc) else (curses.color_pair(2) | curses.A_BOLD if _msg_locked else curses.color_pair(1) | curses.A_BOLD)); y += 1
-    fps_val = read_device_env().get("FRAMERATE", "?")
-    safe(scr, y, 2, f"FPS:      {fps_val}" if svc else "FPS:      N/A", status_attr('LIVE', dim) if svc else curses.A_DIM); y += 1
-    safe(scr, y, 2, f"REPAIR:   {cur_repair}" if svc else "REPAIR:   N/A", status_attr(cur_repair, dim) if svc else curses.A_DIM)
+    _bw_mode  = snap.get('bw_mode', 'false') == 'true'
+    y += 1
+    show_a   = curses.A_REVERSE if (svc and _showing)  else curses.A_DIM
+    blur_a   = curses.A_REVERSE if (svc and _cloaking) else curses.A_DIM
+    hide_a   = curses.A_REVERSE if (svc and _hiding)   else curses.A_DIM
+    repair_a = curses.color_pair(2) | curses.A_BOLD if cur_repair == 'RUNNING' else curses.A_DIM
+    safe(scr, y, 2, "[ Show   ]", show_a);   y += 1
+    safe(scr, y, 2, "[ Blur   ]", blur_a);   y += 1
+    safe(scr, y, 2, "[ Hide   ]", hide_a);   y += 1
+    safe(scr, y, 2, "[ Repair ]", repair_a); y += 2
+    bw_cb = "[*]" if _bw_mode else "[ ]"
+    bw_a  = curses.color_pair(2) | curses.A_BOLD if (svc and _bw_mode) else curses.A_DIM
+    safe(scr, y, 2, f"{bw_cb} B&W", bw_a)
+    svc_a = curses.color_pair(1) | curses.A_BOLD if svc else curses.color_pair(3) | curses.A_BOLD
+    safe(scr, bot_y + bot_h - 3, 2, f"FPS:    {fps_val}" if svc else "FPS:    N/A", curses.A_DIM)
+    safe(scr, bot_y + bot_h - 2, 2, f"SERVER: {'ON' if svc else 'OFF'}", svc_a)
 
     # -- PROCESSES content --
     px         = cx + 2
@@ -854,10 +860,10 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
             pass
 
     # -- MESSAGE content --
-    TA_W = rw - 4
-    TA_H = 3
+    TA_W = 34
+    TA_H = 4
     ta_x = rx + 1
-    ta_y = bot_y + 2
+    ta_y = bot_y + 3
     display_text = editing_buffer if editing_msg else broadcast_current
     # label + char count on same row
     if editing_msg:
@@ -866,10 +872,10 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
         ctr_attr = (curses.color_pair(1) if remaining > 20 else
                     curses.color_pair(2) | curses.A_BOLD if remaining > 0 else
                     curses.color_pair(3) | curses.A_BOLD)
-        safe(scr, bot_y + 1, ta_x, "Leave a note for viewers", curses.A_DIM)
+        safe(scr, bot_y + 1, ta_x + 1, "Leave a note for viewers", curses.A_DIM)
         safe(scr, bot_y + 1, rx + rw - len(ctr) - 2, ctr, ctr_attr)
     else:
-        safe(scr, bot_y + 1, ta_x, "Leave a note for viewers", curses.A_DIM)
+        safe(scr, bot_y + 1, ta_x + 1, "Leave a note for viewers", curses.A_DIM)
     # textarea border
     safe(scr, ta_y - 1, ta_x, "\u250c" + "\u2500" * TA_W + "\u2510", curses.A_DIM)
     for i in range(TA_H):
@@ -880,39 +886,50 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     ta_lines = []
     if display_text:
         for _para in display_text.split('\n'):
-            ta_lines.extend(textwrap.wrap(_para, TA_W) or [''])
+            ta_lines.extend(textwrap.wrap(_para, TA_W - 2) or [''])
     ta_attr = curses.color_pair(2) | curses.A_BOLD if editing_msg else curses.color_pair(4) | curses.A_BOLD
     for i in range(TA_H):
         line = ta_lines[i] if i < len(ta_lines) else ""
-        safe(scr, ta_y + i, ta_x + 1, line, ta_attr if display_text or editing_msg else curses.A_DIM)
+        safe(scr, ta_y + i, ta_x + 2, line, ta_attr if display_text or editing_msg else curses.A_DIM)
     if not display_text and not editing_msg:
-        safe(scr, ta_y, ta_x + 1, "(no message)", curses.A_DIM)
-    # message buttons - centered
+        safe(scr, ta_y, ta_x + 2, "(no message)", curses.A_DIM)
+    # message buttons - three states
     btn_y = ta_y + TA_H + 1
-    btn_attr = curses.A_REVERSE if editing_msg else curses.A_DIM
-    safe(scr, btn_y, ta_x,      "[ Save ]",   btn_attr)
-    safe(scr, btn_y, ta_x + 10, "[ Clear ]",  btn_attr)
-    safe(scr, btn_y, ta_x + 20, "[ Cancel ]", btn_attr)
-    # divider
-    div_y = btn_y + 1
-    safe(scr, div_y, ta_x, "\u2500" * TA_W, curses.A_DIM)
-    # show/blur/hide/buzz buttons
-    ctrl_y = div_y + 1
-    _feed_mode2 = snap.get('feed_mode', 'show')
-    show_a = curses.A_REVERSE if _feed_mode2 == 'show' else curses.A_DIM
-    blur_a = curses.A_REVERSE if _feed_mode2 == 'cloak' else curses.A_DIM
-    hide_a = curses.A_REVERSE if _feed_mode2 == 'hide' else curses.A_DIM
-    safe(scr, ctrl_y, ta_x,      "[ Show ]", show_a)
-    safe(scr, ctrl_y, ta_x + 10, "[ Blur ]", blur_a)
-    safe(scr, ctrl_y, ta_x + 20, "[ Hide ]", hide_a)
-    # lock checkbox
-    lock_cb = "[x]" if _msg_locked else "[ ]"
-    safe(scr, ctrl_y + 2, ta_x, f"{lock_cb} Lock message", curses.A_DIM)
+    if editing_msg:
+        _save_a   = curses.A_REVERSE if (editing_buffer != broadcast_current) else curses.A_DIM
+        _clear_a  = curses.A_REVERSE if editing_buffer else curses.A_DIM
+        _cancel_a = curses.A_REVERSE
+        _save_g   = curses.color_pair(4) | curses.A_BOLD if (editing_buffer != broadcast_current) else curses.A_DIM
+        _clear_g  = curses.color_pair(4) | curses.A_BOLD if editing_buffer else curses.A_DIM
+        _cancel_g = curses.color_pair(4) | curses.A_BOLD
+        safe(scr, btn_y,     ta_x + 1,  "[Ctrl+D]",  _save_a)
+        safe(scr, btn_y,     ta_x + 11, "[Ctrl+U]",  _clear_a)
+        safe(scr, btn_y,     ta_x + 21, "[Esc]",     _cancel_a)
+        safe(scr, btn_y,     ta_x + 28, "[Enter]",   curses.A_DIM)
+        safe(scr, btn_y + 1, ta_x + 2,  "Deliver", _save_g)
+        safe(scr, btn_y + 1, ta_x + 12, "Clear",   _clear_g)
+        safe(scr, btn_y + 1, ta_x + 21, "Cancel",  _cancel_g)
+        safe(scr, btn_y + 1, ta_x + 29, "Newline", curses.A_DIM)
+    elif not _msg_locked:
+        clear_a = curses.A_REVERSE if broadcast_current else curses.A_DIM
+        safe(scr, btn_y, ta_x + 1,  "[ Save   ]", curses.A_DIM)
+        safe(scr, btn_y, ta_x + 12, "[ Clear  ]", clear_a)
+        safe(scr, btn_y, ta_x + 23, "[ Cancel ]", curses.A_DIM)
+    # footer: lock + MESSAGE API pinned to bottom
+    lock_cb = "[*]" if _msg_locked else "[ ]"
+    safe(scr, bot_y + bot_h - 3, ta_x + 1, f"{lock_cb} Lock message", curses.A_DIM)
+    api_footer_a = status_attr('LIVE' if api else 'DOWN', dim) if svc else curses.A_DIM
+    safe(scr, bot_y + bot_h - 2, ta_x + 1, f"MESSAGE API: {'LIVE' if api else 'DOWN'}" if svc else "MESSAGE API: N/A", api_footer_a)
 
 
 def draw_footer(scr, editing):
-    global confirm_repair, confirm_service
+    global confirm_repair, confirm_service, confirm_clear, _footer_locked
     h, w = scr.getmaxyx()
+    if confirm_clear:
+        safe(scr, h - 1, 2,
+             "CLEAR MESSAGE: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
     if confirm_repair:
         safe(scr, h - 1, 2,
              "REPAIR: are you sure?  [y] yes  [any other key] cancel",
@@ -932,13 +949,16 @@ def draw_footer(scr, editing):
         footer1 = "[\u2191\u2193] navigate  \u2022  [e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder"
         footer2 = "[c] / [Esc] close"
     elif editing:
-        footer1 = "BROADCAST: type message  \u2022  [Enter] newline  \u2022  [Ctrl+U] clear  \u2022  [Ctrl+D] save & deliver"
-        footer2 = "[Esc] cancel"
+        footer1 = "• Leave viewers a message or describe what they are seeing •"
+        footer2 = ""
     else:
-        footer1 = "[c] cam IPs \u2022 [\u2190\u2192] preview \u2022 [m] mssg edit \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+        if _footer_locked:
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+        else:
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [m] mssg edit \u2022 [l] mssg lock \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
         footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
-    _items = (footer1 + " \u2022 " + footer2).split(" \u2022 ")
+    _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
     _all = []
     _cur = ""
     for _item in _items:
@@ -958,7 +978,7 @@ def draw_footer(scr, editing):
 # ---------- MAIN ----------
 def main(scr):
     global repair_status, broadcast_mode, broadcast_buffer
-    global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff
+    global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff, confirm_clear, _footer_locked
     global camhub_mode, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_slots, camhub_confirm_clear
 
     threading.Thread(target=smart_worker, daemon=True).start()
@@ -1008,14 +1028,20 @@ def main(scr):
             _msg_inner_w = _rw - 4
             _msg_inner_h = _bot_h - 2
             _buf_before  = broadcast_buffer[:broadcast_cursor]
+            _wrap_w      = 32
             _cur_lines   = []
             for _para in _buf_before.split('\n'):
-                _cur_lines.extend(textwrap.wrap(_para, _msg_inner_w) or [''])
+                _cur_lines.extend(textwrap.wrap(_para, _wrap_w) or [''])
             _cur_row = min(len(_cur_lines) - 1, _msg_inner_h - 1) if _cur_lines else 0
-            _cur_col = len(_cur_lines[-1]) if _cur_lines else 0
+            _last_para = _buf_before.split('\n')[-1]
+            _trailing  = len(_last_para) - len(_last_para.rstrip(' '))
+            _cur_col = (len(_cur_lines[-1]) if _cur_lines else 0) + _trailing
+            if _cur_col >= _wrap_w:
+                _cur_row += 1
+                _cur_col  = 0
             try:
-                scr.move(_bot_y + 1 + _cur_row,
-                         min(_rx + 2 + _cur_col, _w - 1))
+                scr.move(_bot_y + 3 + _cur_row,
+                         min(_rx + 3 + _cur_col, _w - 1))
             except curses.error:
                 pass
 
@@ -1119,7 +1145,7 @@ def main(scr):
             continue
 
         # -- LIVE DASHBOARD MODE --
-        if confirm_repair or confirm_service or confirm_onoff:
+        if confirm_repair or confirm_service or confirm_onoff or confirm_clear:
             scr.timeout(-1)
         else:
             scr.timeout(500)
@@ -1144,6 +1170,12 @@ def main(scr):
             if k == ord('y'):
                 threading.Thread(target=run_service_onoff, daemon=True).start()
             confirm_onoff = False
+        elif confirm_clear:
+            if k == ord('y'):
+                err = write_broadcast('')
+                if not err:
+                    broadcast_current = ''
+            confirm_clear = False
         elif k == ord('r'):
             confirm_repair = True
         elif k == ord('p'):
@@ -1205,6 +1237,9 @@ def main(scr):
                     pass
             threading.Thread(target=_buzz, daemon=True).start()
         elif k == ord('c'):
+            if broadcast_current and snap.get('msg_lock', 'false') != 'true':
+                confirm_clear = True
+        elif k == ord('i'):
             camhub_slots = read_cams()
             while len(camhub_slots) < 4: camhub_slots.append({"label":"","ip":"","stream_path":"","pinned":False})
             camhub_cursor = 0
@@ -1221,6 +1256,7 @@ def main(scr):
         with repair_lock:
             cur_repair = repair_status
         broadcast_current = read_broadcast()
+        _footer_locked = snap.get('msg_lock', 'false') == 'true'
 
         scr.erase()
         draw_dashboard(scr, snap, cur_repair, dim=False)
