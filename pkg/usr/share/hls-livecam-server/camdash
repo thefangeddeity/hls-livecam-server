@@ -34,6 +34,7 @@ widget_pixels_gray  = None
 widget_pixels_color = None
 widget_box_dims    = [None]
 widget_pan_cols    = [0]
+widget_expand      = False
 confirm_repair  = False
 confirm_service = False
 confirm_onoff   = False
@@ -442,7 +443,7 @@ def run_service_onoff():
 # ---------- UI HELPERS ----------
 def safe(scr, y, x, s, a=0):
     try:
-        scr.addstr(y, x, s[:max(0, scr.getmaxyx()[1] - x - 1)], a)
+        scr.addstr(y, x, s[:max(0, scr.getmaxyx()[1] - x)], a)
     except:
         pass
 
@@ -685,6 +686,27 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     _use_color = not dark and widget_pixels_color is not None
     _use_gray  = dark  and widget_pixels_gray  is not None
     has_feed   = (_use_color or _use_gray) and not dim and not camhub_mode
+    if widget_expand and has_feed:
+        _wpx = widget_pixels_color if _use_color else widget_pixels_gray
+        _avail_h = h - 3
+        widget_box_dims[0] = (w, _avail_h)
+        if _wpx and _wpx[0]:
+            _raster_h = len(_wpx)
+            _raster_w = len(_wpx[0])
+            _row_off = max(0, (_avail_h - _raster_h) // 2)
+            _x_off = max(0, (w - _raster_w) // 2)
+            _col_start = max(0, (_raster_w - w) // 2)
+            for _wr, _row in enumerate(_wpx[:_avail_h]):
+                _visible = _row[_col_start:_col_start + w]
+                for _wc, (_fgi, _bgi) in enumerate(_visible):
+                    _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
+                    try:
+                        safe(scr, _row_off + _wr, _x_off + _wc, "\u2580", curses.color_pair(_pair))
+                    except curses.error:
+                        pass
+            _pan_hint = " \u2022 [\u2190\u2192] pan" if _raster_w > w else ""
+            safe(scr, h - 2, 0, "[x] collapse" + _pan_hint + " \u2022 [q] quit")
+        return
     box(scr, top_y, 0,  top_h, lw, "DISK / SMART", base)
     if has_feed:
         box(scr, top_y, cx, top_h, cw, "FEED",      base)
@@ -732,19 +754,23 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     assess_attr = curses.A_DIM if dim else (
         curses.color_pair(1) | curses.A_BOLD if assess_val == "PASSED"
         else curses.color_pair(3) | curses.A_BOLD)
+    _smart_na = si.get("SMART", "") == "N/A"
 
     _clip = lw - 3
     dy = top_y + 1
     safe(scr, dy, 2, f"DISK: {si.get('DISK','?')}"[:_clip],
          curses.A_DIM if dim else curses.color_pair(1));                         dy += 1
-    safe(scr, dy, 2, f"ASSESS: {assess_val}"[:_clip],    assess_attr);          dy += 1
-    safe(scr, dy, 2, f"RISK: {risk}"[:_clip],            risk_attr);            dy += 1
-    if warn_partial:
-        safe(scr, dy, 2, "SMART: WARN"[:_clip],
-             curses.A_DIM if dim else curses.color_pair(2) | curses.A_BOLD);    dy += 1
-    safe(scr, dy, 2, f"REALLOC: {si.get('REALLOC','?')}"[:_clip], sattr("REALLOC")); dy += 1
-    safe(scr, dy, 2, f"PENDING: {si.get('PENDING','?')}"[:_clip], sattr("PENDING")); dy += 1
-    safe(scr, dy, 2, f"UNCORR: {si.get('UNCORR','?')}"[:_clip],   sattr("UNCORR"));  dy += 1
+    if _smart_na:
+        safe(scr, dy, 2, "SMART: N/A"[:_clip], curses.A_DIM);                  dy += 1
+    else:
+        safe(scr, dy, 2, f"ASSESS: {assess_val}"[:_clip],    assess_attr);      dy += 1
+        safe(scr, dy, 2, f"RISK: {risk}"[:_clip],            risk_attr);        dy += 1
+        if warn_partial:
+            safe(scr, dy, 2, "SMART: WARN"[:_clip],
+                 curses.A_DIM if dim else curses.color_pair(2) | curses.A_BOLD); dy += 1
+        safe(scr, dy, 2, f"REALLOC: {si.get('REALLOC','N/A')}"[:_clip], sattr("REALLOC")); dy += 1
+        safe(scr, dy, 2, f"PENDING: {si.get('PENDING','N/A')}"[:_clip], sattr("PENDING")); dy += 1
+        safe(scr, dy, 2, f"UNCORR: {si.get('UNCORR','N/A')}"[:_clip],   sattr("UNCORR"));  dy += 1
     temp_val = si.get("DISK TEMP", "?")
     temp_clean = temp_val.rstrip("C") if temp_val != "?" else "?"
     tstr = f"TEMP: {temp_clean}°C" if temp_clean != "?" else "TEMP: ?"
@@ -759,16 +785,26 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
         _wpx = widget_pixels_color if _use_color else widget_pixels_gray
         if _wpx and _wpx[0]:
             _raster_w = len(_wpx[0])
-            _pan = max(0, min(widget_pan_cols[0], max(0, _raster_w - feed_inner_w)))
-            widget_pan_cols[0] = _pan
-            for _wr, _row in enumerate(_wpx[:feed_inner_h]):
-                _sliced = _row[_pan:_pan + feed_inner_w]
-                for _wc, (_fgi, _bgi) in enumerate(_sliced):
-                    _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
-                    try:
-                        safe(scr, top_y + 1 + _wr, cx + 1 + _wc, "\u2580", curses.color_pair(_pair))
-                    except curses.error:
-                        pass
+            if _raster_w <= feed_inner_w:
+                _x_off = (feed_inner_w - _raster_w) // 2
+                for _wr, _row in enumerate(_wpx[:feed_inner_h]):
+                    for _wc, (_fgi, _bgi) in enumerate(_row):
+                        _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
+                        try:
+                            safe(scr, top_y + 1 + _wr, cx + 1 + _x_off + _wc, "\u2580", curses.color_pair(_pair))
+                        except curses.error:
+                            pass
+            else:
+                _pan = max(0, min(widget_pan_cols[0], _raster_w - feed_inner_w))
+                widget_pan_cols[0] = _pan
+                for _wr, _row in enumerate(_wpx[:feed_inner_h]):
+                    _sliced = _row[_pan:_pan + feed_inner_w]
+                    for _wc, (_fgi, _bgi) in enumerate(_sliced):
+                        _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
+                        try:
+                            safe(scr, top_y + 1 + _wr, cx + 1 + _wc, "\u2580", curses.color_pair(_pair))
+                        except curses.error:
+                            pass
 
     # -- SYSTEM content --
     sys_inner_w = rw - 4
@@ -864,7 +900,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
             pass
 
     # -- MESSAGE content --
-    TA_W = 34
+    TA_W = rw - 4
     TA_H = 4
     ta_x = rx + 1
     ta_y = bot_y + 3
@@ -962,10 +998,10 @@ def draw_footer(scr, editing, svc=False):
             footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
             footer2 = ""
         elif _footer_locked:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [x] expand \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
         else:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [x] expand \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
     _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
@@ -990,6 +1026,7 @@ def main(scr):
     global repair_status, broadcast_mode, broadcast_buffer
     global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff, confirm_clear, _footer_locked
     global camhub_mode, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_slots, camhub_confirm_clear
+    global widget_expand
 
     threading.Thread(target=smart_worker, daemon=True).start()
     threading.Thread(target=hls_worker,   daemon=True).start()
@@ -1017,6 +1054,7 @@ def main(scr):
     frozen_snap   = None
     frozen_repair = "IDLE"
     broadcast_cursor = 0
+    last_buzz_ts = None
 
     while True:
         if broadcast_mode:
@@ -1038,7 +1076,7 @@ def main(scr):
             _msg_inner_w = _rw - 4
             _msg_inner_h = _bot_h - 2
             _buf_before  = broadcast_buffer[:broadcast_cursor]
-            _wrap_w      = 32
+            _wrap_w      = rw - 6
             _cur_lines   = []
             for _para in _buf_before.split('\n'):
                 _cur_lines.extend(textwrap.wrap(_para, _wrap_w) or [''])
@@ -1100,7 +1138,8 @@ def main(scr):
             broadcast_current = read_broadcast()
             scr.erase()
             draw_dashboard(scr, snap, cur_repair, dim=False)
-            draw_footer(scr, editing=False, svc=snap.get("svc", False))
+            if not widget_expand:
+                draw_footer(scr, editing=False, svc=snap.get("svc", False))
             scr.refresh()
             scr.timeout(-1 if camhub_confirm_clear else 500)
             k = scr.getch()
@@ -1247,6 +1286,8 @@ def main(scr):
                     pass
             threading.Thread(target=_toggle_bw, daemon=True).start()
         elif k == ord('z'):
+            curses.flash()
+            curses.beep()
             def _buzz():
                 import urllib.request
                 try:
@@ -1270,16 +1311,31 @@ def main(scr):
             widget_pan_cols[0] = max(0, widget_pan_cols[0] - 2)
         elif k == curses.KEY_RIGHT:
             widget_pan_cols[0] = widget_pan_cols[0] + 2
+        elif k == ord('x'):
+            widget_expand = not widget_expand
+            widget_pan_cols[0] = 0
 
         snap = sample_metrics()
         with repair_lock:
             cur_repair = repair_status
         broadcast_current = read_broadcast()
+        try:
+            with open('/var/www/hls-livecam/buzz.txt') as _bf:
+                _bts = _bf.read().strip()
+            if last_buzz_ts is None:
+                last_buzz_ts = _bts
+            elif _bts != last_buzz_ts:
+                last_buzz_ts = _bts
+                curses.flash()
+                curses.beep()
+        except Exception:
+            pass
         _footer_locked = snap.get('msg_lock', 'false') == 'true'
 
         scr.erase()
         draw_dashboard(scr, snap, cur_repair, dim=False)
-        draw_footer(scr, editing=False, svc=snap.get("svc", False))
+        if not widget_expand:
+            draw_footer(scr, editing=False, svc=snap.get("svc", False))
         scr.refresh()
 
 
