@@ -497,6 +497,8 @@ $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam ngin
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl start mediamtx ffmpeg-cam nginx broadcast-api
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
 $SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl disable --now mediamtx ffmpeg-cam nginx broadcast-api
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl enable --now mediamtx ffmpeg-cam nginx broadcast-api
 EOF
   chown root:root /etc/sudoers.d/hls-livecam-services
   chmod 440 /etc/sudoers.d/hls-livecam-services
