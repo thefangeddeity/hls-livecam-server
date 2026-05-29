@@ -40,6 +40,7 @@ confirm_service = False
 confirm_onoff   = False
 confirm_clear   = False
 _footer_locked  = False
+_intentional_off = False
 
 camhub_mode       = False
 camhub_cursor     = 0
@@ -423,19 +424,26 @@ def services_enabled():
         return False
 
 def run_service_onoff():
+    global _intentional_off
     if services_enabled():
+        _intentional_off = True
         try:
-            subprocess.run(["sudo", "-n", "systemctl", "disable", "--now"] + SERVICES,
+            shared = _is_nginx_shared()
+            svcs = [s for s in SERVICES if not (s == "nginx" and shared)]
+            subprocess.run(["sudo", "-n", "systemctl", "disable", "--now"] + svcs,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
             subprocess.run(["sudo", "-n", "systemctl", "mask", "ffmpeg-cam"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         except Exception:
             pass
     else:
+        _intentional_off = False
         try:
+            shared = _is_nginx_shared()
+            svcs = [s for s in SERVICES if not (s == "nginx" and shared)]
             subprocess.run(["sudo", "-n", "systemctl", "unmask", "ffmpeg-cam"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-            subprocess.run(["sudo", "-n", "systemctl", "enable", "--now"] + SERVICES,
+            subprocess.run(["sudo", "-n", "systemctl", "enable", "--now"] + svcs,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
         except Exception:
             pass
@@ -466,12 +474,21 @@ def led(val, dim=False):
     if val < 80:   return curses.color_pair(2) | curses.A_BOLD
     return curses.color_pair(3) | curses.A_BOLD
 
+def _is_nginx_shared():
+    import glob
+    try:
+        others = [f for f in glob.glob("/etc/nginx/sites-enabled/*")
+                  if "hls-livecam" not in f]
+        return len(others) > 0
+    except Exception:
+        return False
+
 def status_attr(status, dim=False):
     if dim:
         return curses.A_DIM
     if status in ("LIVE", "OK"):
         return curses.color_pair(1) | curses.A_BOLD
-    if status in ("DEGRADED", "RUNNING"):
+    if status in ("DEGRADED", "RUNNING", "SHARED"):
         return curses.color_pair(2) | curses.A_BOLD
     if status in ("ERROR", "DOWN", "FAIL"):
         return curses.color_pair(3) | curses.A_BOLD
@@ -848,8 +865,16 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 2, f"mediamtx: {'LIVE' if mm else 'DOWN'}",
          status_attr('LIVE' if mm else 'DOWN', dim));   y += 1
     safe(scr, y, 2, f"HLS:      {hls}", status_attr(hls, dim));                  y += 1
-    safe(scr, y, 2, f"nginx:    {'LIVE' if nginx else 'DOWN'}",
-         status_attr('LIVE' if nginx else 'DOWN', dim)); y += 1
+    _nginx_shared = _is_nginx_shared()
+    if _nginx_shared:
+        _nginx_label = "SHARED"
+        _nginx_status = "LIVE" if (svc or _intentional_off) else "SHARED"
+        _nginx_attr = status_attr("LIVE" if svc else "SHARED", dim)
+    else:
+        _nginx_label = "LIVE" if nginx else "DOWN"
+        _nginx_status = _nginx_label
+        _nginx_attr = status_attr(_nginx_status, dim)
+    safe(scr, y, 2, f"nginx:    {_nginx_label}", _nginx_attr); y += 1
     _feed_mode = snap.get('feed_mode', 'show')
     _showing  = _feed_mode == 'show'
     _cloaking = _feed_mode == 'cloak'
