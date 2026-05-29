@@ -394,6 +394,8 @@ def run_dark_toggle():
 SERVICES = ["mediamtx", "ffmpeg-cam", "nginx", "broadcast-api"]
 
 def services_running():
+    if _is_nginx_shared():
+        return proc("mediamtx") or proc("broadcast-api")
     return proc("mediamtx") or proc("nginx")
 
 def run_service_toggle():
@@ -416,8 +418,9 @@ def run_service_toggle():
 
 def services_enabled():
     try:
+        svc_check = "mediamtx" if _is_nginx_shared() else "nginx"
         result = subprocess.run(
-            ["systemctl", "is-enabled", "nginx"],
+            ["systemctl", "is-enabled", svc_check],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3)
         return result.stdout.decode().strip() == "enabled"
     except Exception:
