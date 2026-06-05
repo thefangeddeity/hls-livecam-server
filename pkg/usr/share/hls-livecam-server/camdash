@@ -1104,7 +1104,7 @@ def main(scr):
             _msg_inner_w = _rw - 4
             _msg_inner_h = _bot_h - 2
             _buf_before  = broadcast_buffer[:broadcast_cursor]
-            _wrap_w      = rw - 6
+            _wrap_w      = _rw - 6
             _cur_lines   = []
             for _para in _buf_before.split('\n'):
                 _cur_lines.extend(textwrap.wrap(_para, _wrap_w) or [''])

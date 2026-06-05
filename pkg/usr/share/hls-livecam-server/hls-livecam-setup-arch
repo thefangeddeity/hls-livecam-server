@@ -227,6 +227,7 @@ SUDO_USER_NAME=$(logname 2>/dev/null || echo "$SUDO_USER")
 if [ -n "$SUDO_USER_NAME" ]; then
   usermod -aG video "$SUDO_USER_NAME" 2>/dev/null || true
   usermod -aG wheel "$SUDO_USER_NAME" 2>/dev/null || true
+  usermod -aG http "$SUDO_USER_NAME" 2>/dev/null || true
 fi
 usermod -aG video http 2>/dev/null || true
 echo -e "  ${GREEN}Added http to video group.${NC}"
