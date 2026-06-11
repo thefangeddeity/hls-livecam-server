@@ -35,6 +35,24 @@ widget_pixels_color = None
 widget_box_dims    = [None]
 widget_pan_cols    = [0]
 widget_expand      = False
+
+FEED_STATE_FILE = "/var/lib/hls-livecam/camdash-feed.state"
+
+def _read_feed_state():
+    try:
+        with open(FEED_STATE_FILE) as f:
+            return f.read().strip() == "on"
+    except:
+        return False
+
+def _write_feed_state(val):
+    try:
+        with open(FEED_STATE_FILE, "w") as f:
+            f.write("on" if val else "off")
+    except:
+        pass
+
+feed_preview_on = _read_feed_state()
 confirm_repair  = False
 confirm_service = False
 confirm_onoff   = False
@@ -153,13 +171,14 @@ def get_hls():
 # ---------- SMART WORKER ----------
 def get_main_disk():
     try:
-        out = subprocess.check_output(
-            ["lsblk", "-d", "-n", "-o", "NAME,TYPE"], text=True
-        )
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and parts[1] == "disk":
-                return f"/dev/{parts[0]}"
+        src_dev = subprocess.check_output(
+            ["findmnt", "-n", "-o", "SOURCE", "/"], text=True
+        ).strip()
+        pkname = subprocess.check_output(
+            ["lsblk", "-no", "PKNAME", src_dev], text=True
+        ).strip()
+        if pkname:
+            return f"/dev/{pkname}"
     except:
         pass
     return "/dev/sda"
@@ -571,6 +590,9 @@ def snap_worker():
     global widget_pixels_gray, widget_pixels_color
     while True:
         try:
+            if not feed_preview_on:
+                time.sleep(0.5)
+                continue
             dims = widget_box_dims[0]
             if dims is None:
                 time.sleep(0.5)
@@ -705,7 +727,7 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     # ============================================================
     _use_color = not dark and widget_pixels_color is not None
     _use_gray  = dark  and widget_pixels_gray  is not None
-    has_feed   = (_use_color or _use_gray) and not dim and not camhub_mode
+    has_feed   = (_use_color or _use_gray) and not dim and not camhub_mode and feed_preview_on
     if widget_expand and has_feed:
         _wpx = widget_pixels_color if _use_color else widget_pixels_gray
         _avail_h = h - 3
@@ -815,7 +837,10 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
                         except curses.error:
                             pass
             else:
-                _pan = max(0, min(widget_pan_cols[0], _raster_w - feed_inner_w))
+                if widget_pan_cols[0] < 0:
+                    _pan = (_raster_w - feed_inner_w) // 2
+                else:
+                    _pan = max(0, min(widget_pan_cols[0], _raster_w - feed_inner_w))
                 widget_pan_cols[0] = _pan
                 for _wr, _row in enumerate(_wpx[:feed_inner_h]):
                     _sliced = _row[_pan:_pan + feed_inner_w]
@@ -1023,13 +1048,13 @@ def draw_footer(scr, editing, svc=False):
         footer2 = ""
     else:
         if not svc:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
             footer2 = ""
         elif _footer_locked:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [x] expand \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
         else:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [x] expand \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
     _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
@@ -1046,7 +1071,7 @@ def draw_footer(scr, editing, svc=False):
     if _cur:
         _all.append(_cur)
     for _i, _line in enumerate(_all[-(h - 2):]):
-        safe(scr, h - len(_all) + _i, 2, _line, curses.color_pair(4))
+        safe(scr, h - len(_all) + _i, 2, _line, curses.color_pair(6))
 
 
 # ---------- MAIN ----------
@@ -1054,7 +1079,7 @@ def main(scr):
     global repair_status, broadcast_mode, broadcast_buffer
     global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff, confirm_clear, _footer_locked
     global camhub_mode, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_slots, camhub_confirm_clear
-    global widget_expand
+    global widget_expand, feed_preview_on
 
     threading.Thread(target=smart_worker, daemon=True).start()
     threading.Thread(target=hls_worker,   daemon=True).start()
@@ -1068,6 +1093,7 @@ def main(scr):
     curses.init_pair(3, curses.COLOR_RED,    -1)
     curses.init_pair(4, curses.COLOR_WHITE,  -1)
     curses.init_pair(5, curses.COLOR_CYAN,   -1)
+    curses.init_pair(6, 244,                -1)
     _gp = 10
     for _fg in GRAY_STEPS:
         for _bg in GRAY_STEPS:
@@ -1336,12 +1362,25 @@ def main(scr):
             camhub_mode = True
             continue
         elif k == curses.KEY_LEFT:
-            widget_pan_cols[0] = max(0, widget_pan_cols[0] - 2)
+            if widget_pan_cols[0] < 0:
+                widget_pan_cols[0] = 0
+            else:
+                widget_pan_cols[0] = max(0, widget_pan_cols[0] - 2)
         elif k == curses.KEY_RIGHT:
-            widget_pan_cols[0] = widget_pan_cols[0] + 2
-        elif k == ord('x'):
+            if widget_pan_cols[0] < 0:
+                widget_pan_cols[0] = 0
+            else:
+                widget_pan_cols[0] = widget_pan_cols[0] + 2
+        elif k == ord('x') and feed_preview_on:
             widget_expand = not widget_expand
-            widget_pan_cols[0] = 0
+            widget_pan_cols[0] = -1
+        elif k == ord('f'):
+            feed_preview_on = not feed_preview_on
+            _write_feed_state(feed_preview_on)
+            widget_pan_cols[0] = -1
+            if not feed_preview_on:
+                widget_pixels_gray  = None
+                widget_pixels_color = None
 
         snap = sample_metrics()
         with repair_lock:
