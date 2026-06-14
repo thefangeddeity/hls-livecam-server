@@ -327,7 +327,7 @@ def draw_camhub_pane(scr, y, x, h, w, base):
     global camhub_slots, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_confirm_clear
     box(scr, y, x, h, w, "CAMS", base)
     inner_w = w - 4
-    col_w = [10, 15]
+    col_w = [12, 15]
     for i in range(4):
         slot = camhub_slots[i] if i < len(camhub_slots) else {"label":"","ip":"","stream_path":"","pinned":False}
         row_y = y + 2 + i
@@ -348,7 +348,7 @@ def draw_camhub_pane(scr, y, x, h, w, base):
         else:
             label = slot.get("label","") or "(empty)"
             ip    = slot.get("ip","") or ""
-            line  = "[{}] {:<10} {}".format(pin, label[:10], ip[:15])
+            line  = "[{}] {:<12} {}".format(pin, label[:12], ip[:15])
             attr  = (curses.color_pair(2) | curses.A_BOLD) if i == camhub_cursor else base
             safe(scr, row_y, x + 2, line[:inner_w], attr)
     if camhub_confirm_clear:
@@ -1220,7 +1220,9 @@ def main(scr):
                 elif k in (curses.KEY_BACKSPACE, 127, 8):
                     camhub_edit_buf = camhub_edit_buf[:-1]
                 elif 32 <= k <= 126:
-                    camhub_edit_buf += chr(k)
+                    _cap = 12 if camhub_edit_field == 0 else 15
+                    if len(camhub_edit_buf) < _cap:
+                        camhub_edit_buf += chr(k)
             else:
                 if k in (ord('i'), 27):
                     camhub_mode = False
