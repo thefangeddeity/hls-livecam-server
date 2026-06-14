@@ -4,7 +4,7 @@ camdash — hls-livecam-server monitor
 Version: 3.0.0
 Launch with: camdash
 """
-import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap, socket
+import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap, socket, sys, termios
 from PIL import Image
 
 # ---------- STATE ----------
@@ -1086,6 +1086,13 @@ def main(scr):
     threading.Thread(target=snap_worker,  daemon=True).start()
 
     curses.curs_set(0)
+    try:
+        _tfd = sys.stdin.fileno()
+        _tattr = termios.tcgetattr(_tfd)
+        _tattr[0] &= ~termios.IXON
+        termios.tcsetattr(_tfd, termios.TCSANOW, _tattr)
+    except Exception:
+        pass
     curses.start_color()
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_GREEN,  -1)

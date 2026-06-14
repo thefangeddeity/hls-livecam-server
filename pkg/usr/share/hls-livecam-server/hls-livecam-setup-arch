@@ -382,12 +382,12 @@ if [ -n "$SUDO_USER_NAME" ]; then
   chmod 440 /etc/sudoers.d/camdash-smart
   # [s] service toggle
   cat > /etc/sudoers.d/hls-livecam-services << EOF
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl stop mediamtx ffmpeg-cam nginx broadcast-api
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl start mediamtx ffmpeg-cam nginx broadcast-api
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl disable --now mediamtx ffmpeg-cam nginx broadcast-api
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl enable --now mediamtx ffmpeg-cam nginx broadcast-api
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl mask ffmpeg-cam
-$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /bin/systemctl unmask ffmpeg-cam
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl start *
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop *
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable *
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable *
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl mask *
+$SUDO_USER_NAME ALL=(ALL) NOPASSWD: /usr/bin/systemctl unmask *
 EOF
   chown root:root /etc/sudoers.d/hls-livecam-services
   chmod 440 /etc/sudoers.d/hls-livecam-services
