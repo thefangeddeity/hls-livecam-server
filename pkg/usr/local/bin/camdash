@@ -39,12 +39,16 @@ _applied_color_gen  = -1     # last color palette generation pushed to curses (m
 
 FEED_STATE_FILE = "/var/lib/hls-livecam/camdash-feed.state"
 
+# --expanded: kiosk boot into expanded feed view (tina headless launch). Overrides
+# a persisted 'off' feed state for this session; never written to FEED_STATE_FILE.
+EXPANDED_FLAG = "--expanded" in sys.argv[1:]
+
 def _read_feed_state():
     try:
         with open(FEED_STATE_FILE) as f:
             return f.read().strip() == "on"
     except:
-        return False
+        return True   # fresh install (no state file) -> feed ON (v5.2.x default)
 
 def _write_feed_state(val):
     try:
@@ -503,18 +507,28 @@ def _apply_color_palette(gen, palette):
 def _blit_feed(scr, y0, x0, box_cols, box_rows, use_color):
     """Draw the contain-fit halfblock preview at (y0,x0) into a box. The raster
     already carries pre-resolved curses pair numbers; palette swaps land here,
-    between frames. Clips defensively if the box shrank since the frame was fit."""
+    between frames. Clips defensively if the box shrank since the frame was fit.
+
+    Centering is recomputed HERE against the display box, not read from the frame's
+    fit-time offsets — so it can't drift when the display box differs from the box
+    the frame was fit to (expand toggle, terminal resize, boxed<->expand switch).
+    Floor division sends any single odd leftover column to the RIGHT margin, every
+    time; left and right margins therefore differ by at most 1. Same rule vertically."""
     if use_color:
         fr = widget_color_frame
         if not fr:
             return
-        gen, palette, raster, x_off, y_off, _dims = fr
+        gen, palette, raster, _fx, _fy, _dims = fr
         _apply_color_palette(gen, palette)
     else:
         fr = widget_gray_frame
         if not fr:
             return
-        raster, x_off, y_off, _dims = fr
+        raster, _fx, _fy, _dims = fr
+    if not raster or not raster[0]:
+        return
+    x_off = (box_cols - len(raster[0])) // 2   # display-box centered; odd column -> right
+    y_off = (box_rows - len(raster)) // 2
     for ri, prow in enumerate(raster):
         ey = y_off + ri
         if ey < 0:
@@ -955,6 +969,7 @@ def _build_gray_frame(rdata, raster_w, rows_used, x_off, y_off, box_cols, box_ro
         raster.append(prow)
     widget_gray_frame = (raster, x_off, y_off, (box_cols, box_rows))
 def snap_worker():
+    global widget_gray_frame, widget_color_frame
     while True:
         try:
             if not feed_preview_on:
@@ -965,13 +980,15 @@ def snap_worker():
                 time.sleep(0.5)
                 continue
             box_cols, box_rows = dims
-            subprocess.run([
+            _res = subprocess.run([
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-rtsp_transport", "tcp",
                 "-i", WIDGET_RTSP,
                 "-frames:v", "1", WIDGET_SNAP
             ], timeout=6, capture_output=True)
-            if os.path.exists(WIDGET_SNAP):
+            # ffmpeg leaves a STALE WIDGET_SNAP on failure (exits non-zero but the
+            # previous file remains), so gate on the return code, not file existence.
+            if _res.returncode == 0 and os.path.exists(WIDGET_SNAP):
                 src = Image.open(WIDGET_SNAP)
                 iw, ih = src.size
                 raster_w, raster_h, rows_used, x_off, y_off = _contain_fit(
@@ -984,8 +1001,14 @@ def snap_worker():
                                        box_cols, box_rows, lo, gain)
                 _build_gray_frame(rdata, raster_w, rows_used, x_off, y_off,
                                   box_cols, box_rows, lo, gain)
+            else:
+                # capture failed / no fresh snapshot — never paint a stale frame
+                widget_gray_frame  = None
+                widget_color_frame = None
         except Exception:
-            pass
+            # timeout, decode error, etc. — same rule: blank, not stale
+            widget_gray_frame  = None
+            widget_color_frame = None
         _interval = 2
         try:
             with open("/var/lib/hls-livecam/snap_interval") as _f:
@@ -1070,10 +1093,13 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     _use_color = (not dark) and _color_capable and widget_color_frame is not None
     _use_gray  = (not _use_color) and widget_gray_frame is not None
     has_feed   = (_use_color or _use_gray) and not dim and not camhub_mode and feed_preview_on
-    if widget_expand and has_feed:
+    if widget_expand and (has_feed or EXPANDED_FLAG):
+        # EXPANDED_FLAG also takes the full-screen branch with no frame yet (server
+        # off at kiosk boot) -> blank expanded screen, not a fallback to boxed layout.
         _avail_h = h - 3
         widget_box_dims[0] = (w, _avail_h)
-        _blit_feed(scr, 0, 0, w, _avail_h, _use_color)
+        if has_feed:
+            _blit_feed(scr, 0, 0, w, _avail_h, _use_color)
         safe(scr, h - 2, 0, "[x] collapse \u2022 [q] quit")
         return
     box(scr, top_y, 0,  top_h, lw, "DISK / SMART", base)
@@ -1350,7 +1376,7 @@ def draw_footer(scr, editing, svc=False):
         footer2 = ""
     else:
         if not svc:
-            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
+            footer1 = "[i] cam IPs \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
             footer2 = ""
         elif _footer_locked:
             footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
@@ -1415,12 +1441,24 @@ def main(scr):
     _color_capable = curses.COLORS >= 256
     COLOR_BUDGET = max(16, min(min(curses.COLOR_PAIRS, 256) - COLOR_BASE, 190))
 
+    if EXPANDED_FLAG:
+        widget_expand   = True
+        feed_preview_on = True   # kiosk intent; local-only, FEED_STATE_FILE untouched
+
     frozen_snap   = None
     frozen_repair = "IDLE"
     broadcast_cursor = 0
     last_buzz_ts = None
+    snap = sample_metrics()   # defined before first key handling (svc gate reads it)
 
     while True:
+        if not EXPANDED_FLAG:
+            # Converge with other camdash instances each tick. Read happens before
+            # any local [f] handling below, so a same-tick local toggle is never
+            # clobbered by this — it always writes after this read, and the next
+            # tick's read picks up what was just written.
+            feed_preview_on = _read_feed_state()
+
         if broadcast_mode:
             scr.timeout(-1)
             curses.curs_set(1)
@@ -1673,9 +1711,9 @@ def main(scr):
             camhub_edit_buf = ""
             camhub_mode = True
             continue
-        elif k == ord('x') and feed_preview_on:
+        elif k == ord('x') and feed_preview_on and snap.get("svc", False):
             widget_expand = not widget_expand
-        elif k == ord('f'):
+        elif k == ord('f') and snap.get("svc", False):
             feed_preview_on = not feed_preview_on
             _write_feed_state(feed_preview_on)
             if not feed_preview_on:
@@ -1683,6 +1721,12 @@ def main(scr):
                 widget_color_frame = None
 
         snap = sample_metrics()
+        # Server off -> feed has no live source; force the display empty this frame
+        # so a returning server can't flash the pre-shutdown frame. DISPLAY-ONLY:
+        # never touches the persisted feed state file.
+        if not snap.get("svc", False):
+            widget_gray_frame  = None
+            widget_color_frame = None
         with repair_lock:
             cur_repair = repair_status
         broadcast_current = read_broadcast()

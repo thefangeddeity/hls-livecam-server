@@ -369,6 +369,18 @@ fi
 chown root:www-data "$BUZZ_FILE"
 chmod 0664 "$BUZZ_FILE"
 
+# camdash state files (feed toggle, cell-aspect calibration, future siblings) —
+# same rule as broadcast.txt/buzz.txt: root:www-data 664, camdash runs as the
+# logged-in user and needs group-write. chown/chmod unconditionally (not just
+# touch-if-absent) so an upgrade heals a file a prior version left root:root.
+CAMDASH_STATE_FILES=("camdash-feed.state" "cell_aspect")
+for f in "${CAMDASH_STATE_FILES[@]}"; do
+  fpath="$LIB_DIR/$f"
+  [ -f "$fpath" ] || touch "$fpath"
+  chown root:www-data "$fpath"
+  chmod 0664 "$fpath"
+done
+
 # Black dark.png placeholder — used as cloak overlay when feed is hidden.
 # Backed up to dark_orig.png so hls-livecam-dark can restore it on un-hide.
 if [ ! -f "${WEB_ROOT}/dark.png" ]; then

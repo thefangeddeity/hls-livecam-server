@@ -270,6 +270,18 @@ chown root:www-data "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt" 2>/dev/null |
   chown root:http   "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt" 2>/dev/null || true
 chmod 0664 "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt"
 
+# camdash state files (feed toggle, cell-aspect calibration, future siblings) —
+# same rule as broadcast.txt/buzz.txt: root:http 664, camdash runs as the
+# logged-in user and needs group-write. chown/chmod unconditionally (not just
+# touch-if-absent) so an upgrade heals a file a prior version left root:root.
+CAMDASH_STATE_FILES=("camdash-feed.state" "cell_aspect")
+for f in "${CAMDASH_STATE_FILES[@]}"; do
+  fpath="$LIB_DIR/$f"
+  [ -f "$fpath" ] || touch "$fpath"
+  chown root:www-data "$fpath" 2>/dev/null || chown root:http "$fpath" 2>/dev/null || true
+  chmod 0664 "$fpath"
+done
+
 # dark.png placeholder
 [ -f "$WEB_ROOT/dark.png" ] || convert -size 1280x720 xc:black "$WEB_ROOT/dark.png" 2>/dev/null || \
   python3 -c "

@@ -1,1 +1,0 @@
-http ALL=(ALL) NOPASSWD: /usr/local/bin/hls-livecam-dark
