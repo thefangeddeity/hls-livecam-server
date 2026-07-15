@@ -30,11 +30,12 @@ broadcast_mode = False
 broadcast_buffer = ""
 broadcast_current = ""
 broadcast_error = ""
-widget_pixels_gray  = None
-widget_pixels_color = None
-widget_box_dims    = [None]
-widget_pan_cols    = [0]
-widget_expand      = False
+widget_gray_frame   = None   # (raster_pairnums, x_off, y_off, box_dims)
+widget_color_frame  = None   # (gen, palette, raster_pairnums, x_off, y_off, box_dims)
+widget_box_dims     = [None]
+widget_expand       = False
+_color_capable      = False  # set in main() from curses.COLORS
+_applied_color_gen  = -1     # last color palette generation pushed to curses (main thread)
 
 FEED_STATE_FILE = "/var/lib/hls-livecam/camdash-feed.state"
 
@@ -485,6 +486,49 @@ def box(scr, y, x, h, w, title, a=0):
         safe(scr, y + i, x + w - 1, "│", a)
     safe(scr, y + h - 1, x, "└" + "─" * (w - 2) + "┘", a)
 
+def _apply_color_palette(gen, palette):
+    """Push a color-palette generation into curses pairs — main thread only, and
+    only between frames (called before blitting). init_pair SELECTS fixed colors;
+    it never redefines them, so nothing global is mutated and nothing can leak."""
+    global _applied_color_gen
+    if gen == _applied_color_gen or not palette:
+        return
+    for i, (f_idx, b_idx) in enumerate(palette):
+        try:
+            curses.init_pair(COLOR_BASE + i, f_idx, b_idx)
+        except curses.error:
+            pass
+    _applied_color_gen = gen
+
+def _blit_feed(scr, y0, x0, box_cols, box_rows, use_color):
+    """Draw the contain-fit halfblock preview at (y0,x0) into a box. The raster
+    already carries pre-resolved curses pair numbers; palette swaps land here,
+    between frames. Clips defensively if the box shrank since the frame was fit."""
+    if use_color:
+        fr = widget_color_frame
+        if not fr:
+            return
+        gen, palette, raster, x_off, y_off, _dims = fr
+        _apply_color_palette(gen, palette)
+    else:
+        fr = widget_gray_frame
+        if not fr:
+            return
+        raster, x_off, y_off, _dims = fr
+    for ri, prow in enumerate(raster):
+        ey = y_off + ri
+        if ey < 0:
+            continue
+        if ey >= box_rows:
+            break
+        for ci, pn in enumerate(prow):
+            ex = x_off + ci
+            if ex < 0:
+                continue
+            if ex >= box_cols:
+                break
+            safe(scr, y0 + ey, x0 + ex, "▀", curses.color_pair(pn))
+
 def bar(val, w):
     filled = int((val / 100.0) * w)
     return "\u2588" * filled + "\u2591" * (w - filled)
@@ -577,17 +621,340 @@ WIDGET_SNAP = "/tmp/camsnap_widget.jpg"
 WIDGET_RTSP = "rtsp://127.0.0.1:8554/cam"
 WIDGET_COLS = 110
 WIDGET_ROWS = 32
-GRAY_STEPS    = [232, 238, 244, 250, 254, 255]
-OCEAN_PALETTE = [232, 236, 240, 66, 95, 101, 102, 109, 137, 144, 246, 251]
+GRAY_STEPS    = [232, 238, 244, 250, 254, 255]   # dark-mode / no-truecolor luminance ramp
 
+# ── Preview geometry ──────────────────────────────────────────────────────────
+# Terminal cell aspect (width:height) of the *rendered font*, not a universal
+# constant — it varies by font/terminal and MUST be calibrated per box or the
+# preview stretches uniformly. On-screen aspect = source * (A_true / CELL_ASPECT),
+# so if CELL_ASPECT is too small the image renders too wide (0.45 rendered ~7.5%
+# wide on tanzania's font: true cell aspect there is ~0.483).
+#
+# CALIBRATION PROCEDURE (per terminal/font; result goes in CELL_ASPECT_FILE):
+#   1. Render a synthetic square through the live pipeline on the target terminal.
+#   2. Screenshot it; measure rendered width W and height H in pixels.
+#   3. new = CELL_ASPECT_now * (W / H)   (rendered-wide -> W>H -> increases it).
+#   4. Write `new` to /var/lib/hls-livecam/cell_aspect; re-check until square<2%.
+# NOTE: the (raster_w/raster_h)*(2*CELL_ASPECT) self-check CANNOT catch a bad
+# value — CELL_ASPECT cancels in it. Only a ruler on a real screenshot can.
+CELL_ASPECT      = 0.45   # code default; tanzania's calibrated value lives in the file
+CELL_ASPECT_FILE = "/var/lib/hls-livecam/cell_aspect"
 
-def _fit_height(img, target_h):
-    iw, ih = img.size
-    scale = target_h / ih
-    nw = max(1, int(iw * scale))
-    return img.resize((nw, target_h), Image.LANCZOS)
+def _get_cell_aspect():
+    try:
+        v = float(open(CELL_ASPECT_FILE).read().strip())
+        if 0.2 <= v <= 1.0:
+            return v
+    except Exception:
+        pass
+    return CELL_ASPECT
+
+# ── Fixed xterm-240 palette (Architecture B: SELECTION only, never init_color) ──
+# 6x6x6 color cube (indices 16-231) + 24-step gray ramp (232-255). The low 16 are
+# theme-dependent across terminals and deliberately excluded. Nothing here mutates
+# terminal-global state, so a crash can corrupt nothing and there is nothing to
+# restore. Preserving that can't-corrupt property is why B was chosen.
+# NOTE (future Architecture A): higher fidelity would layer on top of this
+# fallback path by redefining the clustered centroids into palette slots via
+# init_color, guarded by a capability probe + OSC-104 startup heal. Out of scope.
+CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+_GRAY_RAMP  = tuple(8 + 10 * k for k in range(24))   # xterm 232..255 gray values
+
+COLOR_BASE   = 64    # curses pair numbers 64.. hold the adaptive color palette
+COLOR_BUDGET = 96    # resolved from curses.COLOR_PAIRS in main(); 96 is the floor
+TONE_ALPHA    = 0.3  # temporal smoothing of stretch anchors (exposure de-pump)
+HIST_ALPHA    = 0.3  # temporal smoothing of the color histogram
+REBUILD_EVERY = 5    # rebuild the palette every N snapshots (separate slow clock)
+
+# ---------- COLOR ENGINE (Architecture B) ----------
+def _contain_fit(img_w, img_h, box_cols, box_rows, cell_aspect=None):
+    """Contain-fit an image into a character box, halfblock vertical packing.
+    Returns (raster_w, raster_h, rows_used, x_off, y_off). Everything fits inside
+    the box centered (pillarbox + letterbox); nothing overflows, nothing pans.
+
+    On-screen aspect is (raster_w/raster_h)*(2*cell_aspect); we want that to equal
+    the source aspect, so the target pixel ratio is R = src / (2*cell_aspect).
+    Halfblock forces raster_h even (2 px/char row), so we can't hit R exactly at
+    small sizes. Rather than truncate (which stretched awkward boxes by ~8%), we
+    search even heights, derive width from R, and keep the LARGEST raster whose
+    ratio error stays tight — falling back to the least-distorted option when the
+    pixel budget is too small to hit tolerance (e.g. a 10-wide box). Never stretches;
+    only letterboxes/pillarboxes."""
+    if cell_aspect is None:
+        cell_aspect = CELL_ASPECT
+    avail_w = box_cols
+    avail_h = box_rows * 2
+    src = img_w / img_h
+    R = src / (2.0 * cell_aspect)                      # desired raster_w / raster_h
+    TOL = 0.015                                        # margin under the 2% acceptance
+    best_ok = None      # (area, rw, rh) among options within TOL — maximize size
+    best_any = None     # (err, rw, rh) overall — minimize distortion (tiny boxes)
+    for rh in range(2, avail_h + 1, 2):
+        rw = max(1, round(rh * R))
+        if rw > avail_w:
+            break                                      # taller only overflows further
+        err = abs((rw / rh) * (2.0 * cell_aspect) - src) / src
+        if best_any is None or err < best_any[0]:
+            best_any = (err, rw, rh)
+        if err <= TOL and (best_ok is None or rw * rh > best_ok[0]):
+            best_ok = (rw * rh, rw, rh)
+    if best_ok is not None:
+        _, raster_w, raster_h = best_ok
+    elif best_any is not None:
+        _, raster_w, raster_h = best_any
+    else:                                              # box too small for any fit
+        raster_w, raster_h = max(1, min(avail_w, round(2 * R))), 2
+    rows_used = raster_h // 2
+    x_off = (box_cols - raster_w) // 2
+    y_off = (box_rows - rows_used) // 2
+    return raster_w, raster_h, rows_used, x_off, y_off
+
+def _srgb_to_lab(r, g, b):
+    """sRGB (0-255) -> CIE L*a*b* (D65, 2° observer). Textbook linearize -> XYZ -> Lab."""
+    def _lin(c):
+        c /= 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    rl, gl, bl = _lin(r), _lin(g), _lin(b)
+    x = (rl * 0.4124564 + gl * 0.3575761 + bl * 0.1804375) / 0.95047
+    y = (rl * 0.2126729 + gl * 0.7151522 + bl * 0.0721750)
+    z = (rl * 0.0193339 + gl * 0.1191920 + bl * 0.9503041) / 1.08883
+    def _f(t):
+        return t ** (1.0 / 3.0) if t > 0.008856 else 7.787 * t + 16.0 / 116.0
+    fx, fy, fz = _f(x), _f(y), _f(z)
+    return (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
+
+_PALETTE_LAB = None   # [(xterm_idx, rep_rgb, (L,a,b)), ...] for all 240 entries; built once
+def _ensure_palette_lab():
+    global _PALETTE_LAB
+    if _PALETTE_LAB is None:
+        _PALETTE_LAB = [(i, _rep_rgb(i), _srgb_to_lab(*_rep_rgb(i))) for i in range(16, 256)]
+
+def _redmean_sq(c1, c2):
+    """Redmean color distance, squared. Used only for pair-space clustering/assignment,
+    where the points are already Lab-matched 240 colors (so no tone bias to reintroduce)."""
+    r1, g1, b1 = c1; r2, g2, b2 = c2
+    rbar = (r1 + r2) * 0.5
+    dr = r1 - r2; dg = g1 - g2; db = b1 - b2
+    return (2 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2 + (255 - rbar) / 256.0) * db * db
+
+_match_memo = {}
+def _match_240(rgb):
+    """Nearest of ALL 240 fixed palette colors in CIE L*a*b* (ΔE76 Euclidean). Lab is
+    perceptually uniform in darkness, so desaturated warm/dark midtones (wood, shadowed
+    teal) land on the neutral ramp instead of a saturated cube corner — the earlier
+    redmean two-candidate shortcut biased them onto 'lava'. The ramp wins neutrals with
+    no saturation threshold. Returns (xterm_idx, rep_rgb). Memoized per input RGB."""
+    hit = _match_memo.get(rgb)
+    if hit is not None:
+        return hit
+    _ensure_palette_lab()
+    L, a, b = _srgb_to_lab(*rgb)
+    best_idx = 16; best_rep = (0, 0, 0); best_d = 1e30
+    for idx, rep, (pL, pa, pb) in _PALETTE_LAB:
+        dL = L - pL; da = a - pa; db = b - pb
+        d = dL * dL + da * da + db * db
+        if d < best_d:
+            best_d = d; best_idx = idx; best_rep = rep
+    res = (best_idx, best_rep)
+    if len(_match_memo) < 200000:
+        _match_memo[rgb] = res
+    return res
+
+def _rep_rgb(idx):
+    """RGB of a fixed-240 xterm index (16-255)."""
+    if idx >= 232:
+        v = _GRAY_RAMP[idx - 232]
+        return (v, v, v)
+    i = idx - 16
+    return (CUBE_LEVELS[i // 36], CUBE_LEVELS[(i // 6) % 6], CUBE_LEVELS[i % 6])
+
+def _pair_dist(p, q):
+    """Distance between two 6-D (fg_rgb, bg_rgb) points."""
+    return (_redmean_sq((p[0], p[1], p[2]), (q[0], q[1], q[2])) +
+            _redmean_sq((p[3], p[4], p[5]), (q[3], q[4], q[5])))
+
+def _snap_pair(point):
+    """Snap a 6-D centroid to a fixed-240 (fg_idx, bg_idx) pair."""
+    return _match_240((point[0], point[1], point[2]))[0], _match_240((point[3], point[4], point[5]))[0]
+
+def _kmeans_pairs(items, k, iters=6):
+    """Weighted k-means in PAIR space. Clustering *pairs* (not colors) is load-
+    bearing: shared colors explode into far more distinct (fg,bg) pairs than the
+    256-pair ceiling allows. items: list of (point6, weight). Returns centroids.
+
+    Cold-select each rebuild (seed = k heaviest cells): deterministic, robust to
+    scene cuts (no stale-seed lock-in), and simpler. Temporal continuity comes
+    from the EMA-smoothed histogram feeding this, not from warm-starting the seed;
+    palette-swap flicker is governed by real color change, not cluster labeling."""
+    pts = [it[0] for it in items]
+    wts = [it[1] for it in items]
+    if len(pts) <= k:
+        return list(pts)
+    order = sorted(range(len(pts)), key=lambda i: wts[i], reverse=True)
+    cents = [pts[i] for i in order[:k]]
+    for _ in range(iters):
+        sums = [[0.0] * 6 for _ in range(k)]
+        wsum = [0.0] * k
+        for p, w in zip(pts, wts):
+            bi = 0; bd = 1e30
+            for ci, c in enumerate(cents):
+                d = _pair_dist(p, c)
+                if d < bd:
+                    bd = d; bi = ci
+            for j in range(6):
+                sums[bi][j] += p[j] * w
+            wsum[bi] += w
+        moved = False
+        newc = []
+        for ci in range(k):
+            if wsum[ci] > 0:
+                nc = tuple(sums[ci][j] / wsum[ci] for j in range(6))
+            else:
+                nc = cents[ci]
+            if nc != cents[ci]:
+                moved = True
+            newc.append(nc)
+        cents = newc
+        if not moved:
+            break
+    return cents
+
+# --- color engine persistent state (owned by snap_worker thread) ---
+_tone_lo = None
+_tone_hi = None
+_hist_ema = {}          # (fg_idx, bg_idx) -> EMA weight
+_color_palette = None   # list of (fg_idx, bg_idx), <= COLOR_BUDGET entries
+_palette_pts = None     # 6-D display point per palette entry (for assign + warm seed)
+_color_gen = 0
+_snap_count = 0
+_assign_cache = {}      # (fg_idx, bg_idx) -> curses pair number; cleared each rebuild
+
+def _stretch_params(rdata, npx):
+    """5/95 luminance-percentile contrast stretch with temporally-smoothed anchors.
+    Returns (lo, gain); apply the SAME scalar gain to R,G,B alike (per-channel
+    stretch hue-shifts)."""
+    global _tone_lo, _tone_hi
+    lums = [int(rdata[i * 3] * 0.299 + rdata[i * 3 + 1] * 0.587 + rdata[i * 3 + 2] * 0.114)
+            for i in range(npx)]
+    lums.sort()
+    lo_new = lums[int(npx * 0.05)]
+    hi_new = lums[int(npx * 0.95)]
+    if _tone_lo is None:
+        _tone_lo, _tone_hi = lo_new, hi_new
+    else:
+        _tone_lo = TONE_ALPHA * lo_new + (1 - TONE_ALPHA) * _tone_lo
+        _tone_hi = TONE_ALPHA * hi_new + (1 - TONE_ALPHA) * _tone_hi
+    return _tone_lo, 255.0 / ((_tone_hi - _tone_lo) or 1)
+
+def _rebuild_palette():
+    """Re-cluster the EMA histogram into <= COLOR_BUDGET pairs. Runs on the slow
+    palette clock; bumps the generation so the main thread swaps between frames."""
+    global _color_palette, _palette_pts, _color_gen, _assign_cache
+    items = [((*_rep_rgb(f), *_rep_rgb(b)), w) for (f, b), w in _hist_ema.items()]
+    if not items:
+        return
+    if len(items) > 800:                    # cap k-means input cost by weight
+        items.sort(key=lambda iw: iw[1], reverse=True)
+        items = items[:800]
+    cents = _kmeans_pairs(items, min(COLOR_BUDGET, len(items)))
+    seen = {}
+    palette = []
+    for c in cents:                          # snap to 240 and dedupe collisions
+        pr = _snap_pair(c)
+        if pr not in seen:
+            seen[pr] = True
+            palette.append(pr)
+    _color_palette = palette
+    _palette_pts = [(*_rep_rgb(f), *_rep_rgb(b)) for (f, b) in palette]
+    _color_gen += 1
+    _assign_cache = {}
+
+def _nearest_pair_num(key):
+    """Pair number of the palette entry nearest to cell (fg_idx, bg_idx)."""
+    p = (*_rep_rgb(key[0]), *_rep_rgb(key[1]))
+    bi = 0; bd = 1e30
+    for i, c in enumerate(_palette_pts):
+        d = _pair_dist(p, c)
+        if d < bd:
+            bd = d; bi = i
+    return COLOR_BASE + bi
+
+def _build_color_frame(rdata, raster_w, rows_used, x_off, y_off, box_cols, box_rows, lo, gain):
+    """Match pixels to the fixed-240 palette, EMA the histogram, (re)build the pair
+    palette on the slow clock, then emit a per-cell raster of curses pair numbers."""
+    global _hist_ema, _snap_count, _assign_cache, widget_color_frame
+
+    def _st(v):
+        v = (v - lo) * gain
+        return 0 if v < 0 else (255 if v > 255 else int(v))
+
+    cells = []
+    counts = {}
+    for r in range(rows_used):
+        top = (2 * r) * raster_w * 3
+        bot = (2 * r + 1) * raster_w * 3
+        rowcells = []
+        for c in range(raster_w):
+            ti = top + c * 3; bi = bot + c * 3
+            f_idx = _match_240((_st(rdata[ti]),   _st(rdata[ti + 1]), _st(rdata[ti + 2])))[0]
+            b_idx = _match_240((_st(rdata[bi]),   _st(rdata[bi + 1]), _st(rdata[bi + 2])))[0]
+            key = (f_idx, b_idx)
+            rowcells.append(key)
+            counts[key] = counts.get(key, 0) + 1
+        cells.append(rowcells)
+
+    # EMA the HISTOGRAM (not the palette): smoothing before clustering makes
+    # cluster stability free and avoids brittle cross-rebuild centroid matching.
+    total = sum(counts.values()) or 1
+    for k in list(_hist_ema.keys()):
+        _hist_ema[k] *= (1 - HIST_ALPHA)
+    for k, cnt in counts.items():
+        _hist_ema[k] = _hist_ema.get(k, 0.0) + HIST_ALPHA * (cnt / total)
+    if len(_hist_ema) > 4096:
+        _hist_ema = dict(sorted(_hist_ema.items(), key=lambda kv: kv[1], reverse=True)[:2048])
+
+    _snap_count += 1
+    # Rebuild on snapshots 1, 1+N, 1+2N, ... -> exactly ceil(K/N) rebuilds over K
+    # snapshots, with frame 1 bootstrapping the first palette.
+    if _color_palette is None or (_snap_count - 1) % REBUILD_EVERY == 0:
+        _rebuild_palette()
+
+    raster = []
+    for rowcells in cells:
+        prow = []
+        for key in rowcells:
+            pn = _assign_cache.get(key)
+            if pn is None:
+                pn = _nearest_pair_num(key)
+                _assign_cache[key] = pn
+            prow.append(pn)
+        raster.append(prow)
+
+    widget_color_frame = (_color_gen, _color_palette, raster, x_off, y_off, (box_cols, box_rows))
+
+def _build_gray_frame(rdata, raster_w, rows_used, x_off, y_off, box_cols, box_rows, lo, gain):
+    """Fallback luminance ramp — symmetric (no per-half gain, so no venetian-blind
+    row banding). Emits a raster of static gray pair numbers (10 + fg*6 + bg)."""
+    global widget_gray_frame
+
+    def _sti(lum):
+        v = (lum - lo) * gain
+        v = 0 if v < 0 else (255 if v > 255 else v)
+        return int(v / 255 * 5.999)
+
+    raster = []
+    for r in range(rows_used):
+        top = (2 * r) * raster_w * 3
+        bot = (2 * r + 1) * raster_w * 3
+        prow = []
+        for c in range(raster_w):
+            ti = top + c * 3; bi = bot + c * 3
+            fg_i = _sti(rdata[ti] * 0.299 + rdata[ti + 1] * 0.587 + rdata[ti + 2] * 0.114)
+            bg_i = _sti(rdata[bi] * 0.299 + rdata[bi + 1] * 0.587 + rdata[bi + 2] * 0.114)
+            prow.append(10 + fg_i * 6 + bg_i)
+        raster.append(prow)
+    widget_gray_frame = (raster, x_off, y_off, (box_cols, box_rows))
 def snap_worker():
-    global widget_pixels_gray, widget_pixels_color
     while True:
         try:
             if not feed_preview_on:
@@ -597,7 +964,7 @@ def snap_worker():
             if dims is None:
                 time.sleep(0.5)
                 continue
-            _box_w, box_h = dims
+            box_cols, box_rows = dims
             subprocess.run([
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-rtsp_transport", "tcp",
@@ -605,43 +972,18 @@ def snap_worker():
                 "-frames:v", "1", WIDGET_SNAP
             ], timeout=6, capture_output=True)
             if os.path.exists(WIDGET_SNAP):
-                # -- Grayscale --
-                gray = _fit_height(Image.open(WIDGET_SNAP).convert("L"), box_h * 2)
-                iw, _ih = gray.size
-                gdata = list(gray.tobytes())
-                s = sorted(gdata); n = len(s)
-                lo = s[int(n * 0.05)]; hi = s[int(n * 0.95)]
-                rng = (hi - lo) or 1
-                gpx = []
-                for r in range(box_h):
-                    row = []
-                    for c in range(iw):
-                        top = gdata[(r * 2)     * iw + c]
-                        bot = gdata[(r * 2 + 1) * iw + c]
-                        fg_i = max(0, min(5, int((top - lo) / rng * 1.4 * 6)))
-                        bg_i = max(0, min(5, int((bot - lo) / rng * 6)))
-                        row.append((fg_i, bg_i))
-                    gpx.append(row)
-                widget_pixels_gray = gpx
-                # -- Color --
-                rgb = _fit_height(Image.open(WIDGET_SNAP).convert("RGB"), box_h * 2)
-                iw2, _ih2 = rgb.size
+                src = Image.open(WIDGET_SNAP)
+                iw, ih = src.size
+                raster_w, raster_h, rows_used, x_off, y_off = _contain_fit(
+                    iw, ih, box_cols, box_rows, _get_cell_aspect())
+                rgb = src.convert("RGB").resize((raster_w, raster_h), Image.LANCZOS)
                 rdata = rgb.tobytes()
-                cpx = []
-                for r in range(box_h):
-                    row = []
-                    for c in range(iw2):
-                        _ti = ((r * 2)     * iw2 + c) * 3
-                        _bi = ((r * 2 + 1) * iw2 + c) * 3
-                        tr, tg, tb = rdata[_ti], rdata[_ti+1], rdata[_ti+2]
-                        br, bg_c, bb = rdata[_bi], rdata[_bi+1], rdata[_bi+2]
-                        tlum = int(tr * 0.299 + tg * 0.587 + tb * 0.114)
-                        blum = int(br * 0.299 + bg_c * 0.587 + bb * 0.114)
-                        fg_oi = max(0, min(11, int(tlum / 255 * 11.99)))
-                        bg_oi = max(0, min(11, int(blum / 255 * 11.99)))
-                        row.append((fg_oi, bg_oi))
-                    cpx.append(row)
-                widget_pixels_color = cpx
+                lo, gain = _stretch_params(rdata, raster_w * raster_h)
+                if _color_capable:
+                    _build_color_frame(rdata, raster_w, rows_used, x_off, y_off,
+                                       box_cols, box_rows, lo, gain)
+                _build_gray_frame(rdata, raster_w, rows_used, x_off, y_off,
+                                  box_cols, box_rows, lo, gain)
         except Exception:
             pass
         _interval = 2
@@ -725,29 +1067,14 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     # ============================================================
     # TOP ROW: DISK/SMART | FEED | SYSTEM
     # ============================================================
-    _use_color = not dark and widget_pixels_color is not None
-    _use_gray  = dark  and widget_pixels_gray  is not None
+    _use_color = (not dark) and _color_capable and widget_color_frame is not None
+    _use_gray  = (not _use_color) and widget_gray_frame is not None
     has_feed   = (_use_color or _use_gray) and not dim and not camhub_mode and feed_preview_on
     if widget_expand and has_feed:
-        _wpx = widget_pixels_color if _use_color else widget_pixels_gray
         _avail_h = h - 3
         widget_box_dims[0] = (w, _avail_h)
-        if _wpx and _wpx[0]:
-            _raster_h = len(_wpx)
-            _raster_w = len(_wpx[0])
-            _row_off = max(0, (_avail_h - _raster_h) // 2)
-            _x_off = max(0, (w - _raster_w) // 2)
-            _col_start = max(0, (_raster_w - w) // 2)
-            for _wr, _row in enumerate(_wpx[:_avail_h]):
-                _visible = _row[_col_start:_col_start + w]
-                for _wc, (_fgi, _bgi) in enumerate(_visible):
-                    _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
-                    try:
-                        safe(scr, _row_off + _wr, _x_off + _wc, "\u2580", curses.color_pair(_pair))
-                    except curses.error:
-                        pass
-            _pan_hint = " \u2022 [\u2190\u2192] pan" if _raster_w > w else ""
-            safe(scr, h - 2, 0, "[x] collapse" + _pan_hint + " \u2022 [q] quit")
+        _blit_feed(scr, 0, 0, w, _avail_h, _use_color)
+        safe(scr, h - 2, 0, "[x] collapse \u2022 [q] quit")
         return
     box(scr, top_y, 0,  top_h, lw, "DISK / SMART", base)
     if has_feed:
@@ -819,37 +1146,12 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, dy, 2, tstr[:_clip], base);                                       dy += 1
     safe(scr, dy, 2, f"WRITE: {disk:.2f} MB/s"[:_clip], write_attr)
 
-    # -- FEED content (block art) --
+    # -- FEED content (contain-fit halfblock, centered, no pan) --
     feed_inner_w = cw - 2
     feed_inner_h = top_h - 2
     widget_box_dims[0] = (feed_inner_w, feed_inner_h)
     if has_feed:
-        _wpx = widget_pixels_color if _use_color else widget_pixels_gray
-        if _wpx and _wpx[0]:
-            _raster_w = len(_wpx[0])
-            if _raster_w <= feed_inner_w:
-                _x_off = (feed_inner_w - _raster_w) // 2
-                for _wr, _row in enumerate(_wpx[:feed_inner_h]):
-                    for _wc, (_fgi, _bgi) in enumerate(_row):
-                        _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
-                        try:
-                            safe(scr, top_y + 1 + _wr, cx + 1 + _x_off + _wc, "\u2580", curses.color_pair(_pair))
-                        except curses.error:
-                            pass
-            else:
-                if widget_pan_cols[0] < 0:
-                    _pan = (_raster_w - feed_inner_w) // 2
-                else:
-                    _pan = max(0, min(widget_pan_cols[0], _raster_w - feed_inner_w))
-                widget_pan_cols[0] = _pan
-                for _wr, _row in enumerate(_wpx[:feed_inner_h]):
-                    _sliced = _row[_pan:_pan + feed_inner_w]
-                    for _wc, (_fgi, _bgi) in enumerate(_sliced):
-                        _pair = (50 + _fgi * 12 + _bgi) if _use_color else (10 + _fgi * 6 + _bgi)
-                        try:
-                            safe(scr, top_y + 1 + _wr, cx + 1 + _wc, "\u2580", curses.color_pair(_pair))
-                        except curses.error:
-                            pass
+        _blit_feed(scr, top_y + 1, cx + 1, feed_inner_w, feed_inner_h, _use_color)
 
     # -- SYSTEM content --
     sys_inner_w = rw - 4
@@ -1048,13 +1350,13 @@ def draw_footer(scr, editing, svc=False):
         footer2 = ""
     else:
         if not svc:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
             footer2 = ""
         elif _footer_locked:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
         else:
-            footer1 = "[i] cam IPs \u2022 [\u2190\u2192] preview \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
     _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
@@ -1080,6 +1382,7 @@ def main(scr):
     global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff, confirm_clear, _footer_locked
     global camhub_mode, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_slots, camhub_confirm_clear
     global widget_expand, feed_preview_on
+    global widget_gray_frame, widget_color_frame, _color_capable, COLOR_BUDGET
 
     threading.Thread(target=smart_worker, daemon=True).start()
     threading.Thread(target=hls_worker,   daemon=True).start()
@@ -1106,11 +1409,11 @@ def main(scr):
         for _bg in GRAY_STEPS:
             curses.init_pair(_gp, _fg, _bg)
             _gp += 1
-    _cp = 50
-    for _fg in OCEAN_PALETTE:
-        for _bg in OCEAN_PALETTE:
-            curses.init_pair(_cp, _fg, _bg)
-            _cp += 1
+    # Color ladder: 256-color terminal -> adaptive fixed-palette color; else the
+    # gray ramp above is the floor. The color palette (pairs COLOR_BASE..) is
+    # allocated per-scene by the snap worker and pushed in _apply_color_palette.
+    _color_capable = curses.COLORS >= 256
+    COLOR_BUDGET = max(16, min(min(curses.COLOR_PAIRS, 256) - COLOR_BASE, 190))
 
     frozen_snap   = None
     frozen_repair = "IDLE"
@@ -1370,26 +1673,14 @@ def main(scr):
             camhub_edit_buf = ""
             camhub_mode = True
             continue
-        elif k == curses.KEY_LEFT:
-            if widget_pan_cols[0] < 0:
-                widget_pan_cols[0] = 0
-            else:
-                widget_pan_cols[0] = max(0, widget_pan_cols[0] - 2)
-        elif k == curses.KEY_RIGHT:
-            if widget_pan_cols[0] < 0:
-                widget_pan_cols[0] = 0
-            else:
-                widget_pan_cols[0] = widget_pan_cols[0] + 2
         elif k == ord('x') and feed_preview_on:
             widget_expand = not widget_expand
-            widget_pan_cols[0] = -1
         elif k == ord('f'):
             feed_preview_on = not feed_preview_on
             _write_feed_state(feed_preview_on)
-            widget_pan_cols[0] = -1
             if not feed_preview_on:
-                widget_pixels_gray  = None
-                widget_pixels_color = None
+                widget_gray_frame  = None
+                widget_color_frame = None
 
         snap = sample_metrics()
         with repair_lock:
