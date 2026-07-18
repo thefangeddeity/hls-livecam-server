@@ -191,7 +191,7 @@ var maximized   = null;
 var lastHash    = '';
 
 function streamUrl(ip, sp) { return 'http://' + ip + (sp || STREAM_PATH); }
-function msgUrl(ip)    { return 'http://' + ip + '/broadcast.txt'; }
+function msgUrl(ip, port) { return 'http://' + ip + (port ? ':' + port : '') + '/broadcast.txt'; }
 function configHash(p) { return p.map(function(c){ return c.ip + c.label; }).join('|'); }
 
 function fmtTime() {
@@ -203,8 +203,8 @@ setInterval(function() {
   document.querySelectorAll('.cell-clock').forEach(function(el){ el.textContent = fmtTime(); });
 }, 1000);
 
-function pollMsg(ip, msgEl) {
-  fetch(msgUrl(ip) + '?t=' + Date.now(), { cache: 'no-store' })
+function pollMsg(ip, msgEl, port) {
+  fetch(msgUrl(ip, port) + '?t=' + Date.now(), { cache: 'no-store' })
     .then(function(r){ return r.ok ? r.text() : ''; })
     .catch(function(){ return ''; })
     .then(function(t){
@@ -331,8 +331,8 @@ function buildGrid(pinned) {
     grid.appendChild(cell);
 
     var hls = attachHls(video, cam.ip, pill, cam.stream_path, dropCam);
-    pollMsg(cam.ip, msgEl);
-    var msgTimer = setInterval(function(){ pollMsg(cam.ip, msgEl); }, MSG_POLL_MS);
+    pollMsg(cam.ip, msgEl, cam.api_port);
+    var msgTimer = setInterval(function(){ pollMsg(cam.ip, msgEl, cam.api_port); }, MSG_POLL_MS);
 
     activeCells.push(Object.assign({}, cam, { video: video, hls: hls, cell: cell, msgTimer: msgTimer }));
   });
@@ -372,8 +372,8 @@ function openOverlay(idx) {
 
   overlay._hls = attachHls(ov, cam.ip, pill, cam.stream_path);
   overlay._clockTick = setInterval(function(){ clock.textContent = fmtTime(); }, 1000);
-  overlay._msgTimer  = setInterval(function(){ pollMsg(cam.ip, msgEl); }, MSG_POLL_MS);
-  pollMsg(cam.ip, msgEl);
+  overlay._msgTimer  = setInterval(function(){ pollMsg(cam.ip, msgEl, cam.api_port); }, MSG_POLL_MS);
+  pollMsg(cam.ip, msgEl, cam.api_port);
 
   maximized = idx;
   document.getElementById('close-hint').style.display = 'block';
