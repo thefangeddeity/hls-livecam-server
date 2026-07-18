@@ -1,5 +1,5 @@
 Package: hls-livecam-server
-Version: 5.2.2
+Version: 5.2.3
 Section: video
 Priority: optional
 Architecture: amd64

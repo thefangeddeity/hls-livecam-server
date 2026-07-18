@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+# v5.2.3: cams.json was dropped from the deb payload (operator data must not
+# ship -- it was silently overwritten on every install/upgrade, the
+# long-parked "cams.json keeps getting wiped" bug). dpkg deletes
+# payload-tracked files that are absent from the new package on upgrade, so
+# stash the live file here before dpkg can remove it; postinst restores it
+# if it didn't survive on its own.
+if [ -f /var/www/hls-livecam/cams/cams.json ]; then
+    mkdir -p /var/lib/hls-livecam
+    cp -p /var/www/hls-livecam/cams/cams.json /var/lib/hls-livecam/cams.json.upgrade-save
+fi
+
+exit 0

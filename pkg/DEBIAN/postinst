@@ -52,6 +52,24 @@ mkdir -p /var/www/hls-livecam
 chown root:www-data /var/www/hls-livecam
 chmod 775 /var/www/hls-livecam
 
+# --- Rescue cams.json across the v5.2.3 payload eviction ---------
+# v5.2.2 and earlier shipped a seed cams.json in the deb payload, which
+# dpkg silently overwrote on every install/upgrade (the long-parked
+# "cams.json keeps getting wiped" bug). v5.2.3 stops shipping it; preinst
+# stashed the live file (if any) before dpkg could delete it as a
+# payload file that vanished from the new package. Restore it here if
+# it didn't survive the upgrade on its own.
+SAVE=/var/lib/hls-livecam/cams.json.upgrade-save
+LIVE=/var/www/hls-livecam/cams/cams.json
+if [ -f "$SAVE" ]; then
+    if [ ! -f "$LIVE" ]; then
+        cp -p "$SAVE" "$LIVE"
+        chown root:www-data "$LIVE"
+        chmod 0664 "$LIVE"
+    fi
+    rm -f "$SAVE"
+fi
+
 # --- mediamtx.yml directory -------------------------------------
 mkdir -p /usr/local/etc
 if [ -f /usr/local/etc/mediamtx.yml ]; then
