@@ -6,29 +6,35 @@ codes, same content types, same CORS placement.
 
 No WSL2, no nginx, no Flask, no systemd. One binary.
 
-## Status: run 2 of 4 — control-plane + live capture
+## Status: run 3 of 4 — native operator dashboard, done
 
-Shipped here:
+This closes the Windows node v1. Shipped here:
 
-- `:80` control-plane API and the web assets, byte-identical to the
-  package's `pkg/usr/share/hls-livecam-server/` copies
-- message board, buzz, feed-mode, msg-lock, bw-mode, dark, `/api/info`
-- state that survives a process restart, including feed-mode -- a box
-  that was hidden boots back into hidden
-- live capture: dshow camera → ffmpeg → RTSP → mediamtx → HLS on
-  `:8888/cam/index.m3u8`, the same path the fleet already expects
-- Show/Hide actually drives the pipeline now: Hide is a source swap to a
-  black-frame ffmpeg on the same RTSP path, not a client-side overlay --
-  mediamtx keeps the HLS output continuous across the swap
-- self-healing capture supervision (process-exit + manifest-staleness
-  detection; see `pipeline.rs` for why this isn't a port of anything in
-  camdash -- there was nothing live to port)
+- a native egui/eframe operator window -- no webview, no HTML in the GUI
+  anywhere -- reproducing camdash's six-panel cockpit (DISK/SMART, FEED,
+  SYSTEM, VIDEO, PROCESSES, MESSAGE) with the same green-on-black palette
+  and status-color thresholds, transcribed from camdash's source (see
+  `gui/theme.rs`) and the reference screenshot
+- live video in the FEED panel -- a second, independent ffmpeg tap on the
+  local RTSP stream, decoded to raw frames and uploaded as an egui
+  texture (see `video_preview.rs`)
+- GUI buttons drive the *same* AppState/Pipeline methods the HTTP handlers
+  call -- one process, no loopback HTTP client (PM direction: GUI and
+  server don't need to be decoupled just because that's how camdash and
+  the Linux stack relate)
+- autostart via the per-user Registry Run key, idempotent across restarts
+- minimize-to-tray (best-effort; falls back to a normal minimizable
+  window if tray construction fails on a given machine)
+- clean shutdown: closing the window kills mediamtx.exe/ffmpeg.exe
+  first -- Windows does not do this automatically when a parent process
+  exits, unlike what `taskkill /T`-based testing in run 2 made it easy to
+  assume (see `pipeline.rs::shutdown`)
 
-Not here yet (later runs): tray icon, dashboard GUI, autostart, installer.
-Cloak/blur/bw-mode's actual pixelation pipeline is deferred (v1.1) --
-`cloak` currently fails safe to the same black source as `hide` (see
-`pipeline.rs`), so clicking Blur in the existing viewer never leaves the
-real feed exposed, even though the visual isn't the real effect yet.
+Deferred, unchanged from run 2: Cloak/blur/bw-mode's actual pixelation
+pipeline (v1.1). `cloak` fails safe to the same black source as `hide`,
+now also true for the GUI's disabled Blur/B&W controls -- present in the
+layout, non-interactive, so nothing advertises a capability this node
+doesn't have.
 
 ## Build and run
 
@@ -37,13 +43,14 @@ cargo build --release
 target\release\hls-livecam-win.exe
 ```
 
-Then open <http://localhost/>. ffmpeg.exe and mediamtx.exe are **not**
-vendored into this repo (that's run 3's job) -- the binary looks for them
-next to itself and fails loudly, naming the exact paths it checked, if it
-can't find them. See `binaries.rs` for the resolution order. For local
-runs, drop both into a `bin\` folder next to the exe:
+The window opens directly -- no separate server process to start first,
+it's the same binary. ffmpeg.exe and mediamtx.exe are **not** vendored
+into this repo -- the binary looks for them next to itself and fails
+loudly, naming the exact paths it checked, if it can't find them. See
+`binaries.rs` for the resolution order. Bundle layout:
 
 ```
+target\release\hls-livecam-win.exe
 target\release\bin\ffmpeg.exe
 target\release\bin\mediamtx.exe
 ```
@@ -120,3 +127,23 @@ disagreed, the live fleet won:
   stays self-contained. Building this crate outside the monorepo will not work.
 - `windows/` is marked `export-ignore` in the repo's `.gitattributes`, so
   `git archive` (which is how the AUR tarball is cut) omits it.
+- The FEED panel's live preview runs a **second** ffmpeg decode process
+  independent of the fleet-facing capture pipeline. It's a read-only tap
+  (doesn't touch mediamtx or the RTSP publish path), but it's real CPU:
+  observed two ffmpeg processes and noticeably higher CPU with the window
+  open versus run 2's headless server. Deliberately kept modest (480x270
+  @8fps) to bound it, but it is not free.
+- DISK/SMART, SYSTEM (CPU temp, LOAD), and PROCESSES pull from
+  Windows-native sources (`Get-PhysicalDisk`, `sysinfo`), not ports of
+  camdash's psutil/smartctl calls -- there's nothing to port, the
+  underlying OS facilities differ entirely. Fields with no honest Windows
+  equivalent (NVMe has no ATA REALLOC/PENDING/UNCORR attributes; this
+  laptop's CPU temp isn't exposed cleanly; Windows has no Unix load
+  average) are shown dimmed/n-a rather than approximated.
+- Found via actually driving the window with real clicks and keystrokes,
+  not by reading the code: the MESSAGE panel's edit buffer was getting
+  silently overwritten every repaint by the stored value, because the
+  "don't clobber while editing" guard checked a field that was never set
+  to true anywhere. Typed text could never be saved. Fixed by tracking the
+  text field's actual focus state instead. Screenshotting the running app
+  at each step is what caught this -- it read correctly in the source.

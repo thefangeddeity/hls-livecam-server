@@ -8,8 +8,16 @@ license = "GPL-3.0"
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "time", "io-util"] }
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow"] }
+egui = "0.31"
+sysinfo = "0.33"
+winreg = "0.52"
+tray-icon = "0.19"
 
 [profile.release]
-opt-level = "z"
+# run 3 adds a real-time immediate-mode GUI + per-frame video texture
+# upload; size-optimized codegen (the old "z") measurably hurt redraw and
+# decode throughput. lto/strip still shrink the binary without that cost.
+opt-level = 3
 lto = true
 strip = true

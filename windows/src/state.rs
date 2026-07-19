@@ -73,6 +73,18 @@ impl AppState {
         std::fs::write(self.dir.join("buzz.txt"), ts)
     }
 
+    /// Shared by the HTTP `/api/buzz` handler and the GUI's Buzz button --
+    /// one place generating the timestamp so both entry points produce the
+    /// same observable result.
+    pub fn buzz_now(&self) -> std::io::Result<String> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+        self.set_buzz(&ts)?;
+        Ok(ts)
+    }
+
     pub fn set_feed_mode(&self, mode: &str) {
         *self.feed_mode.lock().unwrap() = mode.to_string();
         let _ = std::fs::write(self.dir.join("feed_mode"), mode);

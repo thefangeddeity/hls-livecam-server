@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -31,6 +31,19 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 use crate::state::AppState;
+
+/// Cheap synchronous liveness snapshot for the GUI thread -- no runtime
+/// handle, no async, just atomics/an std Mutex updated by the same 1s
+/// supervisor loop that already drives self-healing. At most ~1s stale,
+/// which is the same cadence camdash itself polls at.
+pub struct PipelineStatus {
+    pub capture_alive: bool,
+    pub mediamtx_alive: bool,
+    /// "LIVE" or "DOWN" -- see hls_state doc comment for why there's no
+    /// third ERROR state here, unlike camdash's hls_worker.
+    pub hls_state: String,
+    pub device: String,
+}
 
 const RTSP_URL: &str = "rtsp://127.0.0.1:8554/cam";
 const HLS_MASTER_PATH: &str = "/cam/index.m3u8";
@@ -59,9 +72,14 @@ pub struct Pipeline {
     mediamtx: PathBuf,
     state: Arc<AppState>,
     capture: Mutex<Option<Child>>,
-    target: Mutex<Source>,
-    device: Mutex<String>,
+    mediamtx_child: Mutex<Option<Child>>,
+    target: StdMutex<Source>,
+    device: StdMutex<String>,
     running: AtomicBool,
+    // GUI-readable liveness, updated by the supervisor loops below.
+    capture_alive: AtomicBool,
+    mediamtx_alive: AtomicBool,
+    hls_state: StdMutex<String>,
 }
 
 impl Pipeline {
@@ -78,9 +96,13 @@ impl Pipeline {
             mediamtx,
             state,
             capture: Mutex::new(None),
-            target: Mutex::new(initial),
-            device: Mutex::new(device),
+            mediamtx_child: Mutex::new(None),
+            target: StdMutex::new(initial),
+            device: StdMutex::new(device),
             running: AtomicBool::new(true),
+            capture_alive: AtomicBool::new(false),
+            mediamtx_alive: AtomicBool::new(false),
+            hls_state: StdMutex::new("DOWN".to_string()),
         });
 
         spawn_mediamtx_supervisor(p.clone());
@@ -100,14 +122,52 @@ impl Pipeline {
         self.swap_to(source_for_mode(mode)).await;
     }
 
+    /// Manual "kick" -- restarts capture on whatever source is currently
+    /// targeted. Run-2's supervision is always-on, so this is redundant
+    /// for actual fault recovery; it exists because the reference image
+    /// has a [ Repair ] button and an operator occasionally wanting to
+    /// force a restart by hand is reasonable, not because anything here
+    /// needs it to function.
+    pub async fn manual_repair(&self) {
+        self.restart_capture().await;
+    }
+
+    /// Cheap synchronous read for the GUI -- see PipelineStatus docs.
+    pub fn status(&self) -> PipelineStatus {
+        PipelineStatus {
+            capture_alive: self.capture_alive.load(Ordering::Relaxed),
+            mediamtx_alive: self.mediamtx_alive.load(Ordering::Relaxed),
+            hls_state: self.hls_state.lock().unwrap().clone(),
+            device: self.device.lock().unwrap().clone(),
+        }
+    }
+
+    /// Windows does not kill child processes when a parent exits (unlike
+    /// the assumption it's easy to make from `taskkill /T`-style testing,
+    /// which explicitly kills the whole tree rather than relying on any
+    /// natural parent-death behavior). Without this, closing the GUI
+    /// window would orphan mediamtx.exe/ffmpeg.exe still holding :8554/
+    /// :8888, blocking the next launch. Called from the GUI's shutdown
+    /// path (window close and tray Quit both funnel through eframe's
+    /// on_exit, one code path either way).
+    pub async fn shutdown(&self) {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(mut child) = self.capture.lock().await.take() {
+            let _ = child.kill().await;
+        }
+        if let Some(mut child) = self.mediamtx_child.lock().await.take() {
+            let _ = child.kill().await;
+        }
+    }
+
     async fn swap_to(&self, target: Source) {
-        *self.target.lock().await = target;
+        *self.target.lock().unwrap() = target;
         self.restart_capture().await;
     }
 
     async fn restart_capture(&self) {
-        let target = *self.target.lock().await;
-        let device = self.device.lock().await.clone();
+        let target = *self.target.lock().unwrap();
+        let device = self.device.lock().unwrap().clone();
 
         let mut slot = self.capture.lock().await;
         if let Some(mut child) = slot.take() {
@@ -122,8 +182,12 @@ impl Pipeline {
             Ok(child) => {
                 println!("pipeline: capture -> {target:?} ({device})");
                 *slot = Some(child);
+                self.capture_alive.store(true, Ordering::Relaxed);
             }
-            Err(e) => eprintln!("pipeline: failed to start capture ({target:?}): {e}"),
+            Err(e) => {
+                eprintln!("pipeline: failed to start capture ({target:?}): {e}");
+                self.capture_alive.store(false, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -144,9 +208,34 @@ fn spawn_mediamtx_supervisor(p: Arc<Pipeline>) {
             let mut cmd = Command::new(&p.mediamtx);
             cmd.arg(&config_path);
             match spawn(cmd) {
-                Ok(mut child) => {
+                Ok(child) => {
                     println!("pipeline: mediamtx started");
-                    let _ = child.wait().await;
+                    p.mediamtx_alive.store(true, Ordering::Relaxed);
+                    *p.mediamtx_child.lock().await = Some(child);
+
+                    // Poll rather than a blocking .wait() -- holding the
+                    // mutex across a blocking wait would lock shutdown()
+                    // out of ever reaching take()+kill() on this child.
+                    let killed_by_shutdown = loop {
+                        {
+                            let mut slot = p.mediamtx_child.lock().await;
+                            match slot.as_mut() {
+                                Some(child) => {
+                                    if matches!(child.try_wait(), Ok(Some(_))) {
+                                        *slot = None;
+                                        break false;
+                                    }
+                                }
+                                None => break true, // shutdown() took it
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    };
+
+                    p.mediamtx_alive.store(false, Ordering::Relaxed);
+                    if killed_by_shutdown || !p.running.load(Ordering::Relaxed) {
+                        break;
+                    }
                     eprintln!("pipeline: mediamtx exited, restarting");
                 }
                 Err(e) => eprintln!("pipeline: failed to start mediamtx: {e}"),
@@ -177,6 +266,7 @@ fn spawn_stall_supervisor(p: Arc<Pipeline>) {
                 }
             };
             if exited {
+                p.capture_alive.store(false, Ordering::Relaxed);
                 eprintln!("pipeline: capture process gone, restarting");
                 p.restart_capture().await;
                 last_body = None;
@@ -186,8 +276,16 @@ fn spawn_stall_supervisor(p: Arc<Pipeline>) {
 
             // Slow path: process alive but manifest not advancing (e.g.
             // ffmpeg blocked on a dead capture pin instead of exiting).
+            // Doubles as the GUI's HLS liveness signal -- reusing this
+            // poll instead of running a second one just for that. Note:
+            // unlike camdash's hls_worker (LIVE/ERROR/DOWN), this only
+            // distinguishes LIVE/DOWN -- a plain-HTTP-failure vs. a
+            // non-200-but-reachable response aren't told apart, since
+            // that distinction doesn't change what an operator would do
+            // about it here (self-healing already reacts to either).
             match fetch_media_playlist_body().await {
                 Some(body) => {
+                    *p.hls_state.lock().unwrap() = "LIVE".to_string();
                     if last_body.as_deref() == Some(body.as_str()) {
                         let since = *unchanged_since.get_or_insert_with(std::time::Instant::now);
                         if since.elapsed() >= STALL_THRESHOLD {
@@ -204,6 +302,7 @@ fn spawn_stall_supervisor(p: Arc<Pipeline>) {
                     last_body = Some(body);
                 }
                 None => {
+                    *p.hls_state.lock().unwrap() = "DOWN".to_string();
                     // mediamtx itself not answering is mediamtx's own
                     // supervisor's problem, not capture's -- don't also
                     // restart capture off a signal capture can't fix.

@@ -193,12 +193,8 @@ async fn api_broadcast(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
 }
 
 async fn api_buzz(State(ctx): State<Arc<Ctx>>) -> Response {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis().to_string())
-        .unwrap_or_else(|_| "0".to_string());
-    match ctx.state.set_buzz(&ts) {
-        Ok(()) => flask_text(ts),
+    match ctx.state.buzz_now() {
+        Ok(ts) => flask_text(ts),
         Err(_) => build(
             StatusCode::INTERNAL_SERVER_ERROR,
             FLASK_TEXT,
@@ -304,13 +300,13 @@ async fn flask_not_found() -> Response {
 
 // -------------------------------------------------------------- helpers
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_default()
 }
 
 /// Mirrors broadcast-api: first 100.x.x.x address found, empty string if the
 /// lookup fails for any reason.
-fn tailscale_ip() -> String {
+pub(crate) fn tailscale_ip() -> String {
     const CANDIDATES: [&str; 2] = ["tailscale", r"C:\Program Files\Tailscale\tailscale.exe"];
     for exe in CANDIDATES {
         if let Ok(out) = std::process::Command::new(exe).args(["ip", "-4"]).output() {
