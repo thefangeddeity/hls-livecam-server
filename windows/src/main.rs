@@ -14,6 +14,18 @@
 //! handlers call, directly -- no loopback HTTP client, no second copy of
 //! any logic. The external :80/:8888 contract is unchanged; only the
 //! GUI's own path to driving it got shorter.
+//!
+//! This process runs elevated (see build.rs). PM decision, so DISK/SMART
+//! can read Get-StorageReliabilityCounter -- that WMI class denies a
+//! standard token. Windows enforces the manifest at launch (there is no
+//! code path that runs before UAC has already granted an admin token),
+//! so by the time main() executes, everything below -- binding :80,
+//! spawning ffmpeg/mediamtx, registering autostart -- already has admin
+//! rights it didn't strictly need before. Autostart correspondingly
+//! switched from a Registry Run key to a Scheduled Task (see
+//! autostart.rs) -- a Run-key launch of a requireAdministrator exe still
+//! prompts UAC every login; a task set to run with highest privileges
+//! doesn't.
 
 mod assets;
 mod autostart;
@@ -26,6 +38,7 @@ mod routes;
 mod state;
 mod tray;
 mod video_preview;
+mod winproc;
 
 use std::sync::Arc;
 

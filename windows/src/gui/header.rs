@@ -81,12 +81,17 @@ impl App {
         let mid_w = (full_w - left_w - right_w).max(0.0);
         let height = ui.available_height();
 
+        // Title/uptime and hostname/timestamp are chrome, not status --
+        // console convention reserves color for the status pill alone.
+        // Run 3 had the title in status green everywhere; that's the flat
+        // terminal transcription this restyle moves away from. The
+        // status-color language itself (header_color, above) is untouched.
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(left_w, height),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.colored_label(theme::GREEN_BOLD, &left_text);
+                    ui.colored_label(theme::HEADER_TEXT, egui::RichText::new(&left_text).strong());
                 },
             );
             ui.allocate_ui_with_layout(
@@ -105,7 +110,7 @@ impl App {
                 egui::vec2(right_w, height),
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
-                    ui.colored_label(theme::WHITE, &right_text);
+                    ui.colored_label(theme::HEADER_TEXT, &right_text);
                 },
             );
         });
@@ -124,15 +129,18 @@ impl App {
             }
             ui.add_space(12.0);
             ui.colored_label(
-                theme::DIM,
+                theme::NEUTRAL_TEXT,
                 format!(
                     "IP: {} (Tailscale)  \u{2022}  {}",
                     if self.tailscale.is_empty() { "n/a" } else { &self.tailscale },
                     self.hostname
                 ),
             );
+            // Headroom: an IP/fleet panel (camdash's [i] cam IPs) can land
+            // here later without a relayout -- this row already has slack
+            // and a natural slot before the trailing GPL text.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.colored_label(theme::DIM, "GPL 3.0");
+                ui.colored_label(theme::NEUTRAL_TEXT, "GPL 3.0");
             });
         });
     }

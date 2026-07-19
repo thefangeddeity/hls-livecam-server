@@ -43,6 +43,9 @@ pub struct PipelineStatus {
     /// third ERROR state here, unlike camdash's hls_worker.
     pub hls_state: String,
     pub device: String,
+    /// Operator-controlled on/off, distinct from whether the child
+    /// processes happen to be alive right now.
+    pub enabled: bool,
 }
 
 const RTSP_URL: &str = "rtsp://127.0.0.1:8554/cam";
@@ -76,6 +79,12 @@ pub struct Pipeline {
     target: StdMutex<Source>,
     device: StdMutex<String>,
     running: AtomicBool,
+    /// Operator-controlled on/off (the SERVER: ON/OFF control). Distinct
+    /// from `running`, which only ever goes false once, at real process
+    /// exit. `enabled` toggles freely -- both supervisor loops check it
+    /// before spawning, and skip back to idle-polling when it's false,
+    /// same task, same loop, no restart of the supervisor itself needed.
+    enabled: AtomicBool,
     // GUI-readable liveness, updated by the supervisor loops below.
     capture_alive: AtomicBool,
     mediamtx_alive: AtomicBool,
@@ -100,6 +109,7 @@ impl Pipeline {
             target: StdMutex::new(initial),
             device: StdMutex::new(device),
             running: AtomicBool::new(true),
+            enabled: AtomicBool::new(true),
             capture_alive: AtomicBool::new(false),
             mediamtx_alive: AtomicBool::new(false),
             hls_state: StdMutex::new("DOWN".to_string()),
@@ -139,6 +149,31 @@ impl Pipeline {
             mediamtx_alive: self.mediamtx_alive.load(Ordering::Relaxed),
             hls_state: self.hls_state.lock().unwrap().clone(),
             device: self.device.lock().unwrap().clone(),
+            enabled: self.enabled.load(Ordering::Relaxed),
+        }
+    }
+
+    /// SERVER: ON/OFF. Turning off kills mediamtx and capture and leaves
+    /// them down (both supervisor loops idle-poll `enabled` instead of
+    /// respawning). Turning on hands capture an immediate kick; mediamtx's
+    /// own supervisor notices `enabled` on its next poll tick (<=300ms)
+    /// and restarts itself the same way it would after a crash -- no
+    /// separate "resume" code path to keep in sync with the crash-restart
+    /// one.
+    pub async fn set_enabled(&self, on: bool) {
+        self.enabled.store(on, Ordering::Relaxed);
+        if on {
+            self.restart_capture().await;
+        } else {
+            if let Some(mut child) = self.capture.lock().await.take() {
+                let _ = child.kill().await;
+            }
+            self.capture_alive.store(false, Ordering::Relaxed);
+            if let Some(mut child) = self.mediamtx_child.lock().await.take() {
+                let _ = child.kill().await;
+            }
+            self.mediamtx_alive.store(false, Ordering::Relaxed);
+            *self.hls_state.lock().unwrap() = "DOWN".to_string();
         }
     }
 
@@ -166,13 +201,22 @@ impl Pipeline {
     }
 
     async fn restart_capture(&self) {
-        let target = *self.target.lock().unwrap();
-        let device = self.device.lock().unwrap().clone();
-
         let mut slot = self.capture.lock().await;
         if let Some(mut child) = slot.take() {
             let _ = child.kill().await;
         }
+        self.capture_alive.store(false, Ordering::Relaxed);
+
+        if !self.enabled.load(Ordering::Relaxed) {
+            // Intentionally off -- leave it down, don't spawn a
+            // replacement. (Also reached when a mode swap or the stall
+            // supervisor's self-heal fires while the operator has the
+            // server off; both should be no-ops in that state.)
+            return;
+        }
+
+        let target = *self.target.lock().unwrap();
+        let device = self.device.lock().unwrap().clone();
 
         let cmd = match target {
             Source::Show => capture_command(&self.ffmpeg, &device),
@@ -205,6 +249,14 @@ fn spawn_mediamtx_supervisor(p: Arc<Pipeline>) {
         let _ = std::fs::write(&config_path, "paths:\n  cam:\n  all_others:\n");
 
         while p.running.load(Ordering::Relaxed) {
+            if !p.enabled.load(Ordering::Relaxed) {
+                // Operator has the server off. Idle-poll rather than
+                // exiting the task -- set_enabled(true) just flips the
+                // flag and expects this same loop to notice and respawn,
+                // no separate "resume" path to keep in sync.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                continue;
+            }
             let mut cmd = Command::new(&p.mediamtx);
             cmd.arg(&config_path);
             match spawn(cmd) {
@@ -214,29 +266,45 @@ fn spawn_mediamtx_supervisor(p: Arc<Pipeline>) {
                     *p.mediamtx_child.lock().await = Some(child);
 
                     // Poll rather than a blocking .wait() -- holding the
-                    // mutex across a blocking wait would lock shutdown()
-                    // out of ever reaching take()+kill() on this child.
-                    let killed_by_shutdown = loop {
+                    // mutex across a blocking wait would lock shutdown()/
+                    // set_enabled(false) out of ever reaching take()+kill()
+                    // on this child. Exits on any of: real shutdown,
+                    // operator disable, or the process dying by itself --
+                    // all three fall through to the same cleanup below.
+                    loop {
+                        if !p.running.load(Ordering::Relaxed)
+                            || !p.enabled.load(Ordering::Relaxed)
+                        {
+                            break;
+                        }
                         {
                             let mut slot = p.mediamtx_child.lock().await;
                             match slot.as_mut() {
                                 Some(child) => {
                                     if matches!(child.try_wait(), Ok(Some(_))) {
                                         *slot = None;
-                                        break false;
+                                        break;
                                     }
                                 }
-                                None => break true, // shutdown() took it
+                                None => break, // taken by shutdown()/set_enabled(false)
                             }
                         }
                         tokio::time::sleep(Duration::from_millis(300)).await;
-                    };
-
-                    p.mediamtx_alive.store(false, Ordering::Relaxed);
-                    if killed_by_shutdown || !p.running.load(Ordering::Relaxed) {
-                        break;
                     }
-                    eprintln!("pipeline: mediamtx exited, restarting");
+
+                    // Make sure it's actually dead and cleared -- idempotent
+                    // if shutdown()/set_enabled(false) already did this.
+                    if let Some(mut child) = p.mediamtx_child.lock().await.take() {
+                        let _ = child.kill().await;
+                    }
+                    p.mediamtx_alive.store(false, Ordering::Relaxed);
+
+                    if !p.running.load(Ordering::Relaxed) {
+                        break; // real shutdown -- end this task
+                    }
+                    // else: operator turned it off (outer loop idle-polls
+                    // `enabled` next iteration) or it crashed (outer loop
+                    // respawns after the backoff below, `enabled` still true)
                 }
                 Err(e) => eprintln!("pipeline: failed to start mediamtx: {e}"),
             }
@@ -254,6 +322,15 @@ fn spawn_stall_supervisor(p: Arc<Pipeline>) {
 
         loop {
             tokio::time::sleep(STALL_POLL_INTERVAL).await;
+
+            if !p.enabled.load(Ordering::Relaxed) {
+                // Operator has the server off -- nothing to heal.
+                // Reset so re-enabling doesn't immediately misfire off a
+                // stale "unchanged since" baseline from before it was off.
+                last_body = None;
+                unchanged_since = None;
+                continue;
+            }
 
             // Fast path: the capture child exited on its own (camera
             // unplugged and ffmpeg errored out, crash, etc). Don't wait for
@@ -399,19 +476,31 @@ fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
     cmd
 }
 
-/// Ported verbatim from pkg/etc/systemd/system/ffmpeg-cam-dark.service.
-/// That unit is never enabled by hls-livecam-setup -- confirmed by reading
-/// setup end to end, it's fossil config, same class as the nginx conf.d
-/// file from run 1. There is no live node to compare Hide's manifest
-/// characteristics against as a result (r=30 here vs. the real 15fps a
-/// consumer sees from Show -- that's inherited from the unit file, not a
-/// bug). See the run-2 report for the full note.
+/// Ported from pkg/etc/systemd/system/ffmpeg-cam-dark.service (fossil,
+/// never enabled by hls-livecam-setup -- same class as the nginx conf.d
+/// file from run 1), with one deliberate deviation from verbatim: `-re`.
+///
+/// The unit file doesn't have it, and its absence is a real bug, not a
+/// style choice preserved for fidelity. A real camera capture paces
+/// itself at the hardware's frame rate -- ffmpeg can only read frames as
+/// fast as the device produces them. A synthetic `lavfi` source has no
+/// such limit: without `-re` (read input at its native rate), ffmpeg
+/// generates and encodes black frames as fast as the CPU allows, not
+/// pinned to `r=30`. Measured live: two ffmpeg processes (this one and
+/// video_preview's independent decoder, which then also has to keep up
+/// with an unnecessarily bursty source) at 300-400% CPU sustained, not a
+/// startup spike -- confirmed via accumulated CPU time on both processes
+/// after several minutes in Hide. `-re` pins generation to real time;
+/// this is the actual fix, not a cosmetic one. Flagged here because it's
+/// a divergence from "port verbatim" instructions, not because the
+/// change itself is in doubt.
 fn hide_command(ffmpeg: &PathBuf) -> Command {
     let mut cmd = Command::new(ffmpeg);
     cmd.args([
         "-hide_banner",
         "-loglevel",
         "error",
+        "-re",
         "-f",
         "lavfi",
         "-i",

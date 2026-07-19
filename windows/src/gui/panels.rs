@@ -30,18 +30,40 @@ impl App {
         };
         ui.colored_label(risk_color, format!("RISK: {risk_text}"));
 
-        // camdash's REALLOC/PENDING/UNCORR are legacy ATA SMART attribute
-        // IDs. 7elwe's disk is NVMe -- those attributes don't exist here
-        // regardless of permissions (confirmed: this isn't a permissions
-        // gap, NVMe uses an entirely different SMART/Health log). The WMI
-        // class that carries NVMe's equivalents (wear, media errors) needs
-        // admin (verified live: CIM access denied on a standard token),
-        // which wasn't judged worth an elevation prompt on every autostart
-        // launch for one panel. Dimmed, not faked, per the brief.
+        // camdash's REALLOC/PENDING are legacy ATA SMART attribute IDs
+        // (5, 197). 7elwe's disk is NVMe -- those specific attributes
+        // don't exist here regardless of permissions; this isn't a
+        // permissions gap, NVMe uses an entirely different SMART/Health
+        // log with no reallocated-sector or pending-sector concept at
+        // all. Stay dimmed unconditionally.
         ui.colored_label(theme::DIM, "REALLOC: n/a (NVMe)");
         ui.colored_label(theme::DIM, "PENDING: n/a (NVMe)");
-        ui.colored_label(theme::DIM, "UNCORR: n/a (NVMe)");
-        ui.colored_label(theme::DIM, "TEMP: n/a (needs admin)");
+
+        // UNCORR and TEMP *do* have real NVMe equivalents, gated behind
+        // Get-StorageReliabilityCounter, which needs admin (verified live:
+        // CIM access denied on a standard token). This app now runs
+        // elevated (build.rs manifest, PM decision) specifically to
+        // unlock these two -- shown for real once available, still
+        // honestly dimmed if the elevated query ever fails for some
+        // other reason (driver quirk, etc.) rather than assumed to work
+        // just because the process is admin.
+        match &d.reliability {
+            Some(r) => {
+                let uncorr = r.read_errors_uncorrected + r.write_errors_uncorrected;
+                ui.colored_label(
+                    theme::smart_field_color(Some(uncorr), false),
+                    format!("UNCORR: {uncorr} (R:{} W:{})", r.read_errors_uncorrected, r.write_errors_uncorrected),
+                );
+                match r.temperature_c {
+                    Some(t) => ui.colored_label(theme::GREEN, format!("TEMP: {t:.0}\u{b0}C")),
+                    None => ui.colored_label(theme::DIM, "TEMP: n/a"),
+                };
+            }
+            None => {
+                ui.colored_label(theme::DIM, "UNCORR: n/a (elevated query failed)");
+                ui.colored_label(theme::DIM, "TEMP: n/a (elevated query failed)");
+            }
+        }
         ui.colored_label(theme::DIM, "WRITE: n/a (not wired)");
     }
 
@@ -171,11 +193,23 @@ impl App {
 
         ui.add_space(6.0);
         ui.colored_label(theme::WHITE_BOLD, format!("FPS:    {}", if showing { "15" } else { "n/a" }));
-        let svc = p.mediamtx_alive;
-        ui.colored_label(
-            if svc { theme::GREEN_BOLD } else { theme::RED_BOLD },
-            format!("SERVER: {}", if svc { "ON" } else { "OFF" }),
-        );
+
+        // SERVER: ON/OFF -- a real control now (camdash's [o] on/off),
+        // not just a passive readout of whether mediamtx happened to be
+        // alive at poll time. Reflects `enabled` (operator intent), not
+        // `mediamtx_alive` (liveness) -- otherwise a legitimate crash-
+        // restart cycle would flash "OFF" for a moment while `enabled`
+        // was still true and mediamtx was just respawning.
+        let on = p.enabled;
+        let label = format!("SERVER: {}", if on { "ON" } else { "OFF" });
+        let btn = egui::Button::new(egui::RichText::new(label).color(theme::BG))
+            .fill(if on { theme::GREEN_BOLD } else { theme::RED_BOLD });
+        if ui.add(btn).clicked() {
+            let pipeline = self.pipeline.clone();
+            self.spawn_async(async move {
+                pipeline.set_enabled(!on).await;
+            });
+        }
     }
 
     fn mode_button(&self, ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
@@ -217,19 +251,25 @@ impl App {
 
     // ---------------------------------------------------------- MESSAGE
     pub(super) fn draw_message(&mut self, ui: &mut egui::Ui) {
-        ui.colored_label(theme::DIM, "Leave a note for viewers");
+        ui.colored_label(theme::NEUTRAL_TEXT, "Leave a note for viewers");
 
         let locked = *self.state.msg_lock.lock().unwrap();
         let stored = self.state.message.lock().unwrap().clone();
 
-        // Sync from the stored value only when the field doesn't currently
-        // have keyboard focus (tracked from *last* frame's response --
-        // this frame's isn't known until after the widget is drawn below).
-        // Immediate-mode pitfall caught by actually driving the window
-        // with real keystrokes, not by reading the code: without this
-        // guard, `self.edit_buffer = stored.clone()` ran every repaint
-        // regardless of focus, silently overwriting anything typed with
-        // whatever was already on disk before the field could be saved.
+        // `editing_msg` is an EXPLICIT mode flag, not derived from live
+        // egui focus state. A prior version synced `edit_buffer` from
+        // `stored` whenever the TextEdit lacked focus() -- which sounds
+        // right, but clicking Save necessarily blurs the TextEdit in that
+        // *same* frame (any click outside a focused widget blurs it), so
+        // "did I just lose focus" and "did I just click Save" collapse
+        // into the same event, and a focus-driven guard can race its own
+        // save button. Confirmed broken against real clicks, not just
+        // reasoning about it: typed text reverted to the stored value
+        // instead of saving. An explicit mode -- entered on any real
+        // edit, cleared only by Save or Cancel -- has no such race,
+        // and is closer to what camdash itself does (an explicit edit
+        // mode toggled by a key, not derived from terminal focus, which
+        // doesn't really exist for a TUI anyway).
         if !self.editing_msg && !locked {
             self.edit_buffer = stored.clone();
         }
@@ -241,7 +281,9 @@ impl App {
                 .hint_text("(no message)");
             ui.add(edit)
         });
-        self.editing_msg = response.inner.has_focus();
+        if response.inner.changed() || response.inner.gained_focus() {
+            self.editing_msg = true;
+        }
 
         ui.horizontal(|ui| {
             let changed = self.edit_buffer != stored;
@@ -251,6 +293,7 @@ impl App {
                 self.spawn_async(async move {
                     let _ = state.set_message(&msg);
                 });
+                self.editing_msg = false;
             }
             if ui.add_enabled(!locked && !stored.is_empty(), egui::Button::new("Clear")).clicked() {
                 self.edit_buffer.clear();
@@ -258,9 +301,11 @@ impl App {
                 self.spawn_async(async move {
                     let _ = state.set_message("");
                 });
+                self.editing_msg = false;
             }
             if ui.add_enabled(!locked && changed, egui::Button::new("Cancel")).clicked() {
                 self.edit_buffer = stored.clone();
+                self.editing_msg = false;
             }
         });
 
@@ -276,6 +321,10 @@ impl App {
         // window share one lifetime, so "is the message API up" is always
         // true while the window is open.
         ui.colored_label(theme::GREEN_BOLD, "MESSAGE API: UP");
+        // Headroom: the panel is sized with slack below this point (see
+        // PANEL_CONTENT_PAD / the grid's cell sizing in mod.rs) so more
+        // message/broadcast controls can land here later without the
+        // panel needing to grow or its neighbors needing to move.
     }
 }
 

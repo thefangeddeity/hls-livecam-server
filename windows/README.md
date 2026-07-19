@@ -6,35 +6,79 @@ codes, same content types, same CORS placement.
 
 No WSL2, no nginx, no Flask, no systemd. One binary.
 
-## Status: run 3 of 4 — native operator dashboard, done
+## Status: run 4 of 4 — professional console restyle + fixes, done
 
-This closes the Windows node v1. Shipped here:
+This closes the Windows node v1. Run 3 shipped a working but
+terminal-flat egui window; run 4 restyled it to a professional NVR-
+console look (Blue Iris class -- framed, bordered, beveled panels on
+neutral steel/slate chrome) and fixed real bugs found by actually running
+the thing:
 
-- a native egui/eframe operator window -- no webview, no HTML in the GUI
-  anywhere -- reproducing camdash's six-panel cockpit (DISK/SMART, FEED,
-  SYSTEM, VIDEO, PROCESSES, MESSAGE) with the same green-on-black palette
-  and status-color thresholds, transcribed from camdash's source (see
-  `gui/theme.rs`) and the reference screenshot
-- live video in the FEED panel -- a second, independent ffmpeg tap on the
-  local RTSP stream, decoded to raw frames and uploaded as an egui
-  texture (see `video_preview.rs`)
-- GUI buttons drive the *same* AppState/Pipeline methods the HTTP handlers
-  call -- one process, no loopback HTTP client (PM direction: GUI and
-  server don't need to be decoupled just because that's how camdash and
-  the Linux stack relate)
-- autostart via the per-user Registry Run key, idempotent across restarts
+- **Restyle** (`gui/theme.rs`'s console-chrome section, `gui/mod.rs`'s
+  `panel_at`): every panel is a fully bordered, beveled box with a raised
+  header strip, on neutral dark-slate chrome. Fixes run 3's edge-bleed
+  bug (the rightmost column had no visible right border) by replacing
+  automatic `ui.horizontal()` sizing with an explicit rect-based grid.
+  Status colors (green/yellow/red/dim) are byte-for-byte unchanged --
+  only the chrome around them changed.
+- **Message save was actually broken** -- found by Ron clicking it
+  himself, not by my own testing. The "don't clobber while editing"
+  guard checked egui's live focus state, which necessarily goes false
+  the instant you click Save (any click outside a focused field blurs
+  it), racing the save itself. Replaced with an explicit edit-mode flag
+  that's only cleared by Save/Cancel, never by focus loss.
+- **Hide mode was burning 300-400% CPU** -- also found by Ron, not me.
+  The black-frame `lavfi` source had no `-re` (real-time pacing) flag,
+  so ffmpeg generated and encoded frames as fast as the CPU allowed
+  instead of pinned to 30fps. A real camera paces itself at the hardware
+  rate; a synthetic source doesn't unless told to. Now ~5% CPU per
+  process in Hide.
+- **SERVER: ON/OFF is now a real control**, not a passive readout --
+  `Pipeline::set_enabled()` stops/starts mediamtx and capture together,
+  both supervisor loops idle-poll instead of respawning while off.
+- **Runs elevated** (PM decision) so DISK/SMART can read
+  `Get-StorageReliabilityCounter` for real NVMe UNCORR/TEMP data,
+  previously permanently dimmed. This has a real cost: autostart moved
+  from the Registry Run key to a Scheduled Task (`RunLevel:
+  HighestAvailable`) since a Run-key launch of a `requireAdministrator`
+  exe still prompts UAC every login. **More importantly: once elevated,
+  I can no longer test this app's GUI myself** -- see the UIPI note
+  below. This is the single biggest process change this run forced.
 - minimize-to-tray (best-effort; falls back to a normal minimizable
   window if tray construction fails on a given machine)
 - clean shutdown: closing the window kills mediamtx.exe/ffmpeg.exe
   first -- Windows does not do this automatically when a parent process
-  exits, unlike what `taskkill /T`-based testing in run 2 made it easy to
-  assume (see `pipeline.rs::shutdown`)
+  exits (see `pipeline.rs::shutdown`)
 
 Deferred, unchanged from run 2: Cloak/blur/bw-mode's actual pixelation
-pipeline (v1.1). `cloak` fails safe to the same black source as `hide`,
-now also true for the GUI's disabled Blur/B&W controls -- present in the
-layout, non-interactive, so nothing advertises a capability this node
-doesn't have.
+pipeline (v1.1). `cloak` fails safe to the same black source as `hide`;
+the GUI's Blur/B&W controls stay visibly disabled, present in the layout
+so nothing advertises a capability this node doesn't have.
+
+### UIPI: elevation means I can no longer click-test this app myself
+
+Windows blocks synthetic input (`SendInput`/`mouse_event`, and
+`SendMessage`/`PostMessage` for input-shaped messages including
+`WM_CLOSE`) from a standard-integrity process to a higher-integrity
+window -- User Interface Privilege Isolation, the same mechanism that
+puts UAC's consent prompt on the Secure Desktop. Before this app required
+admin, my automation and the app ran at the same integrity level and this
+didn't apply; every prior run's click/keystroke verification worked
+because of that, not despite it.
+
+Confirmed empirically this run, not assumed: precisely-measured
+`mouse_event` clicks at the correct on-screen coordinates for Show,
+Buzz, and a `SendMessage(WM_CLOSE)` all silently did nothing once the
+window was running elevated, while the *identical* techniques worked
+throughout runs 1-3. Screenshots (`CopyFromScreen`, which reads the
+physical framebuffer rather than asking the target process for its
+content) and the HTTP API (a network socket, unrelated to window
+elevation) are unaffected -- I can still verify visually and can still
+drive `/api/feed-mode` etc. directly to prove the underlying pipeline
+logic works. What I cannot do anymore is prove a GUI *button* is wired
+to that logic by actually clicking it. Ron clicking the app himself is
+now load-bearing for GUI verification, not optional -- flagged plainly
+in the run-4 report rather than quietly narrowing what "verified" means.
 
 ## Build and run
 
@@ -140,10 +184,16 @@ disagreed, the live fleet won:
   equivalent (NVMe has no ATA REALLOC/PENDING/UNCORR attributes; this
   laptop's CPU temp isn't exposed cleanly; Windows has no Unix load
   average) are shown dimmed/n-a rather than approximated.
-- Found via actually driving the window with real clicks and keystrokes,
-  not by reading the code: the MESSAGE panel's edit buffer was getting
-  silently overwritten every repaint by the stored value, because the
-  "don't clobber while editing" guard checked a field that was never set
-  to true anywhere. Typed text could never be saved. Fixed by tracking the
-  text field's actual focus state instead. Screenshotting the running app
-  at each step is what caught this -- it read correctly in the source.
+- Run 3's message-save fix was incomplete -- the MESSAGE panel's edit
+  buffer was still getting silently overwritten by the stored value on
+  focus loss, because clicking Save necessarily blurs the field in the
+  same frame the click needs to register on. Ron caught this manually,
+  clicking the actual app; my own automated testing that run had missed
+  it (a coordinate-precision problem in the click automation masked the
+  real bug -- the clicks looked like they'd failed for a boring reason
+  when the field itself was the issue). Fixed properly in run 4: an
+  explicit edit-mode flag, cleared only by Save/Cancel, never by focus.
+- Run 3's Hide-mode ffmpeg command had no `-re` flag on its synthetic
+  `lavfi` source, so it encoded flat out instead of pinned to 30fps --
+  300-400% sustained CPU, also caught by Ron running the app, not by me.
+  See the run-4 status section above.

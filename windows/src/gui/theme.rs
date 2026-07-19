@@ -9,6 +9,40 @@
 
 use egui::Color32;
 
+// ---------------------------------------------------------- console chrome
+//
+// Run 4 restyle: professional NVR-console skin (Blue Iris reference class)
+// replacing run 3's flat black terminal transcription. This section is the
+// ONLY new palette; every status-color function below (status_color, led,
+// load_color, smart_field_color, proc_color) is untouched from run 3 --
+// PM instruction: keep the green/yellow/red status language exactly as
+// is, it now just rides on neutral steel/slate chrome instead of pure
+// black. Values are a cohesive dark-neutral set, not a literal Blue Iris
+// palette clone (that software's blue-tinted branding isn't the target --
+// the brief is explicit that only the *class* of look is being matched).
+
+/// Window background -- the darkest surface, behind every panel.
+pub const WINDOW_BG: Color32 = Color32::from_rgb(0x14, 0x17, 0x1B);
+/// Panel content area -- one step up from the window, reads as
+/// "recessed" relative to the header strip below.
+pub const PANEL_BG: Color32 = Color32::from_rgb(0x1C, 0x20, 0x26);
+/// Panel header strip -- lighter than the content area, reads as
+/// "raised," the console's title-bar-per-panel convention.
+pub const HEADER_BG: Color32 = Color32::from_rgb(0x2A, 0x30, 0x38);
+/// 1px highlight along a header's top/left edge -- half of the bevel.
+pub const BEVEL_LIGHT: Color32 = Color32::from_rgb(0x3C, 0x44, 0x4F);
+/// 1px shadow along a panel's bottom/right edge -- the other half.
+pub const BEVEL_DARK: Color32 = Color32::from_rgb(0x0A, 0x0C, 0x0E);
+/// The crisp, defined border every panel has on all four sides.
+pub const BORDER: Color32 = Color32::from_rgb(0x40, 0x48, 0x52);
+/// Muted panel-title label color -- console small-caps headers aren't
+/// pure white, they're a step down, matching the reference's tone.
+pub const HEADER_TEXT: Color32 = Color32::from_rgb(0xA8, 0xB1, 0xBC);
+/// Neutral body/label text (e.g. "Leave a note for viewers") that isn't
+/// carrying status meaning -- distinct from the green/yellow/red/DIM
+/// status vocabulary below, which is untouched.
+pub const NEUTRAL_TEXT: Color32 = Color32::from_rgb(0x8A, 0x93, 0x9E);
+
 pub const BG: Color32 = Color32::BLACK;
 
 pub const GREEN: Color32 = Color32::from_rgb(0x00, 0xAA, 0x00);
