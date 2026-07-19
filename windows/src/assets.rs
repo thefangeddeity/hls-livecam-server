@@ -8,11 +8,32 @@
 //! shared with the Debian package. Building windows/ outside the monorepo is
 //! not supported.
 
-pub const INDEX_HTML: &str =
-    include_str!("../../pkg/usr/share/hls-livecam-server/index.html");
+use std::sync::OnceLock;
 
-pub const CAMS_HTML: &str =
-    include_str!("../../pkg/usr/share/hls-livecam-server/cams/cams.html");
+const INDEX_RAW: &str = include_str!("../../pkg/usr/share/hls-livecam-server/index.html");
+const CAMS_RAW: &str = include_str!("../../pkg/usr/share/hls-livecam-server/cams/cams.html");
+
+/// Line endings are normalised to LF before serving.
+///
+/// git's core.autocrlf is true on a stock Windows checkout, which rewrites
+/// these files to CRLF on disk. Embedding them as-is served an index.html
+/// 973 bytes larger than tina's -- one \r per line -- so the page a peer
+/// fetched from this node was byte-different from every Linux sibling for
+/// no reason. Normalising here keeps the fix inside windows/ and holds
+/// regardless of how a given machine has autocrlf configured.
+fn lf(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
+pub fn index_html() -> &'static str {
+    static V: OnceLock<String> = OnceLock::new();
+    V.get_or_init(|| lf(INDEX_RAW)).as_str()
+}
+
+pub fn cams_html() -> &'static str {
+    static V: OnceLock<String> = OnceLock::new();
+    V.get_or_init(|| lf(CAMS_RAW)).as_str()
+}
 
 /// The fleet list. A camera node serves an empty list; the aggregator role
 /// lives on whichever box actually has the roster. `hls-livecam-setup` seeds

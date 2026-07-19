@@ -107,7 +107,7 @@ async fn index() -> Response {
     build(
         StatusCode::OK,
         "text/html",
-        assets::INDEX_HTML.as_bytes().to_vec(),
+        assets::index_html().as_bytes().to_vec(),
         false,
         true,
     )
@@ -118,7 +118,7 @@ async fn cams_html() -> Response {
     build(
         StatusCode::OK,
         "text/html",
-        assets::CAMS_HTML.as_bytes().to_vec(),
+        assets::cams_html().as_bytes().to_vec(),
         false,
         false,
     )
