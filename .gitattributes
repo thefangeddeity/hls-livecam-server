@@ -1,0 +1,9 @@
+# Platform subdirs excluded from `git archive` output.
+#
+# The AUR tarball (and any deb-staging archive) is produced by
+# `git archive <tag>`. Without export-ignore, these platform trees get
+# swept into the Arch source tarball. export-ignore makes git archive
+# omit them automatically -- self-maintaining, no per-ship vigilance.
+#
+# Add one line per platform subdir as it lands:
+windows/ export-ignore
