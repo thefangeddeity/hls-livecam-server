@@ -6,21 +6,29 @@ codes, same content types, same CORS placement.
 
 No WSL2, no nginx, no Flask, no systemd. One binary.
 
-## Status: run 1 of 4 — control-plane + web assets only
+## Status: run 2 of 4 — control-plane + live capture
 
 Shipped here:
 
 - `:80` control-plane API and the web assets, byte-identical to the
   package's `pkg/usr/share/hls-livecam-server/` copies
 - message board, buzz, feed-mode, msg-lock, bw-mode, dark, `/api/info`
-- state that survives a process restart
+- state that survives a process restart, including feed-mode -- a box
+  that was hidden boots back into hidden
+- live capture: dshow camera → ffmpeg → RTSP → mediamtx → HLS on
+  `:8888/cam/index.m3u8`, the same path the fleet already expects
+- Show/Hide actually drives the pipeline now: Hide is a source swap to a
+  black-frame ffmpeg on the same RTSP path, not a client-side overlay --
+  mediamtx keeps the HLS output continuous across the swap
+- self-healing capture supervision (process-exit + manifest-staleness
+  detection; see `pipeline.rs` for why this isn't a port of anything in
+  camdash -- there was nothing live to port)
 
-Not here yet (later runs): ffmpeg/dshow capture, mediamtx, RTSP, HLS, the
-tray icon, the dashboard GUI, autostart, and the Show/Hide feed effects.
-
-**The viewer's video player will sit dead at "connecting".** That is
-expected until run 2 brings up the capture pipeline. `feed-mode` records and
-reports its value but drives nothing.
+Not here yet (later runs): tray icon, dashboard GUI, autostart, installer.
+Cloak/blur/bw-mode's actual pixelation pipeline is deferred (v1.1) --
+`cloak` currently fails safe to the same black source as `hide` (see
+`pipeline.rs`), so clicking Blur in the existing viewer never leaves the
+real feed exposed, even though the visual isn't the real effect yet.
 
 ## Build and run
 
@@ -29,7 +37,20 @@ cargo build --release
 target\release\hls-livecam-win.exe
 ```
 
-Then open <http://localhost/>.
+Then open <http://localhost/>. ffmpeg.exe and mediamtx.exe are **not**
+vendored into this repo (that's run 3's job) -- the binary looks for them
+next to itself and fails loudly, naming the exact paths it checked, if it
+can't find them. See `binaries.rs` for the resolution order. For local
+runs, drop both into a `bin\` folder next to the exe:
+
+```
+target\release\bin\ffmpeg.exe
+target\release\bin\mediamtx.exe
+```
+
+Versions used this run: ffmpeg 8.1.2-essentials_build (gyan.dev Windows
+static build), mediamtx v1.15.2 (matches the version `hls-livecam-setup`
+pins on Linux).
 
 Binding :80 needs no elevation on Windows. The port is not negotiable: a
 peer's `cams.html` fetches `http://<ip>/broadcast.txt` with no port. (A
@@ -41,6 +62,8 @@ fleet changes".)
 |---|---|---|
 | `HLS_BIND` | `0.0.0.0:80` | Listen address. Handy for testing off :80. |
 | `HLS_STATE_DIR` | `%APPDATA%\hls-livecam-win` | Where state is persisted. |
+| `HLS_FFMPEG` | *(see binaries.rs)* | Explicit override path to ffmpeg.exe. |
+| `HLS_MEDIAMTX` | *(see binaries.rs)* | Explicit override path to mediamtx.exe. |
 
 ## HTTP surface
 
@@ -72,6 +95,23 @@ disagreed, the live fleet won:
   is true on tina or tanzania. That file is shadowed by the config
   `hls-livecam-setup` generates into `sites-available`, and appears to be
   dead. It is left alone here — it is a Linux-package concern.
+- `pkg/etc/systemd/system/ffmpeg-cam-dark.service` is never enabled by
+  `hls-livecam-setup` -- same class of fossil. Hide's black-frame command
+  is ported verbatim from it anyway (run-2 brief's explicit instruction),
+  so there's no live node to compare Hide's manifest characteristics
+  against. Its GOP/framerate (`r=30`, `g=60` → 2s keyframe interval) don't
+  match Show's real production values (`g=60` at 15fps output → 4s), so a
+  consumer will see `TARGETDURATION` change (4 → 2) and segment/sequence
+  numbers advance faster while hidden. Stream never drops across the
+  swap; only its segment cadence changes.
+- camdash's README claims "Auto-repair — detects stream down for 8s and
+  triggers repair automatically." Reading the actual source: `hls_worker()`
+  only checks `GET /cam/index.m3u8` for HTTP 200 every 5s (doesn't look at
+  whether the manifest is advancing), and `run_repair()` has exactly one
+  call site, the interactive `[r]` key. There's no auto-repair loop
+  anywhere in the current source. This node's self-healing supervisor is
+  therefore not a port of anything -- it's sized off mediamtx's own
+  `TARGETDURATION` (4s default; 8s stall threshold = two full segments).
 
 ## Notes
 

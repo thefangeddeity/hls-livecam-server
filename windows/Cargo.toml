@@ -2,12 +2,12 @@
 name = "hls-livecam-win"
 version = "0.1.0"
 edition = "2021"
-description = "Native Windows camera node for hls-livecam-server (control-plane + web assets)"
+description = "Native Windows camera node for hls-livecam-server (control-plane, web assets, capture pipeline)"
 license = "GPL-3.0"
 
 [dependencies]
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "time", "io-util"] }
 
 [profile.release]
 opt-level = "z"

@@ -33,7 +33,15 @@ use axum::{
 use std::sync::Arc;
 
 use crate::assets;
+use crate::pipeline::Pipeline;
 use crate::state::{is_valid_mode, AppState};
+
+/// Bundles the two things a handler might need. Most only touch state;
+/// only feed-mode also has to reach the pipeline to actually drive a swap.
+pub struct Ctx {
+    pub state: Arc<AppState>,
+    pub pipeline: Arc<Pipeline>,
+}
 
 /// Flask's content type for a bare `return "text", 200`.
 const FLASK_TEXT: &str = "text/html; charset=utf-8";
@@ -47,7 +55,7 @@ const FLASK_400: &str = "<!doctype html>\n<html lang=en>\n<title>400 Bad Request
 
 const FLASK_404: &str = "<!doctype html>\n<html lang=en>\n<title>404 Not Found</title>\n<h1>Not Found</h1>\n<p>The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.</p>\n";
 
-pub fn router(state: Arc<AppState>) -> Router {
+pub fn router(ctx: Arc<Ctx>) -> Router {
     Router::new()
         // -- served straight off disk by nginx on Linux --
         .route("/", get(index))
@@ -71,7 +79,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // anything else is refused by nginx itself. Different bodies.
         .route("/api/{*rest}", get(flask_not_found).post(flask_not_found))
         .fallback(nginx_not_found)
-        .with_state(state)
+        .with_state(ctx)
 }
 
 fn build(status: StatusCode, ctype: &str, body: Vec<u8>, cors: bool, nocache: bool) -> Response {
@@ -133,29 +141,29 @@ async fn cams_redirect() -> Response {
         .unwrap()
 }
 
-async fn cams_json(State(st): State<Arc<AppState>>) -> Response {
+async fn cams_json(State(ctx): State<Arc<Ctx>>) -> Response {
     build(
         StatusCode::OK,
         "application/json",
-        st.cams_json().into_bytes(),
+        ctx.state.cams_json().into_bytes(),
         true,
         true,
     )
 }
 
-async fn broadcast_txt(State(st): State<Arc<AppState>>) -> Response {
-    let msg = st.message.lock().unwrap().clone();
+async fn broadcast_txt(State(ctx): State<Arc<Ctx>>) -> Response {
+    let msg = ctx.state.message.lock().unwrap().clone();
     build(StatusCode::OK, "text/plain", msg.into_bytes(), true, true)
 }
 
-async fn buzz_txt(State(st): State<Arc<AppState>>) -> Response {
-    let ts = st.buzz.lock().unwrap().clone();
+async fn buzz_txt(State(ctx): State<Arc<Ctx>>) -> Response {
+    let ts = ctx.state.buzz.lock().unwrap().clone();
     // No CORS here on purpose -- see module docs.
     build(StatusCode::OK, "text/plain", ts.into_bytes(), false, true)
 }
 
-async fn dark_png(State(st): State<Arc<AppState>>) -> Response {
-    match st.dark_png() {
+async fn dark_png(State(ctx): State<Arc<Ctx>>) -> Response {
+    match ctx.state.dark_png() {
         Some(bytes) => build(StatusCode::OK, "image/png", bytes, false, true),
         // No cloak image generated yet -- nginx 404s the same way.
         None => nginx_not_found().await,
@@ -164,11 +172,11 @@ async fn dark_png(State(st): State<Arc<AppState>>) -> Response {
 
 // ------------------------------------------------------------------- api
 
-async fn api_broadcast(State(st): State<Arc<AppState>>, body: String) -> Response {
+async fn api_broadcast(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
     // Python: request.get_data(as_text=True).strip()[:MAX_LEN]
     // [:120] slices characters, not bytes, so take() over chars.
     let msg: String = body.trim().chars().take(120).collect();
-    match st.set_message(&msg) {
+    match ctx.state.set_message(&msg) {
         Ok(()) => Response::builder()
             .status(StatusCode::NO_CONTENT)
             .header(header::CONTENT_TYPE, FLASK_TEXT)
@@ -184,12 +192,12 @@ async fn api_broadcast(State(st): State<Arc<AppState>>, body: String) -> Respons
     }
 }
 
-async fn api_buzz(State(st): State<Arc<AppState>>) -> Response {
+async fn api_buzz(State(ctx): State<Arc<Ctx>>) -> Response {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis().to_string())
         .unwrap_or_else(|_| "0".to_string());
-    match st.set_buzz(&ts) {
+    match ctx.state.set_buzz(&ts) {
         Ok(()) => flask_text(ts),
         Err(_) => build(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -201,12 +209,12 @@ async fn api_buzz(State(st): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn feed_mode_get(State(st): State<Arc<AppState>>) -> Response {
-    let m = st.feed_mode.lock().unwrap().clone();
+async fn feed_mode_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    let m = ctx.state.feed_mode.lock().unwrap().clone();
     flask_text(m)
 }
 
-async fn feed_mode_post(State(st): State<Arc<AppState>>, body: String) -> Response {
+async fn feed_mode_post(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
     let mode = body.trim().to_string();
     if !is_valid_mode(&mode) {
         return build(
@@ -217,36 +225,39 @@ async fn feed_mode_post(State(st): State<Arc<AppState>>, body: String) -> Respon
             false,
         );
     }
-    // Run 1: recorded and reported, drives no pipeline yet.
-    st.set_feed_mode(&mode);
+    // Persist first (contract-visible immediately even if the swap is
+    // still in flight), then drive the actual source swap. "cloak" fails
+    // safe to the same black source as "hide" this run -- see pipeline.rs.
+    ctx.state.set_feed_mode(&mode);
+    ctx.pipeline.apply_feed_mode(&mode).await;
     flask_text(mode)
 }
 
-async fn msg_lock_get(State(st): State<Arc<AppState>>) -> Response {
-    let v = *st.msg_lock.lock().unwrap();
+async fn msg_lock_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    let v = *ctx.state.msg_lock.lock().unwrap();
     bool_text(v)
 }
 
-async fn msg_lock_post(State(st): State<Arc<AppState>>) -> Response {
-    bool_text(st.toggle_msg_lock())
+async fn msg_lock_post(State(ctx): State<Arc<Ctx>>) -> Response {
+    bool_text(ctx.state.toggle_msg_lock())
 }
 
-async fn bw_mode_get(State(st): State<Arc<AppState>>) -> Response {
-    let v = *st.bw_mode.lock().unwrap();
+async fn bw_mode_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    let v = *ctx.state.bw_mode.lock().unwrap();
     bool_text(v)
 }
 
-async fn bw_mode_post(State(st): State<Arc<AppState>>) -> Response {
-    bool_text(st.toggle_bw_mode())
+async fn bw_mode_post(State(ctx): State<Arc<Ctx>>) -> Response {
+    bool_text(ctx.state.toggle_bw_mode())
 }
 
-async fn dark_get(State(st): State<Arc<AppState>>) -> Response {
-    let v = *st.dark.lock().unwrap();
+async fn dark_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    let v = *ctx.state.dark.lock().unwrap();
     bool_text(v)
 }
 
-async fn dark_post(State(st): State<Arc<AppState>>) -> Response {
-    bool_text(st.toggle_dark())
+async fn dark_post(State(ctx): State<Arc<Ctx>>) -> Response {
+    bool_text(ctx.state.toggle_dark())
 }
 
 async fn api_info() -> Response {
