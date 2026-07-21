@@ -8,7 +8,7 @@
 
 use eframe::egui;
 
-use super::components::{filled_button, stat_row_offline};
+use super::components::{self, filled_button, stat_row_offline};
 use super::{fonts, theme, App};
 
 impl App {
@@ -172,15 +172,15 @@ impl App {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             // Add: always available -- creates a new entry from the fields.
-            if ui.button("Add").clicked() {
+            if components::button(ui, "Add").clicked() {
                 self.commit_form(false);
             }
             // Save: only when a row is selected -- updates it in place.
-            if ui.add_enabled(editing, egui::Button::new("Save")).clicked() {
+            if components::button_enabled(ui, editing, "Save").clicked() {
                 self.commit_form(true);
             }
             // Delete: only when a row is selected.
-            if ui.add_enabled(editing, egui::Button::new("Delete")).clicked() {
+            if components::button_enabled(ui, editing, "Delete").clicked() {
                 if let Some(i) = self.ip_form.selected {
                     self.cams.remove(i);
                     self.persist("Deleted.");
@@ -197,7 +197,7 @@ impl App {
                     self.ip_manager_open = false;
                     self.ip_form.clear();
                 }
-                if editing && ui.button("New").clicked() {
+                if editing && components::button(ui, "New").clicked() {
                     // Drop the selection to switch from edit-mode back to
                     // add-mode without closing.
                     self.ip_form.clear();

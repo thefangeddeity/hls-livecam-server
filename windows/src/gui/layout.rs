@@ -40,6 +40,10 @@ const PANEL_PAD: f32 = 14.0; // design doc §4: panel padding 14px
 const STAT_ROW_H: f32 = 24.0;
 /// Per-panel chrome: header strip + 4px offset + bottom pad.
 const CHROME_H: f32 = HEADER_STRIP_H + 4.0 + PANEL_PAD;
+/// Fixed MESSAGE panel height: hint/count row + 4-row textarea + button
+/// row + lock row + gaps + chrome. Keeps the textarea a sane size instead
+/// of stretching to fill the column.
+const MESSAGE_H: f32 = 250.0;
 /// Never let the feed column collapse below this even on a narrow
 /// window -- the side columns are fixed-width, so without a floor the
 /// center rect inverts.
@@ -88,17 +92,27 @@ impl App {
         self.panel_at(ui, center_feed, "Feed", |ui, s| s.draw_feed_with_toolbar(ui, pstatus));
         self.panel_at(ui, center_sys, "System", |ui, s| s.draw_system(ui));
 
-        // ---- right column: DISK/SMART (fixed) over MESSAGE (absorbs) ----
-        // DISK/SMART: 8 stat rows (Disk, Assess, Risk, Realloc, Pending,
-        // Uncorr, Temp, Write).
+        // ---- right column: DISK/SMART (fixed), MESSAGE (fixed), NETWORK
+        // (absorbs) ----
+        // DISK/SMART: 8 stat rows. MESSAGE is now a FIXED modest height
+        // (operator: "message box too tall" once it absorbed the whole
+        // column) -- a 4-row textarea + count + buttons + lock. NETWORK
+        // (new) takes the remainder; it's reference info that reads fine
+        // with a little air, so it's the right absorber here.
         let disk_h = 8.0 * STAT_ROW_H + CHROME_H;
+        let msg_h = MESSAGE_H;
         let right_disk = egui::Rect::from_min_size(right.min, egui::vec2(RIGHT_COL_W, disk_h));
-        let right_msg = egui::Rect::from_min_max(
+        let right_msg = egui::Rect::from_min_size(
             egui::pos2(right.left(), right_disk.bottom() + GUTTER),
+            egui::vec2(RIGHT_COL_W, msg_h),
+        );
+        let right_net = egui::Rect::from_min_max(
+            egui::pos2(right.left(), right_msg.bottom() + GUTTER),
             right.max,
         );
         self.panel_at(ui, right_disk, "Disk / SMART", |ui, s| s.draw_disk_smart(ui));
         self.panel_at(ui, right_msg, "Message", |ui, s| s.draw_message(ui));
+        self.panel_at(ui, right_net, "Node", |ui, s| s.draw_node(ui, pstatus));
     }
 
     /// A framed, bordered panel at an exact rect with a raised header

@@ -44,12 +44,29 @@ pub fn stat_row_offline(ui: &mut egui::Ui, key: &str, value: &str) {
     });
 }
 
-/// A filled action button with real hover/pressed feedback. Plain
-/// `Button::fill()` pins one fill across every interact state, so the
-/// colored buttons (Buzz, Save-when-primary) gave zero hover response
-/// while stock buttons next to them did (review finding) -- this routes
-/// the fill through the widget-visuals machinery instead so egui's own
-/// hover/press handling drives it, using the spec's hover tokens.
+/// A standard action button at the uniform minimum size (theme::
+/// button_min_size). Use this instead of `ui.button(..)` for every
+/// operator-facing button so widths are consistent across the app.
+pub fn button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add(egui::Button::new(text).min_size(theme::button_min_size()))
+}
+
+/// Enable-gated variant of `button`.
+pub fn button_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    text: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    ui.add_enabled(enabled, egui::Button::new(text).min_size(theme::button_min_size()))
+}
+
+/// A filled action button with real hover/pressed feedback, at the same
+/// uniform minimum size. Plain `Button::fill()` pins one fill across
+/// every interact state, so the colored buttons (Buzz, accent Close)
+/// gave zero hover response while stock buttons next to them did (review
+/// finding) -- this routes the fill through the widget-visuals machinery
+/// instead so egui's own hover/press handling drives it, using the
+/// spec's hover tokens.
 pub fn filled_button(
     ui: &mut egui::Ui,
     text: impl Into<egui::WidgetText>,
@@ -67,7 +84,7 @@ pub fn filled_button(
         w.active.weak_bg_fill = hover_fill;
         w.active.bg_fill = hover_fill;
         w.active.bg_stroke = egui::Stroke::new(1.0_f32, hover_fill);
-        ui.add(egui::Button::new(text))
+        ui.add(egui::Button::new(text).min_size(theme::button_min_size()))
     })
     .inner
 }
@@ -82,7 +99,7 @@ pub fn status_pill(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
     let gap = 6.0;
 
     let font = fonts::semibold(11.0);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font.clone(), color);
     let content_w = dot_r * 2.0 + gap + galley.size().x;
     let content_h = galley.size().y.max(dot_r * 2.0);
     let size = egui::vec2(content_w + pad_h * 2.0, content_h + pad_v * 2.0);
@@ -104,6 +121,17 @@ pub fn status_pill(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
 
     let text_pos = dot_center + egui::vec2(dot_r + gap, -galley.size().y / 2.0);
     painter.galley(text_pos, galley, color);
+}
+
+/// The exact rendered width of `status_pill` for `label` -- so the header
+/// can place the pill in a rect that width, centered on the true window
+/// center (sequential-thirds drift left the pill slightly off-center;
+/// operator wanted it dead-centre). Mirrors the size math above:
+/// dot(6) + gap(6) + text + horizontal padding(20).
+pub fn status_pill_width(ui: &egui::Ui, label: &str) -> f32 {
+    let galley =
+        ui.fonts(|f| f.layout_no_wrap(label.to_string(), fonts::semibold(11.0), theme::text()));
+    galley.size().x + 32.0
 }
 
 /// `.info-chip .badge`: small muted chip (600 weight per spec). Was used

@@ -49,18 +49,6 @@ impl App {
         let feed_hidden = feed_mode == "hide";
         let obscured = blurred || feed_hidden;
 
-        let mut qualifiers = Vec::new();
-        if intentional_off {
-            qualifiers.push("services stopped");
-        } else if matches!(base_status, "DEGRADED" | "DOWN") {
-            qualifiers.push("suggest repair");
-        }
-        if blurred {
-            qualifiers.push("feed blurred");
-        } else if feed_hidden {
-            qualifiers.push("feed hidden");
-        }
-
         // Design-system spine decision: red = LIVE/on-air, green =
         // healthy/service-up. This is the same split camdash's own
         // header_attr() already encoded (LIVE + exposed = RED) -- ported
@@ -77,113 +65,129 @@ impl App {
             theme::critical()
         };
 
-        // Pill text stays terse -- the design doc's status vocabulary is
-        // one word (LIVE/DEGRADED/DOWN/OFF), not a sentence. Qualifier
-        // detail ("suggest repair," "feed hidden") renders as small dim
-        // text after the pill instead of crammed inside it.
+        // Qualifiers are no longer crammed next to the pill -- the header
+        // center is the pill alone, dead-centre (open-source convention:
+        // a three-section title bar, left/center/right; the primary
+        // status indicator owns the center). The qualifier detail moved
+        // to the footer status bar (ambient_status), where a bottom
+        // status bar conventionally reports current state.
         let pill_label = if intentional_off { "OFF" } else { base_status };
-        let qualifier_text = qualifiers.join("  \u{2022}  ");
 
-        let full_w = ui.available_width();
-        let right_text = format!("\"{}\" {}", self.hostname, chrono_like_timestamp());
-        let right_w = (text_width(ui, &right_text) + 16.0).min(full_w * 0.3);
+        // Left title, right clock, and the pill placed at the TRUE window
+        // centre via explicit rects -- sequential thirds accumulate
+        // item-spacing drift that left the pill visibly off-centre
+        // (operator: "LIVE dead in the middle"). The pill gets a rect its
+        // own width, centred on rect.center().x, so it lands exactly
+        // centre regardless of the side text widths.
+        //
+        // Allocate a real row FIRST (not available_rect_before_wrap):
+        // placing content only in child UIs allocates nothing in the
+        // parent, so the auto-sized header panel collapsed to its margins
+        // and the text clipped against the OS title bar (operator: "header
+        // too narrow, can't read anything"). allocate_exact_size reserves
+        // the height so the panel sizes correctly.
+        let height = 28.0;
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
         let left_text = format!("Webcam Server Stack  \u{2022}  uptime {up_h}h {up_m}m");
-        let left_w = (text_width(ui, &left_text) + 16.0).min(full_w * 0.3);
-        let mid_w = (full_w - left_w - right_w).max(0.0);
-        let height = ui.available_height();
+        let right_text = format!("\"{}\"   {}", self.hostname, chrono_like_timestamp());
 
-        // Title/uptime and hostname/timestamp are chrome, not status --
-        // color is reserved for the status pill alone.
-        ui.horizontal(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(left_w, height),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    // `.strong()` does not embolden without a bold face
-                    // registered (review finding) -- use the real
-                    // semibold family for the app title.
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&left_text)
-                                .font(fonts::semibold(theme::SIZE_BODY))
-                                .color(theme::text()),
-                        )
-                        .truncate(),
-                    );
-                },
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(mid_w, height),
-                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                |ui| {
-                    ui.horizontal(|ui| {
-                        components::status_pill(ui, pill_label, pill_color);
-                        if !qualifier_text.is_empty() {
-                            ui.add_space(8.0);
-                            ui.colored_label(theme::text_muted(), &qualifier_text);
-                        }
-                    });
-                },
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(right_w, height),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&right_text).color(theme::text_dim()))
-                            .truncate(),
-                    );
-                },
-            );
-        });
+        let pill_w = components::status_pill_width(ui, pill_label);
+        let side_w = ((rect.width() - pill_w) / 2.0 - 12.0).max(0.0);
+
+        // Left: title + uptime (semibold; `.strong()` doesn't embolden
+        // without a real bold face -- review finding).
+        let mut left_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_size(rect.min, egui::vec2(side_w, rect.height())))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        left_ui.add(
+            egui::Label::new(
+                egui::RichText::new(&left_text)
+                    .font(fonts::semibold(theme::SIZE_BODY))
+                    .color(theme::text()),
+            )
+            .truncate(),
+        );
+
+        // Center: the status pill, dead-centre.
+        let pill_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.center().x, rect.center().y),
+            egui::vec2(pill_w, rect.height()),
+        );
+        let mut pill_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(pill_rect)
+                .layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)),
+        );
+        components::status_pill(&mut pill_ui, pill_label, pill_color);
+
+        // Right: hostname + clock, right-aligned (far right).
+        let mut right_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - side_w, rect.top()),
+                    rect.max,
+                ))
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        right_ui.add(
+            egui::Label::new(egui::RichText::new(&right_text).color(theme::text_dim())).truncate(),
+        );
     }
 
-    pub(super) fn draw_footer(&mut self, ui: &mut egui::Ui) {
-        // Buzz moved to the FEED toolbar (design doc §8/A1: it's a
-        // control, grouped with the feed it affects) -- footer keeps
-        // chrome plus the two node-wide actions that don't belong to any
-        // one panel: theme switch and the fleet-roster (Cam IPs) editor.
+    pub(super) fn draw_footer(&mut self, ui: &mut egui::Ui, p: &PipelineStatus) {
+        // Bottom status bar (open-source convention): app-level action
+        // buttons on the left, the live status message center, chrome
+        // (GPL) far right. The old static IP text moved into the NETWORK
+        // panel; this row now reports what's happening instead.
         ui.horizontal(|ui| {
-            if self.tray.is_some() && ui.button("Minimize to tray").clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            // Server on/off is an app-level power control, not a feed
+            // action -- it lives here with the other node-wide buttons,
+            // not in the feed toolbar (which is now feed-only). This also
+            // keeps the feed toolbar within the center column at minimum
+            // window width.
+            let server_label = if p.enabled { "Stop server" } else { "Start server" };
+            if components::button(ui, server_label).clicked() {
+                let on = p.enabled;
+                let pipeline = self.pipeline.clone();
+                self.spawn_async(async move {
+                    pipeline.set_enabled(!on).await;
+                });
+                self.set_status(if p.enabled { "Server stopped" } else { "Server started" });
             }
-            // Cam IPs (run 6): camdash's `[i]` as a modal roster editor
-            // over this node's cams.json.
-            if ui.button("Cam IPs").clicked() {
+            // Cam IPs (run 6): camdash's `[i]` as a modal roster editor.
+            if components::button(ui, "Cam IPs").clicked() {
                 self.ip_manager_open = true;
             }
-            // Live theme switch -- the palette is read per-frame, so the
-            // whole window follows on the next repaint; choice persists
-            // in the state dir.
+            if self.tray.is_some() && components::button(ui, "Minimize").clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            // Live theme switch -- palette is read per-frame, so the whole
+            // window follows next repaint; choice persists in the state dir.
             let toggle_label = if theme::is_light() { "Dark theme" } else { "Light theme" };
-            if ui.button(toggle_label).clicked() {
+            if components::button(ui, toggle_label).clicked() {
                 theme::set_light(!theme::is_light());
             }
-            ui.add_space(12.0);
-            ui.colored_label(
-                theme::text_muted(),
-                format!(
-                    "IP: {} (Tailscale)  \u{2022}  {}",
-                    if self.tailscale.is_empty() { "n/a" } else { &self.tailscale },
-                    self.hostname
-                ),
-            );
-            // Headroom: an IP/fleet panel (camdash's [i] cam IPs) can land
-            // here later without a relayout -- this row already has slack
-            // and a natural slot before the trailing GPL text.
+
+            ui.add_space(16.0);
+            // Status message: the last operator action for a few seconds,
+            // then "Ready" at rest. This is a TRANSIENT event line, NOT a
+            // liveness light -- on-air state is the header pill, service
+            // state is the NODE panel's Server row. No permanent dot here
+            // (it would be a redundant third liveness signal -- operator
+            // correction).
+            match self.active_status() {
+                Some(msg) => ui.colored_label(theme::text_dim(), msg),
+                None => ui.colored_label(theme::text_muted(), "Ready"),
+            };
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.colored_label(theme::text_muted(), "GPL 3.0");
             });
         });
     }
-}
-
-/// Measures rendered text width at the UI's current font/size so the
-/// header's left/right column widths fit their content instead of using
-/// guessed pixel budgets.
-fn text_width(ui: &egui::Ui, text: &str) -> f32 {
-    let font_id = egui::TextStyle::Body.resolve(ui.style());
-    ui.fonts(|f| f.layout_no_wrap(text.to_string(), font_id, egui::Color32::WHITE).size().x)
 }
 
 /// No chrono dependency for one timestamp -- std::time plus a fixed civil-

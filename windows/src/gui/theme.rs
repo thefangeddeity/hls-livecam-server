@@ -167,6 +167,22 @@ pub const STAT_ROW_MIN_H: f32 = 20.0;
 // proportioned to each other by design.
 pub const BUTTON_PADDING: Vec2 = Vec2 { x: 11.0, y: 5.0 };
 pub const MIN_BUTTON_HEIGHT: f32 = 32.0;
+/// Uniform minimum button width. egui sizes buttons to their text, so
+/// Show/Blur/Hide/Buzz/Save/... came out visibly different widths
+/// (operator feedback: "make all buttons the same size"). Every action
+/// button is floored to this via components::button so a row of them
+/// reads as one control set; a longer label (e.g. "Start server") grows
+/// past it rather than truncating. 72 fits the feed toolbar within the
+/// center column at the 1100px minimum window width.
+pub const BUTTON_MIN_W: f32 = 72.0;
+
+/// The uniform (min-width, height) every action button floors to.
+pub fn button_min_size() -> Vec2 {
+    Vec2 {
+        x: BUTTON_MIN_W,
+        y: MIN_BUTTON_HEIGHT,
+    }
+}
 
 // Fluent type ramp (the subset this app uses): Body 14, control text
 // Body-size, Small 11 (captions/badges), Heading 16.

@@ -116,7 +116,12 @@ impl App {
     /// PENDING-badge half-state is gone. Show/Blur/Hide are one
     /// mutually-exclusive feed-mode group; B&W is a modifier that only
     /// bites while Blur is active.
-    pub(super) fn draw_feed_toolbar(&mut self, ui: &mut egui::Ui, p: &PipelineStatus) {
+    pub(super) fn draw_feed_toolbar(&mut self, ui: &mut egui::Ui, _p: &PipelineStatus) {
+        // Feed-only toolbar now: Show / Blur / Hide / B&W / Buzz. Server
+        // on/off moved to the footer (an app-level power control, not a
+        // feed action) -- which also keeps this row inside the center
+        // column at the 1100px minimum window width. All buttons share
+        // the uniform min width (theme::BUTTON_MIN_W).
         let feed_mode = self.state.feed_mode.lock().unwrap().clone();
         let showing = feed_mode == "show";
         let blurring = feed_mode == "cloak";
@@ -124,12 +129,15 @@ impl App {
 
         if self.mode_button(ui, "Show", showing).clicked() {
             self.request_feed_mode("show");
+            self.set_status("Feed live");
         }
         if self.mode_button(ui, "Blur", blurring).clicked() {
             self.request_feed_mode("cloak");
+            self.set_status("Feed blurred");
         }
         if self.mode_button(ui, "Hide", hiding).clicked() {
             self.request_feed_mode("hide");
+            self.set_status("Feed hidden");
         }
 
         ui.add_space(10.0);
@@ -149,14 +157,15 @@ impl App {
                 state.toggle_bw_mode();
                 pipeline.refresh_cloak().await;
             });
+            self.set_status(if bw { "Feed blurred (B&W)" } else { "Feed blurred" });
         }
 
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(14.0);
 
-        // `.buzz-btn`: its own red, #fff text, 700 weight -- with real
-        // hover feedback (`.buzz-btn:hover #e0352b`).
+        // `.buzz-btn`: its own red, #fff text, 700 weight, uniform width --
+        // with real hover feedback (`.buzz-btn:hover #e0352b`).
         let buzz_text = egui::RichText::new("Buzz")
             .font(super::fonts::bold(theme::SIZE_BUTTON))
             .color(egui::Color32::WHITE);
@@ -165,24 +174,7 @@ impl App {
             self.spawn_async(async move {
                 let _ = state.buzz_now();
             });
-        }
-
-        ui.add_space(14.0);
-        ui.separator();
-        ui.add_space(14.0);
-
-        // A standard `.btn` verb, not a green/red filled status-object --
-        // the previous SERVER: ON/OFF button invented a filled style that
-        // exists nowhere in the design system and conflated state (green
-        // = running) with action (click = stop). State lives in the
-        // header's status pill; this is just the verb (review finding).
-        let on = p.enabled;
-        let label = if on { "Stop server" } else { "Start server" };
-        if ui.button(label).clicked() {
-            let pipeline = self.pipeline.clone();
-            self.spawn_async(async move {
-                pipeline.set_enabled(!on).await;
-            });
+            self.set_status("Buzz sent");
         }
     }
 
@@ -265,17 +257,19 @@ impl App {
         // Repair is a control, not a stat row -- restore the 32px control
         // minimum that dense() lowered for the rows above it.
         ui.spacing_mut().interact_size.y = theme::MIN_BUTTON_HEIGHT;
-        if ui.button("Repair").clicked() {
+        if components::button(ui, "Repair").clicked() {
             let pipeline = self.pipeline.clone();
             self.spawn_async(async move {
                 pipeline.manual_repair().await;
             });
+            self.set_status("Repair triggered");
         }
     }
 
     fn mode_button(&self, ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
         // The viewer's `.dark-btn.is-dark` toggle-on pattern: raised
-        // fill, brighter border, when active.
+        // fill, brighter border, when active. Uniform min width so the
+        // feed-mode buttons are all the same size.
         let btn = if selected {
             egui::Button::new(egui::RichText::new(label).color(theme::text()))
                 .fill(theme::border_strong())
@@ -283,7 +277,7 @@ impl App {
         } else {
             egui::Button::new(egui::RichText::new(label).color(theme::text()))
         };
-        ui.add(btn)
+        ui.add(btn.min_size(theme::button_min_size()))
     }
 
     fn request_feed_mode(&self, mode: &str) {
@@ -366,23 +360,25 @@ impl App {
         // is carried by enablement, same as the web.
         ui.horizontal(|ui| {
             let changed = self.edit_buffer != stored;
-            if ui.add_enabled(!locked && changed, egui::Button::new("Save")).clicked() {
+            if components::button_enabled(ui, !locked && changed, "Save").clicked() {
                 let state = self.state.clone();
                 let msg = self.edit_buffer.clone();
                 self.spawn_async(async move {
                     let _ = state.set_message(&msg);
                 });
                 self.editing_msg = false;
+                self.set_status("Message saved");
             }
-            if ui.add_enabled(!locked && !stored.is_empty(), egui::Button::new("Clear")).clicked() {
+            if components::button_enabled(ui, !locked && !stored.is_empty(), "Clear").clicked() {
                 self.edit_buffer.clear();
                 let state = self.state.clone();
                 self.spawn_async(async move {
                     let _ = state.set_message("");
                 });
                 self.editing_msg = false;
+                self.set_status("Message cleared");
             }
-            if ui.add_enabled(!locked && changed, egui::Button::new("Cancel")).clicked() {
+            if components::button_enabled(ui, !locked && changed, "Cancel").clicked() {
                 self.edit_buffer = stored.clone();
                 self.editing_msg = false;
             }
@@ -403,10 +399,30 @@ impl App {
                 ui.colored_label(theme::text_muted(), "API up");
             });
         });
-        // Headroom: the panel is sized with slack below this point (right
-        // column gets the largest share of the three, see layout.rs) so
-        // more message/broadcast controls can land here later without
-        // the panel needing to grow or its neighbors needing to move.
+    }
+
+    // -------------------------------------------------------------- NODE
+    //
+    // Run 6.1: the node's identity + reachability at a glance -- the
+    // IP/host text that used to sit in the footer, promoted to its own
+    // panel so the footer can carry transient status instead (operator
+    // request). Titled "Node" (not "Network"): it's this box's identity,
+    // not a network-config panel. Fleet-facing ports are the fixed
+    // contract values (:80 control, :8888 HLS), not the possibly-
+    // overridden local bind.
+    pub(super) fn draw_node(&mut self, ui: &mut egui::Ui, p: &PipelineStatus) {
+        dense(ui);
+        let na = |s: &str| if s.is_empty() { "n/a".to_string() } else { s.to_string() };
+        stat_row(ui, "Tailscale", &na(&self.tailscale), None);
+        stat_row(ui, "Local IP", &na(&self.local_ip), None);
+        stat_row(ui, "Hostname", &na(&self.hostname), None);
+        stat_row(ui, "HTTP", ":80", None);
+        stat_row(ui, "HLS", ":8888/cam", None);
+        if p.enabled {
+            stat_row(ui, "Server", "running", Some(theme::healthy()));
+        } else {
+            stat_row(ui, "Server", "stopped", Some(theme::text_muted()));
+        }
     }
 }
 

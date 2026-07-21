@@ -39,6 +39,9 @@ const REPAINT_INTERVAL: Duration = Duration::from_millis(150);
 /// sized off mediamtx's segment timing -- this is a different decision
 /// with different stakes.
 const FRAME_STALE_AFTER: Duration = Duration::from_secs(3);
+/// How long a footer status message stays up before the bar falls back to
+/// the ambient feed state.
+const STATUS_HOLD: Duration = Duration::from_secs(5);
 
 pub struct App {
     state: Arc<AppState>,
@@ -59,6 +62,13 @@ pub struct App {
 
     hostname: String,
     tailscale: String,
+    local_ip: String,
+
+    // Footer status line (replaces the old static IP text): the last
+    // operator action, shown for a few seconds then fading back to the
+    // ambient feed state. Set via set_status() at each action's click.
+    status_text: String,
+    status_at: Instant,
 
     editing_msg: bool,
     edit_buffer: String,
@@ -123,6 +133,14 @@ impl App {
             last_frame_at: Instant::now(),
             hostname: routes::hostname(),
             tailscale: routes::tailscale_ip(),
+            local_ip: routes::local_ip(),
+            status_text: String::new(),
+            // Start already-expired so the footer shows ambient state, not
+            // a stale message. checked_sub avoids an underflow panic if the
+            // monotonic clock's zero is < STATUS_HOLD ago at startup.
+            status_at: Instant::now()
+                .checked_sub(STATUS_HOLD)
+                .unwrap_or_else(Instant::now),
             editing_msg: false,
             edit_buffer: String::new(),
             ip_manager_open: false,
@@ -138,6 +156,26 @@ impl App {
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         self.rt.spawn(fut);
+    }
+
+    /// Post a transient status message to the footer status bar. Shown
+    /// for STATUS_HOLD, after which the footer falls back to the ambient
+    /// feed state. Called synchronously at each action's click site (not
+    /// from the spawned async task) so it registers immediately.
+    pub(super) fn set_status(&mut self, msg: impl Into<String>) {
+        self.status_text = msg.into();
+        self.status_at = Instant::now();
+    }
+
+    /// The current footer status: a fresh action message if one is still
+    /// within its hold window, otherwise None (the footer then shows the
+    /// ambient feed state instead).
+    pub(super) fn active_status(&self) -> Option<&str> {
+        if self.status_at.elapsed() < STATUS_HOLD && !self.status_text.is_empty() {
+            Some(&self.status_text)
+        } else {
+            None
+        }
     }
 
     /// The stale-frame fix's decision function. True whenever the FEED
@@ -224,7 +262,7 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin::symmetric(14, 6))
                     .stroke(egui::Stroke::new(1.0_f32, theme::border())),
             )
-            .show(ctx, |ui| self.draw_footer(ui));
+            .show(ctx, |ui| self.draw_footer(ui, &pstatus));
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::bg()).inner_margin(egui::Margin::same(16)))

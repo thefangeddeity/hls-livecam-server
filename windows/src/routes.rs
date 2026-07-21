@@ -310,6 +310,22 @@ pub(crate) fn hostname() -> String {
     std::env::var("COMPUTERNAME").unwrap_or_default()
 }
 
+/// Primary LAN IPv4 for the NETWORK panel. The standard no-traffic trick:
+/// "connect" a UDP socket toward a public address (no packet is actually
+/// sent -- connect on UDP just fixes the socket's default route) and read
+/// back which local interface the OS chose. Returns empty on any failure
+/// (e.g. no network), which the panel renders as n/a.
+pub(crate) fn local_ip() -> String {
+    use std::net::UdpSocket;
+    UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| {
+            s.connect("8.8.8.8:80")?;
+            s.local_addr()
+        })
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default()
+}
+
 /// Mirrors broadcast-api: first 100.x.x.x address found, empty string if the
 /// lookup fails for any reason.
 pub(crate) fn tailscale_ip() -> String {
