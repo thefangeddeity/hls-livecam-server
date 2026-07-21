@@ -112,11 +112,14 @@ impl Metrics {
             })
             .collect();
         top_processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap());
-        // Collect a generous slice; the PROCESSES panel (now the tall
-        // bottom-left box, run 6) shows as many as fit its height rather
-        // than a fixed count, so this is an upper bound big enough to
-        // fill that box on a large monitor, not the exact display count.
-        top_processes.truncate(15);
+        // Upper bound, NOT the display count -- the PROCESSES panel draws
+        // as many as fit its height and stops. 15 ran short in the tall
+        // panel on a portrait/vertical monitor (operator), so this is
+        // sized to fill a very tall box; extra rows beyond what fits are
+        // simply never drawn (no cost but the Vec entries). Rows past the
+        // active few are near-0% and render muted, so they read as a quiet
+        // tail rather than noise.
+        top_processes.truncate(64);
 
         Snapshot {
             cpu_percent,
