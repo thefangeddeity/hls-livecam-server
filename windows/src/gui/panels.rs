@@ -134,14 +134,15 @@ impl App {
     /// mutually-exclusive feed-mode group; B&W is a modifier that only
     /// bites while Blur is active.
     pub(super) fn draw_feed_toolbar(&mut self, ui: &mut egui::Ui, _p: &PipelineStatus) {
-        // Feed-only toolbar: Show / Blur / Hide / B&W / Buzz. Server on/off
-        // moved to the footer (app-level power control). The four buttons
-        // (Show/Blur/Hide/Buzz) share an equal width COMPUTED from the
-        // panel's current width so the row fills its box edge-to-edge and
-        // re-flows on resize -- matching the web viewer's equal-column
-        // feed grid, and killing the dead space that used to sit after
-        // Buzz (operator request). B&W stays a natural-width checkbox
-        // between them.
+        // Live-view control bar, the way NVR/camera UIs (Frigate, Blue
+        // Iris, Viewtron) and this project's own web viewer lay it out:
+        // the feed-mode buttons fill the left, and the momentary action
+        // (Buzz -- the analog of a two-way-talk / siren press) is a
+        // COMPACT button set apart on the right, past the divider. Not
+        // equal-width-cramped next to B&W (operator: "too close"), not a
+        // huge full-width button (operator: "huge"). Show/Blur/Hide
+        // absorb the leftover width so the row fills exactly and Buzz
+        // sits flush at the right edge on any window size.
         let feed_mode = self.state.feed_mode.lock().unwrap().clone();
         let showing = feed_mode == "show";
         let blurring = feed_mode == "cloak";
@@ -149,9 +150,13 @@ impl App {
 
         let spacing = ui.spacing().item_spacing.x;
         let bw_w = 62.0; // B&W checkbox natural width (box + "B&W" label)
-        // 4 buttons + the checkbox + 4 gaps between the 5 items fill the row.
-        let btn_w = ((ui.available_width() - bw_w - spacing * 4.0) / 4.0).max(theme::BUTTON_MIN_W);
-        let h = theme::MIN_BUTTON_HEIGHT;
+        let buzz_w = 96.0; // compact Buzz, not full-width
+        let div_pad = 12.0; // breathing room each side of the divider
+        let sep_w = 8.0;
+        // The 3 mode buttons absorb everything the fixed items don't use,
+        // so the row always fills and Buzz stays flush right.
+        let fixed = bw_w + div_pad * 2.0 + sep_w + buzz_w + spacing * 4.0;
+        let btn_w = ((ui.available_width() - fixed) / 3.0).max(theme::BUTTON_MIN_W);
 
         if self.mode_button(ui, "Show", showing, btn_w).clicked() {
             self.request_feed_mode("show");
@@ -185,13 +190,15 @@ impl App {
             self.set_status(if bw { "Feed blurred (B&W)" } else { "Feed blurred" });
         }
 
-        // `.buzz-btn`: its own red, #fff text, 700 weight; same computed
-        // width as the mode buttons so it fills the last slot to the box
-        // edge -- with real hover feedback (`.buzz-btn:hover #e0352b`).
+        // Divider (operator likes the visual break) with breathing room,
+        // then the compact Buzz on the right.
+        ui.add_space(div_pad);
+        ui.separator();
+        ui.add_space(div_pad);
         let buzz_text = egui::RichText::new("Buzz")
             .font(super::fonts::bold(theme::SIZE_BUTTON))
             .color(egui::Color32::WHITE);
-        if filled_button(ui, buzz_text, theme::buzz(), theme::buzz_hover(), egui::vec2(btn_w, h)).clicked() {
+        if filled_button(ui, buzz_text, theme::buzz(), theme::buzz_hover(), egui::vec2(buzz_w, theme::MIN_BUTTON_HEIGHT)).clicked() {
             let state = self.state.clone();
             self.spawn_async(async move {
                 let _ = state.buzz_now();
@@ -220,18 +227,19 @@ impl App {
         );
         draw_bar(ui, s.swap_percent, bar_w, theme::meter_fill(s.swap_percent));
 
-        // camdash's LOAD is a Unix load average -- sysinfo synthesizes an
-        // approximation on Windows rather than reading a kernel value.
-        // Showing that as "Load" would misrepresent what it is; muted per
-        // the brief's "don't fake a number" instruction.
-        match s.load {
-            Some((load, cores)) => {
-                let pct = (load / cores as f64 * 100.0).min(100.0) as f32;
-                stat_row(ui, "Load", &format!("{load:.2}/{cores}"), exceptional(theme::value_color(pct)));
+        // PQL (Processor Queue Length): the honest Windows analog to
+        // camdash's Unix LOAD -- threads waiting for a core, from the OS
+        // perf counter, labeled as what it actually is. The bar is scaled
+        // against cores*2 (a sustained queue past ~2 threads/core is the
+        // usual "CPU-bound" line), and colored on the same band.
+        match s.pql {
+            Some(q) => {
+                let pct = (q / (s.cores as f64 * 2.0) * 100.0).min(100.0) as f32;
+                stat_row(ui, "PQL", &format!("{q:.0}"), exceptional(theme::value_color(pct)));
                 draw_bar(ui, pct, bar_w, theme::meter_fill(pct));
             }
             None => {
-                stat_row_offline(ui, "Load", "n/a");
+                stat_row_offline(ui, "PQL", "n/a");
                 draw_bar(ui, 0.0, bar_w, theme::offline());
             }
         }

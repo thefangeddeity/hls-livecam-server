@@ -3,18 +3,23 @@
 //! the underlying OS facilities are different). Same display shape, honest
 //! sourcing underneath.
 //!
-//! Two fields camdash shows have no honest Windows equivalent and are
-//! surfaced as `None` here rather than faked:
-//!   - LOAD: Unix load average. sysinfo's `System::load_average()` on
-//!     Windows is a synthesized approximation, not a kernel-reported
-//!     number the way it is on Linux -- displaying it as "LOAD" would
-//!     misrepresent what it is. Dimmed to n/a.
-//!   - CPU TEMP: needs a WMI ACPI thermal zone or vendor sensor most
-//!     laptops (this HP included) don't expose cleanly. If sysinfo's
-//!     Components list comes back empty, that's surfaced as None, not a
-//!     fabricated reading.
+//! camdash's LOAD is a Unix load average, which Windows has no kernel
+//! equivalent for. Rather than fake it or dim it, the SYSTEM panel shows
+//! the honest Windows analog under its own name: PQL (Processor Queue
+//! Length -- threads waiting for a core), read from the OS perf counter.
+//! CPU TEMP needs a WMI ACPI thermal zone or vendor sensor most laptops
+//! (this HP included) don't expose; None when sysinfo's Components list
+//! is empty, and the row is hidden rather than shown as a dead n/a.
+
+use std::time::{Duration, Instant};
 
 use sysinfo::{Components, System};
+
+/// PQL is a perf-counter read (shelling out to PowerShell/CIM), too heavy
+/// for the 1s metrics tick, so it's sampled at this slower cadence and
+/// cached between samples. A processor queue trend doesn't need 1s
+/// granularity for an operator glance.
+const PQL_REFRESH: Duration = Duration::from_secs(5);
 
 pub struct Snapshot {
     pub cpu_percent: f32,
@@ -23,8 +28,9 @@ pub struct Snapshot {
     pub mem_avail_mb: u64,
     pub swap_percent: f32,
     pub swap_label: &'static str,
-    /// None = no honest Windows equivalent; see module docs.
-    pub load: Option<(f64, usize)>,
+    /// Processor Queue Length (Windows' honest analog to Unix load).
+    /// None only if the perf-counter query failed.
+    pub pql: Option<f64>,
     pub cpu_temp_c: Option<f32>,
     pub uptime_secs: u64,
     pub cores: usize,
@@ -39,6 +45,8 @@ pub struct ProcRow {
 pub struct Metrics {
     sys: System,
     components: Components,
+    pql_cache: Option<f64>,
+    pql_at: Option<Instant>,
 }
 
 impl Metrics {
@@ -48,6 +56,8 @@ impl Metrics {
         Self {
             sys,
             components: Components::new_with_refreshed_list(),
+            pql_cache: None,
+            pql_at: None,
         }
     }
 
@@ -74,15 +84,14 @@ impl Metrics {
         };
 
         let cores = self.sys.cpus().len().max(1);
-        let load_avg = System::load_average();
-        // sysinfo synthesizes this on Windows rather than reading a kernel
-        // value -- see module docs. Treat an all-zero reading as "not a
-        // real signal" rather than "system idle."
-        let load = if load_avg.one > 0.0 {
-            Some((load_avg.one, cores))
-        } else {
-            None
-        };
+
+        // PQL, sampled at PQL_REFRESH and cached in between (the query
+        // shells out; too heavy for every 1s tick).
+        if self.pql_at.map_or(true, |t| t.elapsed() >= PQL_REFRESH) {
+            self.pql_cache = query_pql();
+            self.pql_at = Some(Instant::now());
+        }
+        let pql = self.pql_cache;
 
         let cpu_temp_c = self
             .components
@@ -116,11 +125,31 @@ impl Metrics {
             mem_avail_mb: (total_mem.saturating_sub(used_mem)) / (1024 * 1024),
             swap_percent,
             swap_label: "pagefile",
-            load,
+            pql,
             cpu_temp_c,
             uptime_secs: System::uptime(),
             cores,
             top_processes,
         }
     }
+}
+
+/// Processor Queue Length from the Windows perf subsystem -- the count of
+/// threads waiting for a processor (the honest Windows analog to Unix
+/// load average). Cooked counter, so a single CIM read returns a current
+/// value. Readable without admin. None only on query failure.
+fn query_pql() -> Option<f64> {
+    let output = crate::winproc::hidden("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-CimInstance Win32_PerfFormattedData_PerfOS_System).ProcessorQueueLength",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }

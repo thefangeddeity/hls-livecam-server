@@ -92,27 +92,24 @@ impl App {
         self.panel_at(ui, center_feed, "Feed", |ui, s| s.draw_feed_with_toolbar(ui, pstatus));
         self.panel_at(ui, center_sys, "System", |ui, s| s.draw_system(ui));
 
-        // ---- right column: DISK/SMART (fixed), MESSAGE (fixed), NETWORK
+        // ---- right column: DISK/SMART (fixed), MESSAGE (fixed), NODE
         // (absorbs) ----
-        // DISK/SMART: 8 stat rows. MESSAGE is now a FIXED modest height
-        // (operator: "message box too tall" once it absorbed the whole
-        // column) -- a 4-row textarea + count + buttons + lock. NETWORK
-        // (new) takes the remainder; it's reference info that reads fine
-        // with a little air, so it's the right absorber here.
+        // DISK/SMART: 8 stat rows. MESSAGE: fixed modest height. NODE
+        // takes the remainder -- reference info that reads fine with a
+        // little air, so it's the right absorber here.
         let disk_h = 8.0 * STAT_ROW_H + CHROME_H;
-        let msg_h = MESSAGE_H;
         let right_disk = egui::Rect::from_min_size(right.min, egui::vec2(RIGHT_COL_W, disk_h));
         let right_msg = egui::Rect::from_min_size(
             egui::pos2(right.left(), right_disk.bottom() + GUTTER),
-            egui::vec2(RIGHT_COL_W, msg_h),
+            egui::vec2(RIGHT_COL_W, MESSAGE_H),
         );
-        let right_net = egui::Rect::from_min_max(
+        let right_node = egui::Rect::from_min_max(
             egui::pos2(right.left(), right_msg.bottom() + GUTTER),
             right.max,
         );
         self.panel_at(ui, right_disk, "Disk / SMART", |ui, s| s.draw_disk_smart(ui));
         self.panel_at(ui, right_msg, "Message", |ui, s| s.draw_message(ui));
-        self.panel_at(ui, right_net, "Node", |ui, s| s.draw_node(ui, pstatus));
+        self.panel_at(ui, right_node, "Node", |ui, s| s.draw_node(ui, pstatus));
     }
 
     /// A framed, bordered panel at an exact rect with a raised header
