@@ -31,6 +31,10 @@ pub struct DiskInfo {
     /// needs admin. None (not zero) when unavailable -- distinguishes
     /// "checked, no errors" from "couldn't check."
     pub reliability: Option<Reliability>,
+    /// Live disk write throughput in MB/s (item 6): the Windows
+    /// LogicalDisk perf counter, sampled with the 5s disk refresh. None
+    /// only if the counter query failed.
+    pub write_mb_s: Option<f64>,
 }
 
 pub struct Reliability {
@@ -41,9 +45,9 @@ pub struct Reliability {
 
 pub fn query() -> DiskInfo {
     let base = query_physical_disk();
-    let reliability = query_reliability_counters();
     DiskInfo {
-        reliability,
+        reliability: query_reliability_counters(),
+        write_mb_s: query_write_rate(),
         ..base
     }
 }
@@ -65,6 +69,7 @@ fn query_physical_disk() -> DiskInfo {
             operational_status: None,
             media_type: None,
             reliability: None,
+            write_mb_s: None,
         };
     };
     let text = String::from_utf8_lossy(&output.stdout);
@@ -74,7 +79,33 @@ fn query_physical_disk() -> DiskInfo {
         operational_status: extract_json_string(&text, "OperationalStatus"),
         media_type: extract_json_string(&text, "MediaType"),
         reliability: None,
+        write_mb_s: None,
     }
+}
+
+/// Live disk write throughput (item 6), the Windows equivalent of
+/// camdash's `WRITE: x.xx MB/s`. Reads the cooked LogicalDisk perf
+/// counter DiskWriteBytesPersec for `_Total` (all volumes) -- a rate the
+/// perf subsystem maintains continuously, so a single query returns a
+/// current value with no two-sample delta needed here. Perf counters are
+/// readable without admin, so this works on any build. None only on a
+/// genuine query failure.
+fn query_write_rate() -> Option<f64> {
+    let output = hidden("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-CimInstance Win32_PerfFormattedData_PerfDisk_LogicalDisk \
+             -Filter \"Name='_Total'\").DiskWriteBytesPersec",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let bytes: f64 = String::from_utf8_lossy(&output.stdout).trim().parse().ok()?;
+    Some(bytes / 1_048_576.0)
 }
 
 /// Needs admin. Returns None (not a zeroed-out struct) only when the

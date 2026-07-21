@@ -49,30 +49,32 @@ pub fn spawn(ffmpeg: std::path::PathBuf) -> SharedFrame {
     tokio::spawn(async move {
         let mut generation: u64 = 0;
         loop {
-            match Command::new(&ffmpeg)
-                .args([
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-rtsp_transport",
-                    "tcp",
-                    "-i",
-                    "rtsp://127.0.0.1:8554/cam",
-                    "-vf",
-                    &format!("scale={PREVIEW_W}:{PREVIEW_H}"),
-                    "-r",
-                    PREVIEW_FPS,
-                    "-f",
-                    "rawvideo",
-                    "-pix_fmt",
-                    "rgb24",
-                    "pipe:1",
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-            {
+            let mut cmd = Command::new(&ffmpeg);
+            cmd.args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-rtsp_transport",
+                "tcp",
+                "-i",
+                "rtsp://127.0.0.1:8554/cam",
+                "-vf",
+                &format!("scale={PREVIEW_W}:{PREVIEW_H}"),
+                "-r",
+                PREVIEW_FPS,
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "pipe:1",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+            // Windowless, like every other child spawn (winproc::CREATE_NO_WINDOW).
+            #[cfg(windows)]
+            cmd.creation_flags(crate::winproc::CREATE_NO_WINDOW);
+            match cmd.spawn() {
                 Ok(mut child) => {
                     let mut stdout = child.stdout.take().unwrap();
                     let mut buf = vec![0u8; FRAME_BYTES];

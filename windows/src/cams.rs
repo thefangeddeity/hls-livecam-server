@@ -267,6 +267,43 @@ mod tests {
     }
 
     #[test]
+    fn full_crud_cycle() {
+        let path = temp_path("crud");
+        let _ = std::fs::remove_file(&path);
+        let read_arr = |p: &PathBuf| -> Vec<Value> {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(p).unwrap())
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .clone()
+        };
+
+        // CREATE
+        let mut store = CamStore::load_from(path.clone());
+        store.add("Living room".into(), "192.168.1.50".into(), Some(8080));
+        store.save().unwrap();
+        let a = read_arr(&path);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0]["label"], json!("Living room"));
+
+        // UPDATE (edit in place -- the "clicking an entry loads it, Save
+        // updates it" path the dialog drives via CamStore::update).
+        store.update(0, "Front porch".into(), "192.168.1.51".into(), None);
+        store.save().unwrap();
+        let a = read_arr(&path);
+        assert_eq!(a.len(), 1, "update must not add a row");
+        assert_eq!(a[0]["label"], json!("Front porch"));
+        assert_eq!(a[0]["ip"], json!("192.168.1.51"));
+        assert_eq!(a[0].get("api_port"), None, "cleared port drops the key");
+
+        // DELETE
+        store.remove(0);
+        store.save().unwrap();
+        assert!(read_arr(&path).is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn bad_json_flags_parse_failure() {
         let path = temp_path("badjson");
         std::fs::write(&path, "{not an array}").unwrap();

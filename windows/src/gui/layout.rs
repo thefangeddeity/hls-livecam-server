@@ -213,13 +213,14 @@ impl App {
         let mut video_ui = ui.new_child(egui::UiBuilder::new().max_rect(video_rect));
         self.draw_feed(&mut video_ui, p);
 
-        // Centered along the main (horizontal) axis, not left-aligned --
-        // the toolbar reads as attached to the feed above it regardless
-        // of how wide the center column ends up at a given window size.
+        // Left-aligned (fills from the left edge): the toolbar sizes its
+        // buttons to the panel width so the row spans the whole box, so
+        // there's nothing to center -- centering would fight the fill and
+        // reintroduce dead edges.
         let mut toolbar_ui = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(toolbar_rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center)),
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         self.draw_feed_toolbar(&mut toolbar_ui, p);
     }

@@ -87,7 +87,7 @@ impl App {
 
         // Column header.
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("NAME").size(theme::SIZE_SMALL).color(theme::text_muted()));
+            ui.label(egui::RichText::new("DESCRIPTION").size(theme::SIZE_SMALL).color(theme::text_muted()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(64.0); // reserve for the Delete button column
                 ui.label(egui::RichText::new("IP  :  PORT").size(theme::SIZE_SMALL).color(theme::text_muted()));
@@ -154,11 +154,16 @@ impl App {
         );
         ui.add_space(8.0);
 
-        field_row(ui, "Name", &mut self.ip_form.name, "Front door");
+        // Placeholders are grayed EXAMPLES (egui hint_text vanishes on
+        // typing), never real data -- the old hints seeded the operator's
+        // actual Tailscale IP as the template, which read as pre-filled
+        // real data. "Name" -> "Description" (Name was ambiguous with
+        // hostname).
+        field_row(ui, "Description", &mut self.ip_form.name, "Living room");
         ui.add_space(6.0);
-        field_row(ui, "IP", &mut self.ip_form.ip, "100.100.17.1");
+        field_row(ui, "IP", &mut self.ip_form.ip, "192.168.1.50");
         ui.add_space(6.0);
-        field_row(ui, "Port", &mut self.ip_form.port, "optional");
+        field_row(ui, "Port", &mut self.ip_form.port, "8080");
 
         // Validation / save feedback line (fixed slot so buttons don't
         // jump as it appears).
@@ -191,7 +196,7 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Accent Close so the dismiss action is the visually
                 // dominant control, matching `.btn.primary`.
-                if filled_button(ui, egui::RichText::new("Close").color(egui::Color32::WHITE), theme::accent(), theme::accent_hover())
+                if filled_button(ui, egui::RichText::new("Close").color(egui::Color32::WHITE), theme::accent(), theme::accent_hover(), theme::button_min_size())
                     .clicked()
                 {
                     self.ip_manager_open = false;

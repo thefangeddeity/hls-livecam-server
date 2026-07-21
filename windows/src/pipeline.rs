@@ -588,6 +588,10 @@ fn spawn(mut cmd: Command) -> std::io::Result<Child> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Windowless -- covers both the capture ffmpeg (Show/Blur/Hide) and
+    // mediamtx, which both spawn through here. See winproc::CREATE_NO_WINDOW.
+    #[cfg(windows)]
+    cmd.creation_flags(crate::winproc::CREATE_NO_WINDOW);
     cmd.spawn()
 }
 
@@ -597,13 +601,14 @@ fn spawn(mut cmd: Command) -> std::io::Result<Child> {
 /// dump off stderr -- there's no structured output mode, this is how every
 /// ffmpeg dshow enumeration tool does it.
 async fn list_dshow_video_devices(ffmpeg: &PathBuf) -> Vec<String> {
-    let output = Command::new(ffmpeg)
-        .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .await;
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(crate::winproc::CREATE_NO_WINDOW);
+    let output = cmd.output().await;
 
     let Ok(output) = output else { return Vec::new() };
     let text = String::from_utf8_lossy(&output.stderr);

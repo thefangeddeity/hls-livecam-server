@@ -331,7 +331,9 @@ pub(crate) fn local_ip() -> String {
 pub(crate) fn tailscale_ip() -> String {
     const CANDIDATES: [&str; 2] = ["tailscale", r"C:\Program Files\Tailscale\tailscale.exe"];
     for exe in CANDIDATES {
-        if let Ok(out) = std::process::Command::new(exe).args(["ip", "-4"]).output() {
+        // winproc::hidden sets CREATE_NO_WINDOW -- without it the tailscale
+        // CLI flashes a console window on every /api/info call and at startup.
+        if let Ok(out) = crate::winproc::hidden(exe).args(["ip", "-4"]).output() {
             if out.status.success() {
                 if let Ok(s) = String::from_utf8(out.stdout) {
                     for line in s.lines() {

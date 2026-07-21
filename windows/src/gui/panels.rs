@@ -37,10 +37,13 @@ impl App {
         }
 
         // camdash's REALLOC/PENDING are legacy ATA SMART attribute IDs
-        // (5, 197). 7elwe's disk is NVMe -- those attributes don't exist
-        // here regardless of permissions. Muted unconditionally.
-        stat_row_offline(ui, "Realloc", "n/a (NVMe)");
-        stat_row_offline(ui, "Pending", "n/a (NVMe)");
+        // (5, 197). 7elwe's disk is NVMe -- those reallocated/pending
+        // sector concepts don't exist in the NVMe health log at all, so
+        // there is nothing to worry about: rendered "None" (fine), not a
+        // scary "n/a", per the humanize pass -- "None" always means fine,
+        // a number always means attention.
+        stat_row(ui, "Realloc", "None", None);
+        stat_row(ui, "Pending", "None", None);
 
         // UNCORR and TEMP have real NVMe equivalents, gated behind
         // Get-StorageReliabilityCounter (needs admin -- the reason this
@@ -48,12 +51,19 @@ impl App {
         match &d.reliability {
             Some(r) => {
                 let uncorr = r.read_errors_uncorrected + r.write_errors_uncorrected;
-                stat_row(
-                    ui,
-                    "Uncorr",
-                    &format!("{uncorr} (R:{} W:{})", r.read_errors_uncorrected, r.write_errors_uncorrected),
-                    (uncorr > 0).then_some(theme::critical()),
-                );
+                // 0 -> "None" (fine); non-zero -> the actual count with
+                // the R/W breakdown, in critical red. So "None" always
+                // reads as clean and any number means attention.
+                if uncorr > 0 {
+                    stat_row(
+                        ui,
+                        "Uncorr",
+                        &format!("{uncorr} (R:{} W:{})", r.read_errors_uncorrected, r.write_errors_uncorrected),
+                        Some(theme::critical()),
+                    );
+                } else {
+                    stat_row(ui, "Uncorr", "None", None);
+                }
                 match r.temperature_c {
                     // NVMe operating band: warn from 60, critical from 70
                     // (typical vendor throttle points). Was green
@@ -77,7 +87,14 @@ impl App {
                 stat_row_offline(ui, "Temp", "n/a \u{2014} query failed");
             }
         }
-        stat_row_offline(ui, "Write", "n/a (not wired)");
+        // Live disk write throughput (item 6): camdash's WRITE MB/s line,
+        // now wired to the Windows LogicalDisk perf counter
+        // (DiskWriteBytesPersec, sampled with the 5s disk refresh). Perf
+        // counters don't need admin, so this reads on any build.
+        match d.write_mb_s {
+            Some(mb) => stat_row(ui, "Write", &format!("{mb:.2} MB/s"), None),
+            None => stat_row_offline(ui, "Write", "n/a"),
+        }
     }
 
     // ------------------------------------------------------------- FEED
@@ -117,30 +134,38 @@ impl App {
     /// mutually-exclusive feed-mode group; B&W is a modifier that only
     /// bites while Blur is active.
     pub(super) fn draw_feed_toolbar(&mut self, ui: &mut egui::Ui, _p: &PipelineStatus) {
-        // Feed-only toolbar now: Show / Blur / Hide / B&W / Buzz. Server
-        // on/off moved to the footer (an app-level power control, not a
-        // feed action) -- which also keeps this row inside the center
-        // column at the 1100px minimum window width. All buttons share
-        // the uniform min width (theme::BUTTON_MIN_W).
+        // Feed-only toolbar: Show / Blur / Hide / B&W / Buzz. Server on/off
+        // moved to the footer (app-level power control). The four buttons
+        // (Show/Blur/Hide/Buzz) share an equal width COMPUTED from the
+        // panel's current width so the row fills its box edge-to-edge and
+        // re-flows on resize -- matching the web viewer's equal-column
+        // feed grid, and killing the dead space that used to sit after
+        // Buzz (operator request). B&W stays a natural-width checkbox
+        // between them.
         let feed_mode = self.state.feed_mode.lock().unwrap().clone();
         let showing = feed_mode == "show";
         let blurring = feed_mode == "cloak";
         let hiding = feed_mode == "hide";
 
-        if self.mode_button(ui, "Show", showing).clicked() {
+        let spacing = ui.spacing().item_spacing.x;
+        let bw_w = 62.0; // B&W checkbox natural width (box + "B&W" label)
+        // 4 buttons + the checkbox + 4 gaps between the 5 items fill the row.
+        let btn_w = ((ui.available_width() - bw_w - spacing * 4.0) / 4.0).max(theme::BUTTON_MIN_W);
+        let h = theme::MIN_BUTTON_HEIGHT;
+
+        if self.mode_button(ui, "Show", showing, btn_w).clicked() {
             self.request_feed_mode("show");
             self.set_status("Feed live");
         }
-        if self.mode_button(ui, "Blur", blurring).clicked() {
+        if self.mode_button(ui, "Blur", blurring, btn_w).clicked() {
             self.request_feed_mode("cloak");
             self.set_status("Feed blurred");
         }
-        if self.mode_button(ui, "Hide", hiding).clicked() {
+        if self.mode_button(ui, "Hide", hiding, btn_w).clicked() {
             self.request_feed_mode("hide");
             self.set_status("Feed hidden");
         }
 
-        ui.add_space(10.0);
         // B&W modifier. Enabled only while Blur is active -- it has no
         // effect on a plain or hidden feed, so a live-but-inert checkbox
         // would misrepresent it. Toggling drives the real filter via the
@@ -160,16 +185,13 @@ impl App {
             self.set_status(if bw { "Feed blurred (B&W)" } else { "Feed blurred" });
         }
 
-        ui.add_space(14.0);
-        ui.separator();
-        ui.add_space(14.0);
-
-        // `.buzz-btn`: its own red, #fff text, 700 weight, uniform width --
-        // with real hover feedback (`.buzz-btn:hover #e0352b`).
+        // `.buzz-btn`: its own red, #fff text, 700 weight; same computed
+        // width as the mode buttons so it fills the last slot to the box
+        // edge -- with real hover feedback (`.buzz-btn:hover #e0352b`).
         let buzz_text = egui::RichText::new("Buzz")
             .font(super::fonts::bold(theme::SIZE_BUTTON))
             .color(egui::Color32::WHITE);
-        if filled_button(ui, buzz_text, theme::buzz(), theme::buzz_hover()).clicked() {
+        if filled_button(ui, buzz_text, theme::buzz(), theme::buzz_hover(), egui::vec2(btn_w, h)).clicked() {
             let state = self.state.clone();
             self.spawn_async(async move {
                 let _ = state.buzz_now();
@@ -216,9 +238,16 @@ impl App {
 
         ui.add_space(2.0);
         stat_row(ui, "RAM free", &format!("{} MB", s.mem_avail_mb), None);
-        match s.cpu_temp_c {
-            Some(t) => stat_row(ui, "CPU temp", &format!("{t:.0}\u{b0}C"), None),
-            None => stat_row_offline(ui, "CPU temp", "n/a"),
+        // CPU temperature (item 7): the row is shown ONLY when a reading
+        // is actually available, so there's no dead "n/a" line. On this
+        // box it's always None: real CPU temp on Windows needs a
+        // hardware-monitor kernel driver (LibreHardwareMonitor / WinRing0
+        // class) that sysinfo can't read on its own. Deferred -- Ron is
+        // not investing in shipping a signed kernel driver now. If such a
+        // driver is ever present and sysinfo surfaces a value, this row
+        // appears automatically.
+        if let Some(t) = s.cpu_temp_c {
+            stat_row(ui, "CPU temp", &format!("{t:.0}\u{b0}C"), None);
         }
     }
 
@@ -266,10 +295,10 @@ impl App {
         }
     }
 
-    fn mode_button(&self, ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    fn mode_button(&self, ui: &mut egui::Ui, label: &str, selected: bool, width: f32) -> egui::Response {
         // The viewer's `.dark-btn.is-dark` toggle-on pattern: raised
-        // fill, brighter border, when active. Uniform min width so the
-        // feed-mode buttons are all the same size.
+        // fill, brighter border, when active. Width is passed in so the
+        // feed toolbar can size all its buttons to fill the row.
         let btn = if selected {
             egui::Button::new(egui::RichText::new(label).color(theme::text()))
                 .fill(theme::border_strong())
@@ -277,7 +306,7 @@ impl App {
         } else {
             egui::Button::new(egui::RichText::new(label).color(theme::text()))
         };
-        ui.add(btn.min_size(theme::button_min_size()))
+        ui.add(btn.min_size(egui::vec2(width, theme::MIN_BUTTON_HEIGHT)))
     }
 
     fn request_feed_mode(&self, mode: &str) {

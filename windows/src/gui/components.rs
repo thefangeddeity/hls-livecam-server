@@ -72,6 +72,7 @@ pub fn filled_button(
     text: impl Into<egui::WidgetText>,
     fill: egui::Color32,
     hover_fill: egui::Color32,
+    min_size: egui::Vec2,
 ) -> egui::Response {
     ui.scope(|ui| {
         let w = &mut ui.style_mut().visuals.widgets;
@@ -84,7 +85,7 @@ pub fn filled_button(
         w.active.weak_bg_fill = hover_fill;
         w.active.bg_fill = hover_fill;
         w.active.bg_stroke = egui::Stroke::new(1.0_f32, hover_fill);
-        ui.add(egui::Button::new(text).min_size(theme::button_min_size()))
+        ui.add(egui::Button::new(text).min_size(min_size))
     })
     .inner
 }
