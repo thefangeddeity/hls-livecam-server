@@ -244,7 +244,13 @@ async fn bw_mode_get(State(ctx): State<Arc<Ctx>>) -> Response {
 }
 
 async fn bw_mode_post(State(ctx): State<Arc<Ctx>>) -> Response {
-    bool_text(ctx.state.toggle_bw_mode())
+    let v = ctx.state.toggle_bw_mode();
+    // Run 6: B&W is now a live filter modifier on Blur, not an inert
+    // flag. Re-spawn the capture if Blur is active so the effect actually
+    // changes; a no-op otherwise. The HTTP response (the new bool) is
+    // unchanged -- contract preserved.
+    ctx.pipeline.refresh_cloak().await;
+    bool_text(v)
 }
 
 async fn dark_get(State(ctx): State<Arc<Ctx>>) -> Response {

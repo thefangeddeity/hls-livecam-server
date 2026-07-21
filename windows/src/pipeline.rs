@@ -59,14 +59,21 @@ const STALL_THRESHOLD: Duration = Duration::from_secs(8);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Source {
     Show,
-    /// Also where "cloak" lands this run -- see state.rs / run-2 report.
+    /// Blur (design doc's "Blur"/API "cloak"): the real camera, obscured
+    /// by an ffmpeg filter, source-swapped exactly like Show/Hide. Run 6
+    /// implements this for real (it used to fail safe to Hidden). The B&W
+    /// modifier is read from AppState at spawn time, not encoded here, so
+    /// toggling B&W just re-spawns this same source with a different
+    /// filter -- see restart_capture + refresh_cloak.
+    Cloak,
     Hidden,
 }
 
 fn source_for_mode(mode: &str) -> Source {
     match mode {
         "show" => Source::Show,
-        _ => Source::Hidden, // "hide" and "cloak" (fail-safe) both land here
+        "cloak" => Source::Cloak,
+        _ => Source::Hidden, // "hide" (and any unknown, fail-safe)
     }
 }
 
@@ -125,11 +132,22 @@ impl Pipeline {
         p
     }
 
-    /// Drives the actual swap. "cloak" fails safe to the same black source
-    /// as "hide" -- see AskUserQuestion decision recorded in the run-2
-    /// report; the real pixelation effect is v1.1 scope.
+    /// Drives the actual swap. "cloak" is now a real blurred source (run
+    /// 6), not a fail-safe to black.
     pub async fn apply_feed_mode(&self, mode: &str) {
         self.swap_to(source_for_mode(mode)).await;
+    }
+
+    /// Re-spawn the capture only if Blur is currently active -- used when
+    /// the B&W modifier toggles. B&W is a filter change on the same
+    /// source, so a plain re-swap picks up the new AppState.bw_mode value
+    /// (read in restart_capture). A no-op in Show/Hide, where B&W has no
+    /// meaning, so both the GUI checkbox and the /api/bw-mode handler can
+    /// call this unconditionally.
+    pub async fn refresh_cloak(&self) {
+        if *self.target.lock().unwrap() == Source::Cloak {
+            self.restart_capture().await;
+        }
     }
 
     /// Manual "kick" -- restarts capture on whatever source is currently
@@ -220,6 +238,10 @@ impl Pipeline {
 
         let cmd = match target {
             Source::Show => capture_command(&self.ffmpeg, &device),
+            Source::Cloak => {
+                let bw = *self.state.bw_mode.lock().unwrap();
+                cloak_command(&self.ffmpeg, &device, bw)
+            }
             Source::Hidden => hide_command(&self.ffmpeg),
         };
         match spawn(cmd) {
@@ -434,6 +456,38 @@ async fn http_get_local(path: &str) -> Option<String> {
 /// (dshow direct capture here vs. a v4l2 loopback relay there), which
 /// doesn't touch what ends up in the HLS segments.
 fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
+    // Show: the real camera, unaltered beyond the fps/pixfmt normalisation
+    // every source shares.
+    dshow_capture(ffmpeg, device_name, "fps=15,format=yuv420p")
+}
+
+/// Blur/"cloak" (run 6): the SAME real dshow capture as Show, but with an
+/// obscuring filter in the `-vf` chain -- a genuine source swap, not a
+/// separate machine. This is deliberately NOT the Linux port's approach
+/// (a second ffmpeg piping raw frames through NumPy/PIL halfblock
+/// pixelation into a v4l2loopback device): that gluing layer has no
+/// Windows equivalent and porting it was the v1.1 rabbit hole the
+/// original plan flagged. ffmpeg's own `boxblur` obscures a face just as
+/// effectively for the family-presence purpose (you read "someone's
+/// there, moving" without reading who or what), costs one filter instead
+/// of an interpreter in the loop, and keeps the exact supervise/swap
+/// shape Show and Hide already use. `boxblur=20:2` = radius-20, 2-pass
+/// (≈gaussian) heavy blur. The B&W modifier appends `hue=s=0`
+/// (full desaturation) before the pixfmt convert.
+fn cloak_command(ffmpeg: &PathBuf, device_name: &str, bw: bool) -> Command {
+    let vf = if bw {
+        "fps=15,boxblur=20:2,hue=s=0,format=yuv420p"
+    } else {
+        "fps=15,boxblur=20:2,format=yuv420p"
+    };
+    dshow_capture(ffmpeg, device_name, vf)
+}
+
+/// Shared dshow-capture command shape (input side + x264 output side);
+/// only the `-vf` filter chain differs between Show and Blur. Encode
+/// params are anchored on broadcast-api's _writer_loop -- see the module
+/// history; unchanged from run 2.
+fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str) -> Command {
     let mut cmd = Command::new(ffmpeg);
     cmd.args([
         "-hide_banner",
@@ -458,7 +512,7 @@ fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
         "-tune",
         "zerolatency",
         "-vf",
-        "fps=15,format=yuv420p",
+        vf,
         "-profile:v",
         "high",
         "-level",

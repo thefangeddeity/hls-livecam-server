@@ -12,6 +12,11 @@ eframe = { version = "0.31", default-features = false, features = ["default_font
 egui = "0.31"
 sysinfo = "0.33"
 tray-icon = "0.19"
+# Already in the tree transitively via axum -- pinned as a direct dep for
+# the cams.json entry manager (run-6 IP manager), which round-trips the
+# fleet roster as JSON and must preserve any fields the manager doesn't
+# itself edit (pinned, stream_path, ...).
+serde_json = "1"
 
 [build-dependencies]
 embed-manifest = "1"

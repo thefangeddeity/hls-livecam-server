@@ -12,7 +12,14 @@
 //! pre-approved elevated task).
 
 fn main() {
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+    // embed-manifest emits `rustc-link-arg-bins`, which also lands on a
+    // bin crate's *unit-test* harness -- so `cargo test` produces an exe
+    // that itself requires elevation, and the test runner can't launch it
+    // ("os error 740: requires elevation"). Gate embedding behind an env
+    // var so the test run can opt out (HLS_SKIP_MANIFEST=1 cargo test);
+    // the shipped release build, run without it, still gets the manifest.
+    let skip = std::env::var("HLS_SKIP_MANIFEST").is_ok();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") && !skip {
         embed_manifest::embed_manifest(
             embed_manifest::new_manifest("hls-livecam-win")
                 .requested_execution_level(embed_manifest::manifest::ExecutionLevel::RequireAdministrator),
@@ -20,4 +27,5 @@ fn main() {
         .expect("failed to embed application manifest");
     }
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=HLS_SKIP_MANIFEST");
 }

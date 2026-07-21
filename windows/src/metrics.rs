@@ -103,7 +103,11 @@ impl Metrics {
             })
             .collect();
         top_processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap());
-        top_processes.truncate(8);
+        // Collect a generous slice; the PROCESSES panel (now the tall
+        // bottom-left box, run 6) shows as many as fit its height rather
+        // than a fixed count, so this is an upper bound big enough to
+        // fill that box on a large monitor, not the exact display count.
+        top_processes.truncate(15);
 
         Snapshot {
             cpu_percent,

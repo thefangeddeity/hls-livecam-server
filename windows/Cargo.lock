@@ -1210,6 +1210,7 @@ dependencies = [
  "eframe",
  "egui",
  "embed-manifest",
+ "serde_json",
  "sysinfo",
  "tokio",
  "tray-icon",

@@ -30,6 +30,7 @@
 mod assets;
 mod autostart;
 mod binaries;
+mod cams;
 mod diskhealth;
 mod gui;
 mod metrics;
@@ -118,15 +119,27 @@ fn main() {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1224.0, 775.0])
-            .with_min_inner_size([900.0, 600.0]),
+            // Floor derived from the layout's content-driven panel
+            // heights (layout.rs): below ~800px of window height the
+            // right column cannot hold SYSTEM + PROCESSES + a usable
+            // MESSAGE panel, and below ~1100px width the fixed side
+            // columns squeeze the feed under its 400px floor.
+            .with_inner_size([1240.0, 840.0])
+            .with_min_inner_size([1100.0, 800.0]),
         ..Default::default()
     };
 
     let result = eframe::run_native(
         "Webcam Server Stack",
         native_options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            // Fonts MUST be installed here, before the first frame:
+            // set_fonts() mid-frame only takes effect the *next* frame,
+            // and egui panics outright when layout asks for a named
+            // family (segoe_semibold) that isn't bound yet -- which is
+            // exactly frame 1 if installation waits until update()
+            // (crashed on launch; caught from Ron's console screenshot).
+            gui::init_fonts(&cc.egui_ctx);
             // Built here, not earlier in main(): Windows tray APIs are
             // thread-affine like window handles, so this has to happen on
             // the thread eframe's event loop actually runs on.

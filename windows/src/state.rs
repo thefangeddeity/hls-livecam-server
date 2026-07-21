@@ -137,7 +137,7 @@ fn read(dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(dir.join(name)).ok()
 }
 
-fn state_dir() -> PathBuf {
+pub(crate) fn state_dir() -> PathBuf {
     if let Ok(d) = std::env::var("HLS_STATE_DIR") {
         return PathBuf::from(d);
     }

@@ -77,25 +77,52 @@ fn query_physical_disk() -> DiskInfo {
     }
 }
 
-/// Needs admin. Returns None (not a zeroed-out struct) if the CIM call is
-/// denied -- the caller must be able to tell "no admin" apart from "admin,
-/// zero errors," and the UI dims the former rather than showing a
-/// misleadingly clean "0."
+/// Needs admin. Returns None (not a zeroed-out struct) only when the
+/// command itself didn't run or exited non-zero -- the caller must be
+/// able to tell "no admin" apart from "admin, zero errors."
+///
+/// Real bug, found from a screenshot: this used to `?`-propagate on
+/// `ReadErrorsUncorrected` specifically, treating that one field being
+/// null as total failure and discarding a query that otherwise
+/// succeeded, including a possibly-valid Temperature reading. NVMe
+/// reliability counters aren't uniformly populated across vendors/
+/// drivers -- a missing individual counter is a realistic, non-fatal
+/// case, not a sign the query failed. `WriteErrorsUncorrected` already
+/// tolerated this correctly (`.unwrap_or(0)`); `ReadErrorsUncorrected`
+/// didn't, for no principled reason -- just an inconsistency. Both are
+/// lenient now; only the command's own success/failure gates None.
 fn query_reliability_counters() -> Option<Reliability> {
-    let output = hidden("powershell.exe")
+    let output = match hidden("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "Get-PhysicalDisk | Get-StorageReliabilityCounter | Select-Object -First 1 ReadErrorsUncorrected,WriteErrorsUncorrected,Temperature | ConvertTo-Json -Compress",
+            "Import-Module Storage -ErrorAction SilentlyContinue; \
+             Get-PhysicalDisk | Get-StorageReliabilityCounter | Select-Object -First 1 \
+             ReadErrorsUncorrected,WriteErrorsUncorrected,Temperature | ConvertTo-Json -Compress",
         ])
         .output()
-        .ok()?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            log_failure(&format!("spawn failed: {e}"));
+            return None;
+        }
+    };
     if !output.status.success() {
+        log_failure(&format!(
+            "exit {:?}, stderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let read_errors_uncorrected = extract_json_number(&text, "ReadErrorsUncorrected")?;
+    if text.trim().is_empty() {
+        log_failure("empty stdout on success exit -- no physical disk matched?");
+        return None;
+    }
+    let read_errors_uncorrected = extract_json_number(&text, "ReadErrorsUncorrected").unwrap_or(0);
     let write_errors_uncorrected = extract_json_number(&text, "WriteErrorsUncorrected").unwrap_or(0);
     let temperature_c = extract_json_number(&text, "Temperature").map(|t| t as f32);
     Some(Reliability {
@@ -103,6 +130,26 @@ fn query_reliability_counters() -> Option<Reliability> {
         write_errors_uncorrected,
         temperature_c,
     })
+}
+
+/// The app has no visible console when launched normally (double-click,
+/// scheduled task, Start-Process) -- eprintln! goes nowhere reachable.
+/// One line per failure, in the state dir next to everything else this
+/// app persists, so a real failure (as opposed to "just not elevated
+/// yet") is diagnosable after the fact instead of only during a session
+/// launched from a terminal.
+fn log_failure(msg: &str) {
+    use std::io::Write;
+    let path = match std::env::var("APPDATA") {
+        Ok(appdata) => std::path::PathBuf::from(appdata).join("hls-livecam-win").join("diskhealth.log"),
+        Err(_) => return,
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "[{:?}] {msg}", std::time::SystemTime::now());
+    }
 }
 
 /// Minimal single-object JSON field extraction. `ConvertTo-Json -Compress`
