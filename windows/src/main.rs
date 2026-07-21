@@ -1,3 +1,10 @@
+// Release builds are a GUI subsystem app (no console window pops up on
+// launch); debug builds keep the console so stdout/stderr stay visible
+// while developing. Because release silences stdout/stderr, the launch
+// path also logs to %APPDATA%\hls-livecam-win\launch.log (see
+// launch_log) so a silent startup failure is still diagnosable.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! hls-livecam-win -- native Windows camera node + operator dashboard.
 //!
 //! Run 3 scope: a native egui/eframe operator window (no webview, no HTML
@@ -47,24 +54,24 @@ fn main() {
     let ffmpeg = match binaries::resolve_ffmpeg() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{e}");
+            launch_log(&format!("fatal: {e}"));
             std::process::exit(1);
         }
     };
     let mediamtx = match binaries::resolve_mediamtx() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{e}");
+            launch_log(&format!("fatal: {e}"));
             std::process::exit(1);
         }
     };
-    println!("ffmpeg   : {}", ffmpeg.display());
-    println!("mediamtx : {}", mediamtx.display());
+    launch_log(&format!("ffmpeg   : {}", ffmpeg.display()));
+    launch_log(&format!("mediamtx : {}", mediamtx.display()));
 
     match autostart::ensure_installed() {
-        Ok(true) => println!("autostart: registered"),
-        Ok(false) => println!("autostart: already registered"),
-        Err(e) => eprintln!("autostart: could not register ({e}) -- continuing without it"),
+        Ok(true) => launch_log("autostart: registered"),
+        Ok(false) => launch_log("autostart: already registered"),
+        Err(e) => launch_log(&format!("autostart: could not register ({e}) -- continuing without it")),
     }
 
     // Handoff from the background server thread to the GUI (main) thread:
@@ -76,7 +83,7 @@ fn main() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {
             let state = Arc::new(state::AppState::load());
-            println!("state dir : {}", state.dir().display());
+            launch_log(&format!("state dir : {}", state.dir().display()));
 
             let pipeline = pipeline::Pipeline::start(ffmpeg, mediamtx, state.clone()).await;
             let video_frame = video_preview::spawn(ffmpeg_for_video);
@@ -88,22 +95,22 @@ fn main() {
 
             let ctx = Arc::new(routes::Ctx { state, pipeline });
             let bind = std::env::var("HLS_BIND").unwrap_or_else(|_| "0.0.0.0:80".to_string());
-            println!("binding   : {bind}");
+            launch_log(&format!("binding   : {bind}"));
 
             let listener = match tokio::net::TcpListener::bind(&bind).await {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("error: cannot bind {bind}: {e}");
-                    eprintln!("       another process is probably holding the port.");
-                    eprintln!("       check with: netstat -ano | findstr :80");
+                    launch_log(&format!(
+                        "fatal: cannot bind {bind}: {e} -- another process is probably holding \
+                         the port (check: netstat -ano | findstr :80)"
+                    ));
                     std::process::exit(1);
                 }
             };
-            println!("listening. viewer: http://localhost/  aggregator: http://localhost/cams/");
-            println!("HLS: http://localhost:8888/cam/index.m3u8");
+            launch_log("listening. viewer: http://localhost/  HLS: http://localhost:8888/cam/index.m3u8");
 
             if let Err(e) = axum::serve(listener, routes::router(ctx)).await {
-                eprintln!("error: server stopped: {e}");
+                launch_log(&format!("fatal: server stopped: {e}"));
                 std::process::exit(1);
             }
         });
@@ -112,7 +119,7 @@ fn main() {
     let (state, pipeline, rt_handle, video_frame) = match rx.recv() {
         Ok(v) => v,
         Err(_) => {
-            eprintln!("error: server thread failed to start");
+            launch_log("fatal: server thread failed to start");
             std::process::exit(1);
         }
     };
@@ -145,15 +152,48 @@ fn main() {
             // the thread eframe's event loop actually runs on.
             let tray = tray::build();
             if tray.is_none() {
-                eprintln!("tray: could not create a tray icon -- window minimize/close still work normally");
+                launch_log("tray: could not create a tray icon -- window minimize/close still work normally");
             }
             Ok(Box::new(gui::App::new(state, pipeline, rt_handle, video_frame, tray)))
         }),
     );
 
     if let Err(e) = result {
-        eprintln!("error: GUI failed: {e}");
+        launch_log(&format!("fatal: GUI failed: {e}"));
         std::process::exit(1);
+    }
+}
+
+/// Launch-path logging. Release builds are a GUI subsystem app with no
+/// console, so println!/eprintln! go nowhere -- without this, a silent
+/// startup failure (missing binary, port already held, GUI init error)
+/// would leave the user with a window that never appears and no clue why.
+/// Every line also prints to stdout, which is visible under a debug build
+/// or when launched from a terminal. The log is truncated once per
+/// process (Once) so it holds just the current session, not an unbounded
+/// history.
+fn launch_log(msg: &str) {
+    println!("{msg}");
+    let Ok(appdata) = std::env::var("APPDATA") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(appdata)
+        .join("hls-livecam-win")
+        .join("launch.log");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    static LOG_INIT: std::sync::Once = std::sync::Once::new();
+    LOG_INIT.call_once(|| {
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = std::fs::write(&path, format!("=== launch (unix {epoch}) ===\n"));
+    });
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{msg}");
     }
 }
 

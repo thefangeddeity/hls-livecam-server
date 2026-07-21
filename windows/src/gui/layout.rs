@@ -169,10 +169,23 @@ impl App {
                 .max_rect(content_rect)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
-        // `max_rect` is a sizing hint, not a clip -- without this, a
+        // `max_rect` is a sizing hint, not a clip -- without a clip, a
         // panel with more rows than its height allows paints straight
-        // through its own border (caught from a screenshot).
-        content_ui.set_clip_rect(content_rect);
+        // through its own border (caught from a screenshot). But clipping
+        // exactly at content_rect cropped the LEFT border of a focused
+        // field: an input's focus stroke paints centred on the widget
+        // edge, so ~1px falls just outside content_rect and got cut
+        // (MESSAGE field, operator photo -- only three sides drew). Give
+        // the clip a few px of horizontal + top slack (still well inside
+        // the panel's 14px padding, so nothing bleeds past the border) so
+        // an edge stroke draws whole; keep the BOTTOM flush so over-tall
+        // row lists are still cut at the panel border, which is the whole
+        // reason this clip exists.
+        let clip = egui::Rect::from_min_max(
+            egui::pos2(content_rect.left() - 4.0, content_rect.top() - 4.0),
+            egui::pos2(content_rect.right() + 4.0, content_rect.bottom()),
+        );
+        content_ui.set_clip_rect(clip);
         add_contents(&mut content_ui, self);
     }
 
