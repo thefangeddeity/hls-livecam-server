@@ -137,7 +137,8 @@ fn main() {
         // under its 400px floor.
         .with_inner_size([1240.0, 840.0])
         .with_min_inner_size([1100.0, 800.0]);
-    // Runtime window + taskbar icon (the two cats/moon mark). The 256px
+    // Runtime window + taskbar icon (two cats peeking through a circular
+    // opening -- the ELE-branded mark). The 256px
     // wide crop is decoded from the tracked asset; the exe file's own
     // Explorer/Alt-Tab icon is embedded separately at build time
     // (build.rs). Both are needed or the window and the file would
