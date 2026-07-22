@@ -12,6 +12,10 @@ eframe = { version = "0.31", default-features = false, features = ["default_font
 egui = "0.31"
 sysinfo = "0.33"
 tray-icon = "0.19"
+# Already in the tree via eframe/winit -- used to reach the raw HWND so we
+# can set the taskbar (ICON_BIG) icon ourselves; eframe's with_icon only
+# sets the title-bar (ICON_SMALL) one.
+raw-window-handle = "0.6"
 # Already in the tree transitively via axum -- pinned as a direct dep for
 # the cams.json entry manager (run-6 IP manager), which round-trips the
 # fleet roster as JSON and must preserve any fields the manager doesn't
@@ -20,6 +24,10 @@ serde_json = "1"
 
 [build-dependencies]
 embed-manifest = "1"
+# Compiles the app icon (assets/icon.ico) into the exe as a Windows
+# resource, so Explorer / Alt-Tab / pinned shortcuts show it on the file
+# itself (the runtime window/taskbar icon is set separately, in main.rs).
+winresource = "0.1"
 
 [profile.release]
 # run 3 adds a real-time immediate-mode GUI + per-frame video texture
