@@ -19,11 +19,12 @@
 //! pipeline needs.
 
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 const PREVIEW_W: usize = 480;
 const PREVIEW_H: usize = 270;
@@ -42,13 +43,40 @@ pub struct Frame {
 
 pub type SharedFrame = Arc<Mutex<Option<Frame>>>;
 
-pub fn spawn(ffmpeg: std::path::PathBuf) -> SharedFrame {
+/// Shutdown handle for the preview tap. The tap is a child ffmpeg this app
+/// spawns, and it must be reaped when the app exits -- pipeline.shutdown()
+/// only reaps the capture + mediamtx children, so before run 7 a deliberate
+/// Quit orphaned this tap at elevated integrity (an ffmpeg with a dead
+/// parent the operator then couldn't kill). This gives the GUI's on_exit a
+/// direct kill: it takes the current child and stops the supervise loop
+/// from respawning.
+#[derive(Clone)]
+pub struct PreviewCtl {
+    child: Arc<tokio::sync::Mutex<Option<Child>>>,
+    running: Arc<AtomicBool>,
+}
+
+impl PreviewCtl {
+    pub async fn shutdown(&self) {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(mut child) = self.child.lock().await.take() {
+            let _ = child.kill().await;
+        }
+    }
+}
+
+pub fn spawn(ffmpeg: std::path::PathBuf) -> (SharedFrame, PreviewCtl) {
     let slot: SharedFrame = Arc::new(Mutex::new(None));
     let out = slot.clone();
+    let ctl = PreviewCtl {
+        child: Arc::new(tokio::sync::Mutex::new(None)),
+        running: Arc::new(AtomicBool::new(true)),
+    };
+    let loop_ctl = ctl.clone();
 
     tokio::spawn(async move {
         let mut generation: u64 = 0;
-        loop {
+        while loop_ctl.running.load(Ordering::Relaxed) {
             let mut cmd = Command::new(&ffmpeg);
             cmd.args([
                 "-hide_banner",
@@ -77,6 +105,9 @@ pub fn spawn(ffmpeg: std::path::PathBuf) -> SharedFrame {
             match cmd.spawn() {
                 Ok(mut child) => {
                     let mut stdout = child.stdout.take().unwrap();
+                    // Hand ownership of the child to the shared slot so
+                    // PreviewCtl::shutdown can kill it directly on exit.
+                    *loop_ctl.child.lock().await = Some(child);
                     let mut buf = vec![0u8; FRAME_BYTES];
                     loop {
                         match stdout.read_exact(&mut buf).await {
@@ -92,13 +123,19 @@ pub fn spawn(ffmpeg: std::path::PathBuf) -> SharedFrame {
                             Err(_) => break, // pipe closed -- source not ready or ffmpeg exited
                         }
                     }
-                    let _ = child.kill().await;
+                    // Reap it (idempotent if shutdown already took it).
+                    if let Some(mut child) = loop_ctl.child.lock().await.take() {
+                        let _ = child.kill().await;
+                    }
                 }
                 Err(e) => eprintln!("video_preview: failed to start ffmpeg: {e}"),
+            }
+            if !loop_ctl.running.load(Ordering::Relaxed) {
+                break;
             }
             tokio::time::sleep(RESTART_BACKOFF).await;
         }
     });
 
-    slot
+    (slot, ctl)
 }

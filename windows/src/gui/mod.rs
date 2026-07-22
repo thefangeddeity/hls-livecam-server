@@ -24,7 +24,7 @@ use crate::pipeline::{self, Pipeline};
 use crate::routes;
 use crate::state::AppState;
 use crate::tray::{self, Tray, TrayAction};
-use crate::video_preview::SharedFrame;
+use crate::video_preview::{self, SharedFrame};
 
 const METRICS_REFRESH: Duration = Duration::from_millis(1000);
 const DISK_REFRESH: Duration = Duration::from_secs(5);
@@ -56,6 +56,7 @@ pub struct App {
     last_disk: Instant,
 
     video_frame: SharedFrame,
+    video_preview: video_preview::PreviewCtl,
     video_texture: Option<egui::TextureHandle>,
     video_last_gen: u64,
     last_frame_at: Instant,
@@ -82,6 +83,11 @@ pub struct App {
 
     start: Instant,
     tray: Option<Tray>,
+    /// Set when the operator chooses a deliberate exit (tray -> Quit).
+    /// Distinguishes it from clicking the window X, which is intercepted
+    /// and turned into hide-to-tray so a naive user can't kill the family
+    /// camera by closing the window (run-7 lifecycle policy).
+    quitting: bool,
 }
 
 /// The IP-manager modal's transient form state -- the three edit fields,
@@ -113,6 +119,7 @@ impl App {
         pipeline: Arc<Pipeline>,
         rt: tokio::runtime::Handle,
         video_frame: SharedFrame,
+        video_preview: video_preview::PreviewCtl,
         tray: Option<Tray>,
     ) -> Self {
         BOOT.store(1, Ordering::Relaxed);
@@ -128,6 +135,7 @@ impl App {
             disk: diskhealth::query(),
             last_disk: Instant::now(),
             video_frame,
+            video_preview,
             video_texture: None,
             video_last_gen: 0,
             last_frame_at: Instant::now(),
@@ -148,6 +156,7 @@ impl App {
             ip_form: IpForm::default(),
             start: Instant::now(),
             tray,
+            quitting: false,
         }
     }
 
@@ -236,10 +245,30 @@ impl eframe::App for App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 Some(TrayAction::Quit) => {
+                    // The ONE deliberate exit: mark it, then request close.
+                    // The close-intercept below lets a marked close through
+                    // instead of bouncing it to hide-to-tray.
+                    self.quitting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 None => {}
             }
+        }
+
+        // Window-X policy (run 7): closing the window minimizes to the tray
+        // and keeps the server running -- a naive family member must not be
+        // able to kill the camera by clicking X. Only a deliberate tray ->
+        // Quit (self.quitting) actually exits. Fallback: if the tray failed
+        // to build there is no Show/Quit affordance, so X must still quit or
+        // the app would be unclosable except via Task Manager.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            let has_tray = self.tray.is_some();
+            if has_tray && !self.quitting {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
+            // else: deliberate Quit, or no tray -> let the close proceed
+            // (on_exit reaps the pipeline + preview children).
         }
 
         apply_theme(ctx);
@@ -280,7 +309,16 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // See pipeline.rs::shutdown docs -- Windows won't do this for us.
-        self.rt.block_on(self.pipeline.shutdown());
+        // Reap ALL children: capture + mediamtx (pipeline.shutdown) AND the
+        // video_preview tap (preview.shutdown). The tap used to be left
+        // running -- a deliberate Quit orphaned an elevated ffmpeg the
+        // operator then couldn't kill (run-6 diagnosis, pid evidence).
+        let pipeline = self.pipeline.clone();
+        let preview = self.video_preview.clone();
+        self.rt.block_on(async move {
+            pipeline.shutdown().await;
+            preview.shutdown().await;
+        });
     }
 }
 

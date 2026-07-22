@@ -161,9 +161,11 @@ impl App {
             if components::button(ui, "Cam IPs").clicked() {
                 self.ip_manager_open = true;
             }
-            if self.tray.is_some() && components::button(ui, "Minimize").clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            }
+            // The footer "Minimize" button was removed in run 7: closing the
+            // window (X) now minimizes to the tray itself, so a separate
+            // button did the same thing. OS-minimize (the native title-bar
+            // "_") still works for a taskbar-minimize; tray -> Show restores
+            // a hidden window; tray -> Quit is the deliberate exit.
             // Live theme switch -- palette is read per-frame, so the whole
             // window follows next repaint; choice persists in the state dir.
             let toggle_label = if theme::is_light() { "Dark theme" } else { "Light theme" };

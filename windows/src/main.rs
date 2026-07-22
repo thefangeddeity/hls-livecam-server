@@ -91,10 +91,13 @@ fn main() {
             launch_log(&format!("state dir : {}", state.dir().display()));
 
             let pipeline = pipeline::Pipeline::start(ffmpeg, mediamtx, state.clone()).await;
-            let video_frame = video_preview::spawn(ffmpeg_for_video);
+            let (video_frame, preview_ctl) = video_preview::spawn(ffmpeg_for_video);
 
             let handle = tokio::runtime::Handle::current();
-            if tx.send((state.clone(), pipeline.clone(), handle, video_frame)).is_err() {
+            if tx
+                .send((state.clone(), pipeline.clone(), handle, video_frame, preview_ctl))
+                .is_err()
+            {
                 return; // GUI thread gone before we finished booting
             }
 
@@ -121,7 +124,7 @@ fn main() {
         });
     });
 
-    let (state, pipeline, rt_handle, video_frame) = match rx.recv() {
+    let (state, pipeline, rt_handle, video_frame, preview_ctl) = match rx.recv() {
         Ok(v) => v,
         Err(_) => {
             launch_log("fatal: server thread failed to start");
@@ -180,7 +183,14 @@ fn main() {
             if tray.is_none() {
                 launch_log("tray: could not create a tray icon -- window minimize/close still work normally");
             }
-            Ok(Box::new(gui::App::new(state, pipeline, rt_handle, video_frame, tray)))
+            Ok(Box::new(gui::App::new(
+                state,
+                pipeline,
+                rt_handle,
+                video_frame,
+                preview_ctl,
+                tray,
+            )))
         }),
     );
 
