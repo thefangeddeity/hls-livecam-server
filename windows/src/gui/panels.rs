@@ -99,10 +99,23 @@ impl App {
 
     // ------------------------------------------------------------- FEED
     //
-    // Stale-frame fix (design doc §2/§7 item 1): don't paint the last
-    // decoded texture once the feed is OFFLINE -- App::feed_offline()
-    // decides. Both placeholder states use the shared `.ph` pattern.
+    // Three distinct states, checked in order (run 8):
+    //   1. TRANSITIONING -- a feed switch is flushing the pipeline: show the
+    //      VHS static animation, NOT the error state. App::feed_transition
+    //      (mod.rs) is the state machine; it ends exactly when the new
+    //      source's first frame is decoded, so the handoff to live video has
+    //      no gap.
+    //   2. NO SIGNAL -- genuine failure/off (feed_offline): server stopped or
+    //      the tap has produced no fresh frame for FRAME_STALE_AFTER. This is
+    //      the real error state the transition coexists with, not replaces.
+    //   3. Live video.
+    // Transition wins over feed_offline: during a switch the frames ARE
+    // stale, but that's expected cover, not failure.
     pub(super) fn draw_feed(&mut self, ui: &mut egui::Ui, p: &PipelineStatus) {
+        if self.feed_transition.is_some() {
+            self.draw_switching(ui);
+            return;
+        }
         if self.feed_offline(p) {
             components::placeholder(ui, "NO SIGNAL");
             return;
@@ -124,6 +137,91 @@ impl App {
             }
             None => components::placeholder(ui, "CONNECTING"),
         }
+    }
+
+    /// The TRANSITIONING animation: black-and-white analog VHS snow with
+    /// scanlines and a slow rolling tracking band, plus a small mono
+    /// "SWITCHING" label. B&W only (retro surveillance, not broken-TV).
+    ///
+    /// Cheap by construction: a small grey noise field (NOISE_W x NOISE_H)
+    /// is regenerated each frame from a persistent xorshift RNG (so it
+    /// crawls) and uploaded to ONE reused texture, then scaled up to fill
+    /// the feed with NEAREST sampling for crisp snow -- no full-res
+    /// per-pixel loop, no per-frame allocation beyond the small field. The
+    /// ~30fps repaint is requested (mod.rs) only while transitioning.
+    fn draw_switching(&mut self, ui: &mut egui::Ui) {
+        const NOISE_W: usize = 224;
+        const NOISE_H: usize = 126;
+        self.noise_frame = self.noise_frame.wrapping_add(1);
+
+        // A dark tracking band that scrolls slowly up the frame (classic VHS
+        // roll). Position in noise rows, wrapping.
+        let band_pos = (self.noise_frame / 2) % (NOISE_H as u64);
+
+        let mut pixels = Vec::with_capacity(NOISE_W * NOISE_H);
+        for y in 0..NOISE_H {
+            // Scanlines: every other row dimmed. Rolling band: a few rows
+            // near band_pos strongly dimmed.
+            let scan = if y % 2 == 0 { 1.0 } else { 0.72 };
+            let dist = (y as i64 - band_pos as i64).unsigned_abs();
+            let band = if dist < 3 { 0.35 } else { 1.0 };
+            let row_mul = scan * band;
+            for _ in 0..NOISE_W {
+                let n = (next_noise(&mut self.noise_rng) & 0xFF) as f32;
+                pixels.push(egui::Color32::from_gray((n * row_mul) as u8));
+            }
+        }
+        let image = egui::ColorImage {
+            size: [NOISE_W, NOISE_H],
+            pixels,
+        };
+        match &mut self.noise_texture {
+            Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+            None => {
+                self.noise_texture =
+                    Some(ui.ctx().load_texture("vhs_noise", image, egui::TextureOptions::NEAREST))
+            }
+        }
+        let rect = ui.max_rect();
+        let painter = ui.painter();
+        if let Some(tex) = &self.noise_texture {
+            painter.image(
+                tex.id(),
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+
+        // Label: a pulsing dot + "SWITCHING" in mono, over a subtle dark
+        // plate for legibility against the snow. Small, lower-center.
+        let t = self.start.elapsed().as_secs_f32();
+        let pulse = 0.55 + 0.45 * (t * 3.0).sin();
+        let center = egui::pos2(rect.center().x, rect.bottom() - 34.0);
+        let font = egui::FontId::monospace(13.0);
+        let text = "SWITCHING";
+        let galley = painter.layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE);
+        let dot_r = 4.0;
+        let gap = 8.0;
+        let content_w = dot_r * 2.0 + gap + galley.size().x;
+        let plate = egui::Rect::from_center_size(
+            center,
+            egui::vec2(content_w + 28.0, galley.size().y + 14.0),
+        );
+        painter.rect_filled(plate, egui::CornerRadius::same(6), egui::Color32::from_black_alpha(150));
+        let dot_c = egui::pos2(plate.left() + 14.0 + dot_r, center.y);
+        painter.circle_filled(
+            dot_c,
+            dot_r,
+            egui::Color32::from_white_alpha((pulse * 235.0) as u8),
+        );
+        painter.text(
+            egui::pos2(dot_c.x + dot_r + gap, center.y),
+            egui::Align2::LEFT_CENTER,
+            text,
+            font,
+            egui::Color32::from_rgb(0xD0, 0xD0, 0xD0),
+        );
     }
 
     /// The action toolbar attached under the feed (design doc §8, A1).
@@ -473,6 +571,18 @@ fn dense(ui: &mut egui::Ui) {
     let s = ui.spacing_mut();
     s.item_spacing.y = theme::STAT_ROW_GAP;
     s.interact_size.y = theme::STAT_ROW_MIN_H;
+}
+
+/// Tiny xorshift64 PRNG for the VHS-static snow -- no `rand` dependency
+/// for a few thousand grey values a frame. The caller threads the state
+/// across frames so successive frames get fresh noise (the snow crawls).
+fn next_noise(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    x
 }
 
 /// One VIDEO service row: plain "up", critical "DOWN".

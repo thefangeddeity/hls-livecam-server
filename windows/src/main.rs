@@ -180,8 +180,22 @@ fn main() {
             // thread-affine like window handles, so this has to happen on
             // the thread eframe's event loop actually runs on.
             let tray = tray::build();
-            if tray.is_none() {
-                launch_log("tray: could not create a tray icon -- window minimize/close still work normally");
+            match &tray {
+                Some(t) => {
+                    // Off-thread tray menu handling (run 8): Show/Quit work
+                    // even while the window is hidden, when the GUI loop
+                    // isn't repainting. Quit reaps every child and hard-exits.
+                    tray::spawn_menu_handler(
+                        t,
+                        cc.egui_ctx.clone(),
+                        pipeline.clone(),
+                        preview_ctl.clone(),
+                        rt_handle.clone(),
+                    );
+                }
+                None => launch_log(
+                    "tray: could not create a tray icon -- window minimize/close still work normally",
+                ),
             }
             Ok(Box::new(gui::App::new(
                 state,

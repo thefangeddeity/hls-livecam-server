@@ -23,7 +23,7 @@ use crate::metrics::{Metrics, Snapshot};
 use crate::pipeline::{self, Pipeline};
 use crate::routes;
 use crate::state::AppState;
-use crate::tray::{self, Tray, TrayAction};
+use crate::tray::{self, Tray};
 use crate::video_preview::{self, SharedFrame};
 
 const METRICS_REFRESH: Duration = Duration::from_millis(1000);
@@ -43,6 +43,22 @@ const FRAME_STALE_AFTER: Duration = Duration::from_secs(3);
 /// the ambient feed state.
 const STATUS_HOLD: Duration = Duration::from_secs(5);
 
+// --- Feed-switch transition (run 8) ---
+/// No new preview frame for this long during a transition = the old source
+/// has stopped (the tap lost its input). Well below the tap's 2s reconnect
+/// backoff, well above the ~125ms preview frame interval, so it trips
+/// reliably on every switch without false-firing on a single dropped frame.
+/// Once this gap is seen, the NEXT frame is accepted as the new source.
+const SWITCH_GAP: Duration = Duration::from_millis(700);
+/// Safety ceiling: if no new-source frame arrives within this, the switch
+/// is treated as failed and the FEED falls through to the real NO SIGNAL
+/// error state. The animation must never spin forever. The web viewer's
+/// cover is ~16s; this gives margin over a worst-case pipeline flush.
+const TRANSITION_CAP: Duration = Duration::from_secs(22);
+/// Repaint cadence while the static animation is running -- ~30fps for
+/// smooth crawling noise, only during the (few-second) transition.
+const TRANSITION_FPS_INTERVAL: Duration = Duration::from_millis(33);
+
 pub struct App {
     state: Arc<AppState>,
     pipeline: Arc<Pipeline>,
@@ -60,6 +76,14 @@ pub struct App {
     video_texture: Option<egui::TextureHandle>,
     video_last_gen: u64,
     last_frame_at: Instant,
+
+    // Feed-switch transition (run 8): while a switch is flushing the
+    // pipeline, the FEED shows a VHS-static animation instead of NO SIGNAL.
+    feed_transition: Option<FeedTransition>,
+    last_switch_seq: u64,
+    noise_texture: Option<egui::TextureHandle>,
+    noise_rng: u64,
+    noise_frame: u64,
 
     hostname: String,
     tailscale: String,
@@ -83,11 +107,87 @@ pub struct App {
 
     start: Instant,
     tray: Option<Tray>,
-    /// Set when the operator chooses a deliberate exit (tray -> Quit).
-    /// Distinguishes it from clicking the window X, which is intercepted
-    /// and turned into hide-to-tray so a naive user can't kill the family
-    /// camera by closing the window (run-7 lifecycle policy).
-    quitting: bool,
+}
+
+/// One in-progress feed switch. Two-phase (see SWITCH_GAP): first we wait
+/// for the preview tap's frames to freeze (`gap_gen` records the frozen
+/// generation), then we accept the first frame past that as the new source
+/// -- which rejects any trailing old-source frames still in flight when the
+/// switch began. `started` bounds the whole thing against TRANSITION_CAP.
+struct FeedTransition {
+    started: Instant,
+    gap_gen: Option<u64>,
+}
+
+/// Plain-value inputs to the transition decision, so the core logic is
+/// pure and unit-testable without an App/egui/pipeline (the live path is
+/// otherwise only reachable with a real camera + free pipeline ports).
+struct TransitionInputs {
+    /// A transition is currently active.
+    active: bool,
+    /// The frozen-frame generation recorded once the gap was seen.
+    gap_gen: Option<u64>,
+    /// Server on (deliberate-off cancels any transition).
+    enabled: bool,
+    /// switch_seq changed this frame (a capture (re)start happened).
+    switch_changed: bool,
+    /// The preview was showing live video when the switch fired.
+    was_live: bool,
+    /// Frames have been frozen long enough (> SWITCH_GAP) -- old source gone.
+    gap_seen: bool,
+    /// Current preview-tap frame generation.
+    video_last_gen: u64,
+    /// The active transition has exceeded TRANSITION_CAP.
+    timed_out: bool,
+}
+
+/// Outcome of one transition step.
+#[derive(Debug, PartialEq, Eq)]
+enum Next {
+    /// Not transitioning -- draw live video or NO SIGNAL (per feed_offline).
+    Idle,
+    /// Start a fresh transition this frame.
+    Begin,
+    /// Stay in the transition; carry this (possibly newly-set) gap_gen.
+    Continue(Option<u64>),
+}
+
+/// The pure feed-switch decision. Two-phase: begin only from a live feed;
+/// then wait for the frames to freeze (records gap_gen), then accept the
+/// first frame past that freeze as the new source (rejects trailing
+/// old-source frames). Timeout or server-off end it to the real error state.
+fn transition_next(i: TransitionInputs) -> Next {
+    // Server off is a deliberate stop -- real OFF/NO SIGNAL always wins.
+    if !i.enabled {
+        return Next::Idle;
+    }
+    if i.active {
+        // A failed switch must eventually surface the genuine error.
+        if i.timed_out {
+            return Next::Idle;
+        }
+        // Phase 1: record the frozen generation once the old source stops.
+        let gap_gen = if i.gap_gen.is_none() && i.gap_seen {
+            Some(i.video_last_gen)
+        } else {
+            i.gap_gen
+        };
+        // Phase 2: the first frame past the freeze is the new source.
+        if let Some(g) = gap_gen {
+            if i.video_last_gen > g {
+                return Next::Idle;
+            }
+        }
+        return Next::Continue(gap_gen);
+    }
+    // Not transitioning: a switch off a live feed begins one. A restart into
+    // an already-broken feed is a recovery, not a switch -- stay Idle so the
+    // FEED keeps showing NO SIGNAL rather than a reassuring "SWITCHING".
+    if i.switch_changed && i.was_live {
+        Next::Begin
+    } else {
+        Next::Idle
+    }
 }
 
 /// The IP-manager modal's transient form state -- the three edit fields,
@@ -139,6 +239,13 @@ impl App {
             video_texture: None,
             video_last_gen: 0,
             last_frame_at: Instant::now(),
+            feed_transition: None,
+            last_switch_seq: 0,
+            noise_texture: None,
+            // Any nonzero seed; xorshift state persists across frames so the
+            // noise keeps crawling instead of repeating.
+            noise_rng: 0x9E37_79B9_7F4A_7C15,
+            noise_frame: 0,
             hostname: routes::hostname(),
             tailscale: routes::tailscale_ip(),
             local_ip: routes::local_ip(),
@@ -156,7 +263,6 @@ impl App {
             ip_form: IpForm::default(),
             start: Instant::now(),
             tray,
-            quitting: false,
         }
     }
 
@@ -187,21 +293,66 @@ impl App {
         }
     }
 
-    /// The stale-frame fix's decision function. True whenever the FEED
-    /// should show NO SIGNAL instead of the last decoded texture.
-    /// Primary signal: the pipeline-down state that already drives the
-    /// VIDEO panel's rows red/critical (server off, capture or mediamtx
-    /// not alive, or HLS not reporting LIVE) -- reusing that existing
-    /// signal rather than inventing a new one, per the brief. Secondary,
-    /// belt-and-suspenders signal: video_preview's own independent RTSP
-    /// tap can die without the main pipeline noticing at all (it's a
-    /// separate read-only process) -- frame-staleness catches that case
-    /// specifically.
+    /// Real NO SIGNAL for the FEED preview. Run 8 keys this purely on
+    /// server-on + actual frame flow, NOT the pipeline liveness rows
+    /// (hls_state/capture_alive). Those rows lag reality by up to a poll
+    /// (~1s) and flip DOWN on every switch, so keying NO SIGNAL off them
+    /// both (a) flashed the error on a normal switch and (b) risked a tail
+    /// flash right as a switch completed but before hls_state caught up.
+    /// The preview tap's own frame flow is the ground truth for "is video
+    /// actually showing"; a genuinely dead pipeline stops those frames, so
+    /// staleness still catches real failure (just ~FRAME_STALE_AFTER
+    /// slower, which is fine -- the VIDEO panel rows still report the
+    /// pipeline state immediately for diagnosis). The transition animation
+    /// (draw_feed) takes precedence over this during a switch.
     fn feed_offline(&self, p: &pipeline::PipelineStatus) -> bool {
-        if !p.enabled || !p.capture_alive || !p.mediamtx_alive || p.hls_state != "LIVE" {
-            return true;
+        !p.enabled || self.last_frame_at.elapsed() > FRAME_STALE_AFTER
+    }
+
+    /// Advance the feed-switch transition state machine once per frame.
+    /// Reads the wall-clock/frame inputs off `self`, delegates the pure
+    /// decision to `transition_next` (unit-tested), applies the result, and
+    /// drives the ~30fps repaint while a transition is live.
+    fn update_feed_transition(&mut self, ctx: &egui::Context, p: &pipeline::PipelineStatus) {
+        let switch_changed = p.switch_seq != self.last_switch_seq;
+        if switch_changed {
+            self.last_switch_seq = p.switch_seq;
         }
-        self.last_frame_at.elapsed() > FRAME_STALE_AFTER
+        let frame_gap = self.last_frame_at.elapsed();
+        let was_live = frame_gap < FRAME_STALE_AFTER;
+        let gap_seen = frame_gap > SWITCH_GAP;
+        let (active, gap_gen, timed_out) = match &self.feed_transition {
+            Some(t) => (true, t.gap_gen, t.started.elapsed() > TRANSITION_CAP),
+            None => (false, None, false),
+        };
+
+        match transition_next(TransitionInputs {
+            active,
+            gap_gen,
+            enabled: p.enabled,
+            switch_changed,
+            was_live,
+            gap_seen,
+            video_last_gen: self.video_last_gen,
+            timed_out,
+        }) {
+            Next::Idle => self.feed_transition = None,
+            Next::Begin => {
+                self.feed_transition = Some(FeedTransition {
+                    started: Instant::now(),
+                    gap_gen: None,
+                })
+            }
+            Next::Continue(g) => {
+                if let Some(t) = self.feed_transition.as_mut() {
+                    t.gap_gen = g;
+                }
+            }
+        }
+
+        if self.feed_transition.is_some() {
+            ctx.request_repaint_after(TRANSITION_FPS_INTERVAL);
+        }
     }
 
     fn update_video_texture(&mut self, ctx: &egui::Context) {
@@ -238,42 +389,28 @@ impl eframe::App for App {
         }
         self.update_video_texture(ctx);
 
-        if let Some(tray) = &self.tray {
-            match tray::poll(tray) {
-                Some(TrayAction::Show) => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
-                Some(TrayAction::Quit) => {
-                    // The ONE deliberate exit: mark it, then request close.
-                    // The close-intercept below lets a marked close through
-                    // instead of bouncing it to hide-to-tray.
-                    self.quitting = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                None => {}
-            }
-        }
-
         // Window-X policy (run 7): closing the window minimizes to the tray
         // and keeps the server running -- a naive family member must not be
-        // able to kill the camera by clicking X. Only a deliberate tray ->
-        // Quit (self.quitting) actually exits. Fallback: if the tray failed
-        // to build there is no Show/Quit affordance, so X must still quit or
-        // the app would be unclosable except via Task Manager.
-        if ctx.input(|i| i.viewport().close_requested()) {
-            let has_tray = self.tray.is_some();
-            if has_tray && !self.quitting {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            }
-            // else: deliberate Quit, or no tray -> let the close proceed
-            // (on_exit reaps the pipeline + preview children).
+        // able to kill the camera by clicking X. Tray menu clicks (Show/
+        // Quit) are handled off-thread now (tray::spawn_menu_handler, run
+        // 8): a hidden window stops repainting, so update() can't be relied
+        // on to poll them -- that's why tray Quit didn't work once
+        // minimized. Fallback: with no tray there's no Show/Quit affordance,
+        // so X must still quit (on_exit reaps the children) or the app would
+        // be unclosable except via Task Manager.
+        if ctx.input(|i| i.viewport().close_requested()) && self.tray.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
         apply_theme(ctx);
 
         let pstatus = self.pipeline.status();
+        // Advance the feed-switch transition before drawing the FEED so the
+        // panel renders the right state (static vs live vs NO SIGNAL) this
+        // frame. Runs after update_video_texture so last_frame_at/
+        // video_last_gen reflect this frame's tap output.
+        self.update_feed_transition(ctx, &pstatus);
 
         egui::TopBottomPanel::top("header")
             .frame(
@@ -406,3 +543,91 @@ mod header;
 mod ipmanager;
 mod layout;
 mod panels;
+
+#[cfg(test)]
+mod transition_tests {
+    use super::{transition_next, Next, TransitionInputs};
+
+    /// Builder with sensible defaults so each test states only what it cares
+    /// about.
+    fn inp() -> TransitionInputs {
+        TransitionInputs {
+            active: false,
+            gap_gen: None,
+            enabled: true,
+            switch_changed: false,
+            was_live: false,
+            gap_seen: false,
+            video_last_gen: 100,
+            timed_out: false,
+        }
+    }
+
+    #[test]
+    fn idle_stays_idle_without_a_switch() {
+        assert_eq!(transition_next(inp()), Next::Idle);
+    }
+
+    #[test]
+    fn switch_from_live_begins() {
+        let i = TransitionInputs { switch_changed: true, was_live: true, ..inp() };
+        assert_eq!(transition_next(i), Next::Begin);
+    }
+
+    #[test]
+    fn switch_while_broken_does_not_begin() {
+        // A restart into an already-dead feed is recovery, not a switch:
+        // stay Idle so the FEED keeps showing NO SIGNAL, not "SWITCHING".
+        let i = TransitionInputs { switch_changed: true, was_live: false, ..inp() };
+        assert_eq!(transition_next(i), Next::Idle);
+    }
+
+    #[test]
+    fn active_waits_for_the_freeze() {
+        // Transitioning, frames haven't frozen yet -> keep waiting, no gap.
+        let i = TransitionInputs { active: true, gap_seen: false, ..inp() };
+        assert_eq!(transition_next(i), Next::Continue(None));
+    }
+
+    #[test]
+    fn trailing_old_frames_do_not_exit_early() {
+        // Active, no gap recorded yet, and a frame bumps the generation
+        // (a trailing old-source frame). Must NOT exit -- gap not seen.
+        let i = TransitionInputs { active: true, gap_gen: None, gap_seen: false, video_last_gen: 105, ..inp() };
+        assert_eq!(transition_next(i), Next::Continue(None));
+    }
+
+    #[test]
+    fn freeze_records_the_gap_generation() {
+        // Active, frames frozen this frame -> record gap_gen, don't exit yet.
+        let i = TransitionInputs { active: true, gap_gen: None, gap_seen: true, video_last_gen: 108, ..inp() };
+        assert_eq!(transition_next(i), Next::Continue(Some(108)));
+    }
+
+    #[test]
+    fn holds_after_freeze_until_a_new_frame() {
+        // gap recorded at 108, generation hasn't advanced past it -> hold.
+        let i = TransitionInputs { active: true, gap_gen: Some(108), video_last_gen: 108, ..inp() };
+        assert_eq!(transition_next(i), Next::Continue(Some(108)));
+    }
+
+    #[test]
+    fn new_source_frame_ends_the_transition() {
+        // gap recorded at 108, a fresh frame past it -> new source is live.
+        let i = TransitionInputs { active: true, gap_gen: Some(108), video_last_gen: 109, ..inp() };
+        assert_eq!(transition_next(i), Next::Idle);
+    }
+
+    #[test]
+    fn timeout_falls_through_to_error() {
+        // Failed switch: capped out with no new frame -> real NO SIGNAL.
+        let i = TransitionInputs { active: true, gap_gen: Some(108), video_last_gen: 108, timed_out: true, ..inp() };
+        assert_eq!(transition_next(i), Next::Idle);
+    }
+
+    #[test]
+    fn server_off_cancels_any_transition() {
+        let i = TransitionInputs { active: true, gap_gen: Some(108), enabled: false, ..inp() };
+        assert_eq!(transition_next(i), Next::Idle);
+    }
+}

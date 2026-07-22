@@ -53,19 +53,47 @@ fn app_icon() -> tray_icon::Icon {
     tray_icon::Icon::from_rgba(rgba, SIZE, SIZE).expect("valid icon buffer")
 }
 
-pub enum TrayAction {
-    Show,
-    Quit,
-}
-
-/// Non-blocking poll -- called once per GUI frame.
-pub fn poll(tray: &Tray) -> Option<TrayAction> {
-    let event = MenuEvent::receiver().try_recv().ok()?;
-    if event.id == tray.show_id {
-        Some(TrayAction::Show)
-    } else if event.id == tray.quit_id {
-        Some(TrayAction::Quit)
-    } else {
-        None
-    }
+/// Handle tray menu clicks on a DEDICATED thread, not inside the GUI's
+/// update() -- run-8 fix. The window-X policy hides the window to the tray
+/// (Visible(false)), and a hidden window stops repainting, so update() no
+/// longer runs to poll the menu channel. Result: the tray "Quit" click
+/// landed in the channel but nobody read it -- the app couldn't be quit
+/// from the tray at all once minimized (operator: "won't shut down even
+/// from quit menu"). This thread blocks on the menu channel independently
+/// of the GUI redraw state:
+///
+///   * Quit -> reap EVERY child (capture + mediamtx via pipeline.shutdown,
+///     the preview tap via preview.shutdown) and then hard-exit. This is
+///     the "leaves no trace" quit: no orphaned ffmpeg/mediamtx, no lingering
+///     tray icon (it dies with the process). Independent of on_exit, which
+///     an abrupt exit path wouldn't run.
+///   * Show -> un-hide + focus the window and wake the loop (a background
+///     request_repaint reaches the event loop even while it's parked
+///     waiting, hidden).
+pub fn spawn_menu_handler(
+    tray: &Tray,
+    ctx: eframe::egui::Context,
+    pipeline: std::sync::Arc<crate::pipeline::Pipeline>,
+    preview: crate::video_preview::PreviewCtl,
+    rt: tokio::runtime::Handle,
+) {
+    let show_id = tray.show_id.clone();
+    let quit_id = tray.quit_id.clone();
+    std::thread::spawn(move || {
+        let rx = MenuEvent::receiver();
+        while let Ok(event) = rx.recv() {
+            if event.id == quit_id {
+                rt.block_on(async {
+                    pipeline.shutdown().await;
+                    preview.shutdown().await;
+                });
+                std::process::exit(0);
+            } else if event.id == show_id {
+                use eframe::egui::ViewportCommand;
+                ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(ViewportCommand::Focus);
+                ctx.request_repaint();
+            }
+        }
+    });
 }

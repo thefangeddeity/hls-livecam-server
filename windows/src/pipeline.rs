@@ -46,6 +46,12 @@ pub struct PipelineStatus {
     /// Operator-controlled on/off, distinct from whether the child
     /// processes happen to be alive right now.
     pub enabled: bool,
+    /// Monotonic counter bumped every time the capture source is (re)started
+    /// -- a feed-mode switch, a B&W toggle, a manual Repair, or a self-heal
+    /// restart. The GUI watches this to know a switch just began, so it can
+    /// cover the pipeline-flush gap with the transition animation instead of
+    /// flashing NO SIGNAL (run 8). Not fleet-facing; GUI-only signal.
+    pub switch_seq: u64,
 }
 
 const RTSP_URL: &str = "rtsp://127.0.0.1:8554/cam";
@@ -96,6 +102,8 @@ pub struct Pipeline {
     capture_alive: AtomicBool,
     mediamtx_alive: AtomicBool,
     hls_state: StdMutex<String>,
+    /// Bumped on every restart_capture -- see PipelineStatus::switch_seq.
+    switch_seq: std::sync::atomic::AtomicU64,
 }
 
 impl Pipeline {
@@ -120,6 +128,7 @@ impl Pipeline {
             capture_alive: AtomicBool::new(false),
             mediamtx_alive: AtomicBool::new(false),
             hls_state: StdMutex::new("DOWN".to_string()),
+            switch_seq: std::sync::atomic::AtomicU64::new(0),
         });
 
         spawn_mediamtx_supervisor(p.clone());
@@ -168,6 +177,7 @@ impl Pipeline {
             hls_state: self.hls_state.lock().unwrap().clone(),
             device: self.device.lock().unwrap().clone(),
             enabled: self.enabled.load(Ordering::Relaxed),
+            switch_seq: self.switch_seq.load(Ordering::Relaxed),
         }
     }
 
@@ -219,6 +229,12 @@ impl Pipeline {
     }
 
     async fn restart_capture(&self) {
+        // Signal a switch/restart to the GUI (covers the pipeline-flush gap
+        // with the transition animation). Bumped even when disabled below --
+        // the GUI only starts a transition if it was showing live video, so
+        // a restart into an already-off/broken state won't spuriously animate.
+        self.switch_seq.fetch_add(1, Ordering::Relaxed);
+
         let mut slot = self.capture.lock().await;
         if let Some(mut child) = slot.take() {
             let _ = child.kill().await;
