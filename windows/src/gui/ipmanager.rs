@@ -276,7 +276,15 @@ fn field_row(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
         );
         ui.add(
             egui::TextEdit::singleline(value)
-                .hint_text(hint)
+                // Placeholder in the muted token so it's unmistakably a
+                // grayed example, not real text. egui's default hint color
+                // (weak_text_color) is only a slight dim of the bright
+                // override_text_color this app sets, so it read like real
+                // data until clicked (operator). A colored RichText hint
+                // overrides that -- painter.galley keeps the galley's own
+                // color and only falls back to weak_text_color when none
+                // is set.
+                .hint_text(egui::RichText::new(hint).color(theme::text_muted()))
                 .desired_width(f32::INFINITY),
         );
     });
