@@ -22,6 +22,7 @@
 
 use crate::winproc::hidden;
 
+#[derive(Clone)]
 pub struct DiskInfo {
     pub disk_name: String,
     pub health_status: Option<String>, // "Healthy" / "Warning" / "Unhealthy" / None if query failed
@@ -37,6 +38,7 @@ pub struct DiskInfo {
     pub write_mb_s: Option<f64>,
 }
 
+#[derive(Clone)]
 pub struct Reliability {
     pub read_errors_uncorrected: i64,
     pub write_errors_uncorrected: i64,

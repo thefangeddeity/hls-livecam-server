@@ -11,9 +11,12 @@
 //! (this HP included) don't expose; None when sysinfo's Components list
 //! is empty, and the row is hidden rather than shown as a dead n/a.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sysinfo::{Components, System};
+
+use crate::diskhealth::{self, DiskInfo};
 
 /// PQL is a perf-counter read (shelling out to PowerShell/CIM), too heavy
 /// for the 1s metrics tick, so it's sampled at this slower cadence and
@@ -21,6 +24,13 @@ use sysinfo::{Components, System};
 /// granularity for an operator glance.
 const PQL_REFRESH: Duration = Duration::from_secs(5);
 
+/// Background-collector cadences. These run on their OWN thread
+/// (spawn_collector), never the render thread, so their cost is invisible
+/// to the video paint.
+const COLLECT_INTERVAL: Duration = Duration::from_millis(1000);
+const DISK_INTERVAL: Duration = Duration::from_secs(5);
+
+#[derive(Clone)]
 pub struct Snapshot {
     pub cpu_percent: f32,
     pub mem_percent: f32,
@@ -37,6 +47,7 @@ pub struct Snapshot {
     pub top_processes: Vec<ProcRow>,
 }
 
+#[derive(Clone)]
 pub struct ProcRow {
     pub name: String,
     pub cpu_percent: f32,
@@ -155,4 +166,36 @@ fn query_pql() -> Option<f64> {
         return None;
     }
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// Collect metrics + disk health on a dedicated BACKGROUND thread and
+/// publish into shared slots the GUI clones each frame. This is the whole
+/// point: none of this touches the render thread. Measured on 7elwe, one
+/// tick blocks ~13-18ms just for the process scan + temperature sensors,
+/// and the 5s disk/PQL shell-outs to powershell/WMI cost far more -- run
+/// inline on the paint thread that was a rhythmic freeze in the preview.
+/// Off here, the render thread only ever does a cheap clone.
+///
+/// `metrics` is moved in already warmed (the caller does one seeding read
+/// so the first frame has real values). The thread owns its own cadences
+/// and lives for the process lifetime -- there is nothing to reap; on exit
+/// it dies with the process, mid-sleep, having no external state to flush.
+pub fn spawn_collector(
+    mut metrics: Metrics,
+    snapshot: Arc<Mutex<Snapshot>>,
+    disk: Arc<Mutex<DiskInfo>>,
+) {
+    std::thread::spawn(move || {
+        let mut last_disk = Instant::now();
+        loop {
+            std::thread::sleep(COLLECT_INTERVAL);
+            let snap = metrics.refresh();
+            *snapshot.lock().unwrap() = snap;
+            if last_disk.elapsed() >= DISK_INTERVAL {
+                let d = diskhealth::query();
+                *disk.lock().unwrap() = d;
+                last_disk = Instant::now();
+            }
+        }
+    });
 }

@@ -13,21 +13,19 @@ mod fonts;
 mod theme;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 
 use crate::diskhealth::{self, DiskInfo};
-use crate::metrics::{Metrics, Snapshot};
+use crate::metrics::{self, Metrics, Snapshot};
 use crate::pipeline::{self, Pipeline};
 use crate::routes;
 use crate::state::AppState;
 use crate::tray::{self, Tray};
 use crate::video_preview::{self, SharedFrame};
 
-const METRICS_REFRESH: Duration = Duration::from_millis(1000);
-const DISK_REFRESH: Duration = Duration::from_secs(5);
 const REPAINT_INTERVAL: Duration = Duration::from_millis(150);
 /// Display-only staleness fallback for the FEED panel -- if the pipeline
 /// itself reports healthy but video_preview's own independent decode tap
@@ -69,12 +67,21 @@ pub struct App {
     pipeline: Arc<Pipeline>,
     rt: tokio::runtime::Handle,
 
-    metrics: Metrics,
+    // Metrics/disk are collected on a BACKGROUND thread
+    // (metrics::spawn_collector) and published into these shared slots. The
+    // render thread must never call them inline: refresh_processes (~10ms),
+    // the temperature components (~5ms), the PQL powershell shell-out
+    // (~hundreds of ms) and disk SMART (WMI, up to ~1s) each block long
+    // enough to hitch a 15fps paint. Running the 1s process scan inline is
+    // what froze the preview rhythmically -- the operator preview shares
+    // this thread with the SYSTEM/PROCESSES panels, a coupling the Linux/Mac
+    // fleet never had (there the video is rendered by a browser, wholly
+    // separate from any process monitor). `snapshot`/`disk` are cheap
+    // per-frame clones of the shared slots for the draw code to read.
+    shared_snapshot: Arc<Mutex<Snapshot>>,
+    shared_disk: Arc<Mutex<DiskInfo>>,
     snapshot: Snapshot,
-    last_metrics: Instant,
-
     disk: DiskInfo,
-    last_disk: Instant,
 
     video_frame: SharedFrame,
     video_preview: video_preview::PreviewCtl,
@@ -237,17 +244,24 @@ impl App {
         window_hidden: Arc<AtomicBool>,
     ) -> Self {
         BOOT.store(1, Ordering::Relaxed);
+        // One blocking read at startup to seed the panels with real values
+        // (fine here -- the render loop hasn't started). After this the
+        // collector thread owns `metrics` and does every subsequent refresh
+        // off the render thread.
         let mut metrics = Metrics::new();
         let snapshot = metrics.refresh();
+        let disk = diskhealth::query();
+        let shared_snapshot = Arc::new(Mutex::new(snapshot.clone()));
+        let shared_disk = Arc::new(Mutex::new(disk.clone()));
+        metrics::spawn_collector(metrics, shared_snapshot.clone(), shared_disk.clone());
         Self {
             state,
             pipeline,
             rt,
-            metrics,
+            shared_snapshot,
+            shared_disk,
             snapshot,
-            last_metrics: Instant::now(),
-            disk: diskhealth::query(),
-            last_disk: Instant::now(),
+            disk,
             video_frame,
             video_preview,
             video_texture: None,
@@ -406,14 +420,12 @@ impl eframe::App for App {
             return;
         }
 
-        if self.last_metrics.elapsed() >= METRICS_REFRESH {
-            self.snapshot = self.metrics.refresh();
-            self.last_metrics = Instant::now();
-        }
-        if self.last_disk.elapsed() >= DISK_REFRESH {
-            self.disk = diskhealth::query();
-            self.last_disk = Instant::now();
-        }
+        // Pull the latest OFF-THREAD-collected metrics -- a cheap clone, no
+        // system calls on the render thread (see the field docs and
+        // metrics::spawn_collector). This is what keeps the 1s process scan
+        // from hitching the paint.
+        self.snapshot = self.shared_snapshot.lock().unwrap().clone();
+        self.disk = self.shared_disk.lock().unwrap().clone();
         self.update_video_texture(ctx);
 
         // Window-X policy (run 7): closing the window minimizes to the tray
