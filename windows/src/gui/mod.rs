@@ -477,14 +477,20 @@ impl eframe::App for App {
         }
 
         // Repaint cadence (we only reach here while visible -- hidden
-        // early-returns above). Repaint fast (STATIC_FPS_INTERVAL, 15fps)
-        // whenever there's motion to show: the static animation
-        // (switching/standby) OR live video -- the preview was jerky at the
-        // old 6.7fps idle cadence (an 8fps source shown at 6.7fps). NO
-        // SIGNAL / idle stays slow.
-        let showing_motion =
-            self.feed_transition.is_some() || !pstatus.enabled || !self.feed_offline(&pstatus);
-        let interval = if showing_motion {
+        // early-returns above). Live video is EVENT-DRIVEN, not timed here:
+        // the preview tap thread calls request_repaint() the instant each
+        // frame lands (video_preview.rs), so we paint exactly once per
+        // arrived frame at the source's true ~8fps. Timing live video off a
+        // fixed clock instead produced beat-pattern judder -- a 15fps paint
+        // over an 8fps source (15/8 = 1.875) shows each frame for either one
+        // or two intervals in an irregular 1-2-1-2 stutter, nothing dropped.
+        // Only the GENERATED static screens (the SWITCHING transition and
+        // STANDBY-when-off) are true per-frame animations that need a fixed
+        // cadence. Live video and idle NO SIGNAL fall through to a slow tick
+        // (keeps the clock/status fresh and re-checks feed liveness; frame
+        // arrivals supersede it whenever the source is actually producing).
+        let animating_static = self.feed_transition.is_some() || !pstatus.enabled;
+        let interval = if animating_static {
             STATIC_FPS_INTERVAL
         } else {
             REPAINT_INTERVAL

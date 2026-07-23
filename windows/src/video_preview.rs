@@ -20,7 +20,7 @@
 
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
@@ -65,7 +65,17 @@ impl PreviewCtl {
     }
 }
 
-pub fn spawn(ffmpeg: std::path::PathBuf) -> (SharedFrame, PreviewCtl) {
+/// `repaint` is a deferred handle to the egui context: this runs on the
+/// server thread before eframe has created its Context, so the slot is
+/// filled later (in main's eframe creation closure). Once set, the reader
+/// wakes the GUI the instant each frame lands, so the FEED panel paints
+/// exactly once per arrived frame (event-driven) instead of on a fixed
+/// clock that beats against the source rate and stutters -- see the cadence
+/// note in gui::update.
+pub fn spawn(
+    ffmpeg: std::path::PathBuf,
+    repaint: Arc<OnceLock<egui::Context>>,
+) -> (SharedFrame, PreviewCtl) {
     let slot: SharedFrame = Arc::new(Mutex::new(None));
     let out = slot.clone();
     let ctl = PreviewCtl {
@@ -119,6 +129,13 @@ pub fn spawn(ffmpeg: std::path::PathBuf) -> (SharedFrame, PreviewCtl) {
                                     rgb: buf.clone(),
                                     generation,
                                 });
+                                // Wake the GUI to paint this exact frame now
+                                // (event-driven cadence). No-op until the
+                                // eframe closure fills the slot; after that,
+                                // one repaint per arrived frame.
+                                if let Some(ctx) = repaint.get() {
+                                    ctx.request_repaint();
+                                }
                             }
                             Err(_) => break, // pipe closed -- source not ready or ffmpeg exited
                         }

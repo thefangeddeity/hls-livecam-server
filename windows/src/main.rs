@@ -84,6 +84,13 @@ fn main() {
     let (tx, rx) = std::sync::mpsc::channel();
     let ffmpeg_for_video = ffmpeg.clone();
 
+    // Deferred egui-context handle for the preview tap's event-driven
+    // repaint: the tap thread starts here (server thread) before eframe
+    // exists, so it holds an empty slot the eframe closure fills below.
+    let repaint_ctx: Arc<std::sync::OnceLock<egui::Context>> =
+        Arc::new(std::sync::OnceLock::new());
+    let repaint_for_reader = repaint_ctx.clone();
+
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {
@@ -91,7 +98,8 @@ fn main() {
             launch_log(&format!("state dir : {}", state.dir().display()));
 
             let pipeline = pipeline::Pipeline::start(ffmpeg, mediamtx, state.clone()).await;
-            let (video_frame, preview_ctl) = video_preview::spawn(ffmpeg_for_video);
+            let (video_frame, preview_ctl) =
+                video_preview::spawn(ffmpeg_for_video, repaint_for_reader);
 
             let handle = tokio::runtime::Handle::current();
             if tx
@@ -167,6 +175,9 @@ fn main() {
             // exactly frame 1 if installation waits until update()
             // (crashed on launch; caught from Ron's console screenshot).
             gui::init_fonts(&cc.egui_ctx);
+            // Hand the live egui context to the preview tap thread so it can
+            // wake the GUI on each new frame (event-driven FEED repaint).
+            let _ = repaint_ctx.set(cc.egui_ctx.clone());
             // Taskbar icon fix: winit's with_icon (what eframe drives) only
             // sets ICON_SMALL -- the title bar / Alt-Tab icon. The TASKBAR
             // button uses ICON_BIG, which winit exposes as a separate
