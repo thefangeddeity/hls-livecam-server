@@ -72,7 +72,7 @@
     <!-- Program files -->
     <DirectoryRef Id="INSTALLFOLDER">
       <Component Id="MainExe" Guid="*">
-        <File Id="MainExe" Name="hls-livecam-win.exe" Source="$(var.ExePath)" KeyPath="yes" />
+        <File Id="MainExe" Name="camdash.exe" Source="$(var.ExePath)" KeyPath="yes" />
       </Component>
 
       <Component Id="AppIconFile" Guid="*">
@@ -129,8 +129,13 @@
          the transaction (a pre-InstallValidate close CA fails with 2762); it
          frees the exe before InstallFiles, so the replace succeeds without a
          reboot. Harmless no-op on a clean install. -->
+    <!-- Kills BOTH names on purpose. Upgrading from win-v1.0.0 means the
+         process currently holding the file lock is still the OLD
+         hls-livecam-win.exe; only killing camdash.exe would leave it running,
+         the old exe locked, and the upgrade would fail or defer to a reboot.
+         Both taskkills are no-ops when the process isn't there. -->
     <CustomAction Id="SetStopApp" Property="StopApp"
-      Value="&quot;[System64Folder]cmd.exe&quot; /c &quot;schtasks /End /TN hls-livecam-win &amp; taskkill /F /IM hls-livecam-win.exe&quot;" />
+      Value="&quot;[System64Folder]cmd.exe&quot; /c &quot;schtasks /End /TN hls-livecam-win &amp; taskkill /F /IM camdash.exe &amp; taskkill /F /IM hls-livecam-win.exe&quot;" />
     <CustomAction Id="StopApp" BinaryKey="WixCA" DllEntry="CAQuietExec64"
       Execute="deferred" Impersonate="no" Return="ignore" />
 
@@ -142,7 +147,7 @@
          operator instead — exactly the context autostart.rs registers it from.
          Creating a self-scoped ONLOGON /RL HIGHEST task needs no elevation. -->
     <CustomAction Id="SetCreateTask" Property="CreateTask"
-      Value="&quot;[System64Folder]schtasks.exe&quot; /Create /TN &quot;hls-livecam-win&quot; /TR &quot;\&quot;[INSTALLFOLDER]hls-livecam-win.exe\&quot;&quot; /SC ONLOGON /RL HIGHEST /F" />
+      Value="&quot;[System64Folder]schtasks.exe&quot; /Create /TN &quot;hls-livecam-win&quot; /TR &quot;\&quot;[INSTALLFOLDER]camdash.exe\&quot;&quot; /SC ONLOGON /RL HIGHEST /F" />
     <CustomAction Id="CreateTask" BinaryKey="WixCA" DllEntry="CAQuietExec64"
       Execute="deferred" Impersonate="yes" Return="ignore" />
 

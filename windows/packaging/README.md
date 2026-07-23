@@ -15,7 +15,7 @@ Output: `build\hls-livecam-win-<version>.msi`.
 
 | Input | Source | In git? |
 |-------|--------|---------|
-| `hls-livecam-win.exe` | `cargo build --release` in `windows\` (embeds the `requireAdministrator` manifest) | no (build artifact) |
+| `camdash.exe` | `cargo build --release` in `windows\` (embeds the `requireAdministrator` manifest; static CRT via `.cargo\config.toml`) | no (build artifact) |
 | `bin\ffmpeg.exe` | gyan.dev static FFmpeg build | **no — never vendored** |
 | `bin\mediamtx.exe` | mediamtx GitHub release (v1.15.2) | **no — never vendored** |
 | `assets\icon.ico` | tracked in `windows\assets\` | yes |
@@ -32,12 +32,24 @@ Everything under `tools/` and `build/` (and any `*.msi`) is git-ignored.
 
 ## What the MSI does
 
-- Installs to `C:\Program Files\hls-livecam-win\`, with `ffmpeg.exe` /
-  `mediamtx.exe` in `bin\` next to the exe (where the resolver looks).
+- Installs **`camdash.exe`** to `C:\Program Files\hls-livecam-win\`, with
+  `ffmpeg.exe` / `mediamtx.exe` in `bin\` next to it (where the resolver looks).
 - Registers an **elevated `ONLOGON` Scheduled Task** `hls-livecam-win`
-  (`/RL HIGHEST` = HighestAvailable) — the same autostart mechanism the app
-  self-registers (`src/autostart.rs`), created here so it exists at install
-  time rather than only after first launch.
+  (`/RL HIGHEST` = HighestAvailable) targeting `camdash.exe` — the same
+  autostart mechanism the app self-registers (`src/autostart.rs`), created here
+  so it exists at install time rather than only after first launch.
+
+### Names that deliberately did NOT change with the `camdash.exe` rename
+
+Only the executable filename changed. These stayed put on purpose:
+
+| Thing | Value | Why |
+|---|---|---|
+| Scheduled Task name | `hls-livecam-win` | Renaming it would leave the old task behind on upgrade — two tasks, one pointing at a deleted exe. Keeping the name lets `/F` retarget the single existing task. |
+| Config dir | `%APPDATA%\hls-livecam-win` | Operator config (cams.json, message, feed-mode, theme) must survive the upgrade. |
+| Install dir | `C:\Program Files\hls-livecam-win\` | Renaming adds a second path for the upgrade to migrate, for no functional gain; it matches the product name, which also didn't change. |
+| Window title | `Webcam Server Stack` | camdash's own header text on Linux — faithful. |
+| Start-menu / ARP name | `HLS Livecam (Windows Node)` | Product identity is unchanged; only the tool binary was renamed. |
 - Adds a **Start-menu entry** with the icon. **No desktop shortcut** (by PM
   decision — none is authored).
 - Force-terminates a running instance before replacing files, so an

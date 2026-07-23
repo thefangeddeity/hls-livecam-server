@@ -1,0 +1,12 @@
+# Statically link the MSVC CRT so the shipped exe carries no VCRUNTIME140.dll
+# dependency and runs on a clean Windows box with no VC++ redistributable
+# installed.
+#
+# This closes the gap flagged as the riskiest assumption of win-v1.0.0, where
+# every install test ran on the dev machine (which has the VC++ runtime via
+# its toolchain). That assumption was since retired empirically -- the
+# dynamic-CRT v1.0.0 MSI installed AND ran on a second machine -- so this is
+# hardening, not a fix. It rides along on a rebuild that the camdash.exe
+# rename forced anyway, rather than spending that cycle twice.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

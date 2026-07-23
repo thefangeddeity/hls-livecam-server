@@ -2,7 +2,8 @@
   Builds the win-v1.0.0 MSI for the Windows camera node.
 
   Sources (NOT in git -- see README):
-    * windows\target\release\hls-livecam-win.exe   (cargo build --release, manifest build)
+    * windows\target\release\camdash.exe           (cargo build --release, manifest build,
+                                                    static CRT via .cargo\config.toml)
     * windows\target\release\bin\ffmpeg.exe        (gyan.dev static build)
     * windows\target\release\bin\mediamtx.exe      (mediamtx GitHub release)
     * windows\assets\icon.ico                      (tracked)
@@ -35,14 +36,14 @@ if (-not (Test-Path $candle)) {
 }
 
 # --- 2. Stage inputs; fail loudly if the un-vendored binaries are missing ---
-$exe      = Join-Path $win "target\release\hls-livecam-win.exe"
+$exe      = Join-Path $win "target\release\camdash.exe"
 $ffmpeg   = Join-Path $win "target\release\bin\ffmpeg.exe"
 $mediamtx = Join-Path $win "target\release\bin\mediamtx.exe"
 $ico      = Join-Path $win "assets\icon.ico"
 foreach ($f in @($exe,$ffmpeg,$mediamtx,$ico)) {
   if (-not (Test-Path $f)) {
     throw "Missing build input: $f`n" +
-          "  hls-livecam-win.exe : run ``cargo build --release`` in windows\`n" +
+          "  camdash.exe : run ``cargo build --release`` in windows\`n" +
           "  ffmpeg.exe/mediamtx.exe : NOT in git -- place the gyan.dev ffmpeg and`n" +
           "    the mediamtx release binary in windows\target\release\bin\ (see README)."
   }

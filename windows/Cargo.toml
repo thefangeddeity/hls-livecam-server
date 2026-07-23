@@ -5,6 +5,16 @@ edition = "2021"
 description = "Native Windows camera node for hls-livecam-server (control-plane, web assets, capture pipeline)"
 license = "GPL-3.0"
 
+# The shipped executable is camdash.exe -- what the fleet calls this tool on
+# Linux, and what the operator actually says. ONLY the binary filename
+# changes: the crate/package keeps its hls-livecam-win identity, as do the
+# config dir (%APPDATA%\hls-livecam-win), the Scheduled Task name
+# (renaming it would strand the old task on upgrade), the install directory,
+# the window title, and the Add/Remove Programs product name.
+[[bin]]
+name = "camdash"
+path = "src/main.rs"
+
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "time", "io-util"] }
