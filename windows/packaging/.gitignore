@@ -1,0 +1,6 @@
+# WiX toolchain (fetched by build-msi.ps1) and build artifacts -- never commit.
+tools/
+build/
+*.msi
+*.wixobj
+*.wixpdb

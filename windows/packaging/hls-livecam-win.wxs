@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MSI package for the Windows camera node (win-v1.0.0).
+
+  Installs the elevated-manifest release exe plus its bin\ffmpeg.exe /
+  bin\mediamtx.exe (the run-2 resolver looks in bin\ next to the exe, so
+  placement alone satisfies it), a multi-res icon, a Start-menu entry, and
+  an elevated ONLOGON Scheduled Task (HighestAvailable) that IS the autostart
+  mechanism already proven on 7elwe (see src/autostart.rs — same TN, /SC,
+  /RL). No desktop shortcut, by explicit PM decision.
+
+  Two-tier uninstall (PM-ratified):
+    * default  -> removes program files, the task, the Start-menu entry;
+                  LEAVES %APPDATA%\hls-livecam-win (message/feed-mode/device/
+                  theme/cams.json) so a reinstall keeps the operator's config.
+                  The config dir is created by the app at runtime and is NOT
+                  tracked by this MSI, so it is untouched by a normal uninstall
+                  automatically.
+    * purge    -> msiexec /x {ProductCode} PURGECONFIG=1  ALSO deletes
+                  %APPDATA%\hls-livecam-win. Opt-in, never default, never
+                  silent (see README).
+
+  Paths (ExePath/FfmpegPath/MediamtxPath/IcoPath) come from -d defines in
+  build-msi.ps1. The two binaries are deliberately NOT in git; the build
+  script stages them from windows\target\release\bin\.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <Product Id="*"
+           Name="HLS Livecam (Windows Node)"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="ELE"
+           UpgradeCode="{9F5B2C41-8E7A-4D3B-A1C6-2F0E9D4B7A63}">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="HLS Livecam Windows camera node"
+             Comments="win-v$(var.ProductVersion)" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Clean major-upgrade: newer replaces older in place (no side-by-side);
+         block installing an older MSI over a newer one. Scheduled early so the
+         old product is removed before the new files are laid down. -->
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of HLS Livecam (Windows Node) is already installed. Setup will now exit." />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IcoPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <!-- ARP: no Modify button (no feature tree to configure) -->
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Opt-in config purge. Default 0 => a normal uninstall keeps the config
+         dir. Secure so it can be passed on the msiexec command line. -->
+    <Property Id="PURGECONFIG" Value="0" Secure="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="hls-livecam-win">
+          <Directory Id="BINFOLDER" Name="bin" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppShortcutFolder" Name="HLS Livecam" />
+      </Directory>
+    </Directory>
+
+    <!-- Program files -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExe" Guid="*">
+        <File Id="MainExe" Name="hls-livecam-win.exe" Source="$(var.ExePath)" KeyPath="yes" />
+      </Component>
+
+      <Component Id="AppIconFile" Guid="*">
+        <File Id="AppIconFile" Name="icon.ico" Source="$(var.IcoPath)" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Start-menu shortcut in its OWN component with an HKCU keypath — the
+         ICE43/57-approved pattern for a non-advertised shortcut. No desktop
+         shortcut, by PM decision: none is authored anywhere. -->
+    <DirectoryRef Id="AppShortcutFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="HLS Livecam"
+                  Description="HLS Livecam Windows camera node"
+                  Target="[#MainExe]"
+                  Icon="AppIcon.ico"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\ELE\hls-livecam-win"
+                       Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- bin\ next to the exe — where the run-2 resolver looks -->
+    <DirectoryRef Id="BINFOLDER">
+      <Component Id="Ffmpeg" Guid="*">
+        <File Id="ffmpeg.exe" Name="ffmpeg.exe" Source="$(var.FfmpegPath)" KeyPath="yes" />
+      </Component>
+      <Component Id="Mediamtx" Guid="*">
+        <File Id="mediamtx.exe" Name="mediamtx.exe" Source="$(var.MediamtxPath)" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="HLS Livecam" Level="1">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="AppIconFile" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="Ffmpeg" />
+      <ComponentRef Id="Mediamtx" />
+    </Feature>
+
+    <!-- =====================================================================
+         Custom actions. All task/purge work is deferred + elevated (no
+         impersonation) EXCEPT the purge, which impersonates so %APPDATA%
+         resolves to the operator, not SYSTEM. Return="ignore" on task ops so
+         a schtasks hiccup never rolls back a good install.
+         ===================================================================== -->
+
+    <!-- Stop any running instance (and end its task) before file work, so an
+         upgrade/reinstall over a running app doesn't lock the exe. The app
+         intercepts WM_CLOSE as "minimize", so a graceful close won't quit it —
+         taskkill /F terminates outright. Deferred+elevated so it runs inside
+         the transaction (a pre-InstallValidate close CA fails with 2762); it
+         frees the exe before InstallFiles, so the replace succeeds without a
+         reboot. Harmless no-op on a clean install. -->
+    <CustomAction Id="SetStopApp" Property="StopApp"
+      Value="&quot;[System64Folder]cmd.exe&quot; /c &quot;schtasks /End /TN hls-livecam-win &amp; taskkill /F /IM hls-livecam-win.exe&quot;" />
+    <CustomAction Id="StopApp" BinaryKey="WixCA" DllEntry="CAQuietExec64"
+      Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- Create the ONLOGON / HighestAvailable task pointing at the installed
+         exe. /F overwrites any task the app self-registered at an old path.
+         IMPERSONATED (unlike the other deferred CAs): schtasks /SC ONLOGON run
+         as SYSTEM fails with "No mapping between account names and security IDs"
+         because it can't resolve the interactive user. Run as the installing
+         operator instead — exactly the context autostart.rs registers it from.
+         Creating a self-scoped ONLOGON /RL HIGHEST task needs no elevation. -->
+    <CustomAction Id="SetCreateTask" Property="CreateTask"
+      Value="&quot;[System64Folder]schtasks.exe&quot; /Create /TN &quot;hls-livecam-win&quot; /TR &quot;\&quot;[INSTALLFOLDER]hls-livecam-win.exe\&quot;&quot; /SC ONLOGON /RL HIGHEST /F" />
+    <CustomAction Id="CreateTask" BinaryKey="WixCA" DllEntry="CAQuietExec64"
+      Execute="deferred" Impersonate="yes" Return="ignore" />
+
+    <!-- Remove the task on a real uninstall (NOT during the remove-half of an
+         upgrade — UPGRADINGPRODUCTCODE is set then, and the new install
+         re-creates it anyway). -->
+    <CustomAction Id="SetRemoveTask" Property="RemoveTask"
+      Value="&quot;[System64Folder]schtasks.exe&quot; /Delete /TN &quot;hls-livecam-win&quot; /F" />
+    <CustomAction Id="RemoveTask" BinaryKey="WixCA" DllEntry="CAQuietExec64"
+      Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- Opt-in purge of the operator's config dir. Impersonated so
+         [AppDataFolder] is the operator's Roaming AppData, not SYSTEM's.
+         Only on a genuine uninstall with PURGECONFIG=1. -->
+    <CustomAction Id="SetPurgeConfig" Property="PurgeConfig"
+      Value="&quot;[System64Folder]cmd.exe&quot; /c rmdir /S /Q &quot;[AppDataFolder]hls-livecam-win&quot;" />
+    <CustomAction Id="PurgeConfig" BinaryKey="WixCA" DllEntry="CAQuietExec"
+      Execute="deferred" Impersonate="yes" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- stop a running instance early in the elevated script, before the
+           upgrade removes old files and before new files are laid down -->
+      <Custom Action="SetStopApp" After="InstallInitialize" />
+      <Custom Action="StopApp" After="SetStopApp" />
+
+      <!-- create task after files are in place, on install/upgrade -->
+      <Custom Action="SetCreateTask" After="InstallFiles">NOT REMOVE</Custom>
+      <Custom Action="CreateTask" After="SetCreateTask">NOT REMOVE</Custom>
+
+      <!-- remove task only on a true uninstall -->
+      <Custom Action="SetRemoveTask" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="RemoveTask" After="SetRemoveTask">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+
+      <!-- purge config only when explicitly requested on a true uninstall -->
+      <Custom Action="SetPurgeConfig" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND PURGECONFIG="1"</Custom>
+      <Custom Action="PurgeConfig" After="SetPurgeConfig">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND PURGECONFIG="1"</Custom>
+    </InstallExecuteSequence>
+
+  </Product>
+</Wix>
