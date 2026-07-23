@@ -471,10 +471,21 @@ async fn http_get_local(path: &str) -> Option<String> {
 /// ambiguity about which one to match -- only the input side differs
 /// (dshow direct capture here vs. a v4l2 loopback relay there), which
 /// doesn't touch what ends up in the HLS segments.
+/// The rate every capture source publishes to mediamtx at (Show, Blur, B&W
+/// all normalise to this in their `-vf` chain). This is the SINGLE SOURCE
+/// OF TRUTH for the stream's frame rate: the preview tap derives its own
+/// rate from it (video_preview::PREVIEW_DECIMATION) instead of hardcoding a
+/// second number, so the two cannot drift into a non-integer ratio. That
+/// ratio is exactly what bit us -- a 15->8 tap made ffmpeg's fps filter
+/// decimate unevenly (a 2,2,2,...,1 source-frame cadence, one 1-frame hitch
+/// per second: the "rhythmic freeze"). Change this alone and the tap stays
+/// even by construction.
+pub const CAPTURE_FPS: u32 = 15;
+
 fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
     // Show: the real camera, unaltered beyond the fps/pixfmt normalisation
     // every source shares.
-    dshow_capture(ffmpeg, device_name, "fps=15,format=yuv420p")
+    dshow_capture(ffmpeg, device_name, &format!("fps={CAPTURE_FPS},format=yuv420p"))
 }
 
 /// Blur/"cloak" (run 6): the SAME real dshow capture as Show, but with an
@@ -492,11 +503,11 @@ fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
 /// (full desaturation) before the pixfmt convert.
 fn cloak_command(ffmpeg: &PathBuf, device_name: &str, bw: bool) -> Command {
     let vf = if bw {
-        "fps=15,boxblur=20:2,hue=s=0,format=yuv420p"
+        format!("fps={CAPTURE_FPS},boxblur=20:2,hue=s=0,format=yuv420p")
     } else {
-        "fps=15,boxblur=20:2,format=yuv420p"
+        format!("fps={CAPTURE_FPS},boxblur=20:2,format=yuv420p")
     };
-    dshow_capture(ffmpeg, device_name, vf)
+    dshow_capture(ffmpeg, device_name, &vf)
 }
 
 /// Shared dshow-capture command shape (input side + x264 output side);

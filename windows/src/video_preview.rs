@@ -28,7 +28,26 @@ use tokio::process::{Child, Command};
 
 const PREVIEW_W: usize = 480;
 const PREVIEW_H: usize = 270;
-const PREVIEW_FPS: &str = "8";
+/// Soft ceiling for the preview's delivered rate. The rate is NEVER set as
+/// an independent number -- it is derived from the capture rate as the
+/// highest integer divisor at or below this cap (see PREVIEW_DECIMATION).
+/// At the current 15fps capture this resolves to 15fps (1:1, no
+/// decimation). Measured cost of 15 vs the old 8 is negligible: the RTSP
+/// H.264 decode dominates and is paid regardless of output rate; the extra
+/// 480x270 scale/convert per frame is cheap.
+const PREVIEW_FPS_CAP: u32 = 15;
+/// Source frames consumed per delivered frame, N >= 1: `ceil(capture/cap)`,
+/// the smallest N keeping `capture/N <= cap`. The tap then takes every Nth
+/// source frame -- EVEN decimation, whose content spacing is a constant N
+/// and therefore cannot judder. This replaces a hardcoded 8fps: 15/8 is
+/// non-integer, so ffmpeg's fps filter spaced frames 2,2,2,...,1 with a
+/// once-per-second hitch (the rhythmic freeze). Deriving the rate makes
+/// that mismatch unrepresentable rather than a thing to get right by hand.
+const PREVIEW_DECIMATION: u32 = {
+    let cap = PREVIEW_FPS_CAP;
+    let src = crate::pipeline::CAPTURE_FPS;
+    (src + cap - 1) / cap // ceil(src / cap)
+};
 const FRAME_BYTES: usize = PREVIEW_W * PREVIEW_H * 3;
 const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 
@@ -99,7 +118,9 @@ pub fn spawn(
                 "-vf",
                 &format!("scale={PREVIEW_W}:{PREVIEW_H}"),
                 "-r",
-                PREVIEW_FPS,
+                // Exact rational (e.g. "15/1"), not a rounded decimal, so
+                // the decimation stays exactly every-Nth-frame.
+                &format!("{}/{}", crate::pipeline::CAPTURE_FPS, PREVIEW_DECIMATION),
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
@@ -155,4 +176,27 @@ pub fn spawn(
     });
 
     (slot, ctl)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of deriving the rate: it is always an even divisor of
+    /// the capture rate, as close to the cap as possible without exceeding
+    /// it. If someone changes CAPTURE_FPS or the cap, this guards the
+    /// even-decimation invariant instead of leaving it to manual vigilance.
+    #[test]
+    fn preview_rate_is_even_divisor_at_or_below_cap() {
+        let src = crate::pipeline::CAPTURE_FPS;
+        let n = PREVIEW_DECIMATION;
+        assert!(n >= 1, "decimation must consume >= 1 source frame");
+        // delivered rate = src/n must not exceed the cap
+        assert!(src <= PREVIEW_FPS_CAP * n, "preview rate src/{n} exceeds cap");
+        // ...and n is the SMALLEST such value (n-1 would exceed the cap),
+        // i.e. we deliver as close to the cap as an even divisor allows.
+        if n > 1 {
+            assert!(src > PREVIEW_FPS_CAP * (n - 1), "n is not minimal");
+        }
+    }
 }
