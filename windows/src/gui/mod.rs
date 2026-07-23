@@ -12,7 +12,7 @@ mod components;
 mod fonts;
 mod theme;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -55,9 +55,14 @@ const SWITCH_GAP: Duration = Duration::from_millis(700);
 /// error state. The animation must never spin forever. The web viewer's
 /// cover is ~16s; this gives margin over a worst-case pipeline flush.
 const TRANSITION_CAP: Duration = Duration::from_secs(22);
-/// Repaint cadence while the static animation is running -- ~30fps for
-/// smooth crawling noise, only during the (few-second) transition.
-const TRANSITION_FPS_INTERVAL: Duration = Duration::from_millis(33);
+/// Repaint cadence while the static animation is running. Each repaint is
+/// a full-window egui re-render, so this is the dominant cost of the snow
+/// -- at 30fps it measured ~12-21% CPU, enough to contend with the capture
+/// ffmpeg (and a remote-desktop re-encode of the ever-changing snow) and
+/// snag the feed on a switch (operator). 15fps still reads as live snow at
+/// roughly half the cost. draw_switching self-schedules this whenever the
+/// static is on screen (transition OR feed-off standby).
+const STATIC_FPS_INTERVAL: Duration = Duration::from_millis(66);
 
 pub struct App {
     state: Arc<AppState>,
@@ -107,6 +112,14 @@ pub struct App {
 
     start: Instant,
     tray: Option<Tray>,
+    /// True while the window is minimized to the tray. Shared with the
+    /// tray thread (which clears it on Show). Minimizing (not hiding) is
+    /// what actually parks the loop at ~0% -- winit stops delivering
+    /// redraws to an iconic window (measured 0.4% minimized vs 95% for a
+    /// Visible(false)-hidden window, which eframe/glow busy-loops). This
+    /// flag is a cheap belt-and-suspenders gate on update() in case a
+    /// stray repaint slips through while minimized.
+    window_hidden: Arc<AtomicBool>,
 }
 
 /// One in-progress feed switch. Two-phase (see SWITCH_GAP): first we wait
@@ -221,6 +234,7 @@ impl App {
         video_frame: SharedFrame,
         video_preview: video_preview::PreviewCtl,
         tray: Option<Tray>,
+        window_hidden: Arc<AtomicBool>,
     ) -> Self {
         BOOT.store(1, Ordering::Relaxed);
         let mut metrics = Metrics::new();
@@ -263,6 +277,7 @@ impl App {
             ip_form: IpForm::default(),
             start: Instant::now(),
             tray,
+            window_hidden,
         }
     }
 
@@ -349,10 +364,8 @@ impl App {
                 }
             }
         }
-
-        if self.feed_transition.is_some() {
-            ctx.request_repaint_after(TRANSITION_FPS_INTERVAL);
-        }
+        // The static's repaint cadence is self-scheduled by draw_switching
+        // (it also covers the feed-off standby case), so nothing to do here.
     }
 
     fn update_video_texture(&mut self, ctx: &egui::Context) {
@@ -379,6 +392,20 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Minimized to the tray: winit already parks the loop (an iconic
+        // window gets no redraws -- measured 0.4% CPU), so update() normally
+        // isn't even called here. This gate is defensive: if a stray repaint
+        // does land while minimized, skip all render work and throttle rather
+        // than spin. (An earlier design HID the window with Visible(false)
+        // instead of minimizing; eframe/glow busy-looped that invisible
+        // surface at ~95% CPU regardless of the repaint schedule, starving
+        // the capture -- minimizing is what fixed it.) The tray menu runs on
+        // its own thread, so nothing interactive is lost here.
+        if self.window_hidden.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(100));
+            return;
+        }
+
         if self.last_metrics.elapsed() >= METRICS_REFRESH {
             self.snapshot = self.metrics.refresh();
             self.last_metrics = Instant::now();
@@ -400,7 +427,15 @@ impl eframe::App for App {
         // be unclosable except via Task Manager.
         if ctx.input(|i| i.viewport().close_requested()) && self.tray.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            // OS-minimize, NOT Visible(false)/hide. A hidden eframe window
+            // busy-loops its GL present at ~95% CPU (eframe skips update()
+            // for it but keeps spinning -- measured, single thread pegged);
+            // a MINIMIZED window is parked by winit and drops to ~0%. Trade:
+            // the window stays as a taskbar button rather than vanishing to
+            // tray-only, but it's out of the way, the server keeps running,
+            // and tray Show / the taskbar button both restore it.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            self.window_hidden.store(true, Ordering::Relaxed);
         }
 
         apply_theme(ctx);
@@ -441,7 +476,20 @@ impl eframe::App for App {
             self.draw_ip_manager(ctx);
         }
 
-        ctx.request_repaint_after(REPAINT_INTERVAL);
+        // Repaint cadence (we only reach here while visible -- hidden
+        // early-returns above). Repaint fast (STATIC_FPS_INTERVAL, 15fps)
+        // whenever there's motion to show: the static animation
+        // (switching/standby) OR live video -- the preview was jerky at the
+        // old 6.7fps idle cadence (an 8fps source shown at 6.7fps). NO
+        // SIGNAL / idle stays slow.
+        let showing_motion =
+            self.feed_transition.is_some() || !pstatus.enabled || !self.feed_offline(&pstatus);
+        let interval = if showing_motion {
+            STATIC_FPS_INTERVAL
+        } else {
+            REPAINT_INTERVAL
+        };
+        ctx.request_repaint_after(interval);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

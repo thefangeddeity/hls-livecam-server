@@ -112,10 +112,19 @@ impl App {
     // Transition wins over feed_offline: during a switch the frames ARE
     // stale, but that's expected cover, not failure.
     pub(super) fn draw_feed(&mut self, ui: &mut egui::Ui, p: &PipelineStatus) {
+        // 1. Switching -> static "SWITCHING" (covers the pipeline flush).
         if self.feed_transition.is_some() {
-            self.draw_switching(ui);
+            self.draw_switching(ui, "SWITCHING");
             return;
         }
+        // 2. Server deliberately off -> static "STANDBY" holds the frame
+        //    instead of a bare NO SIGNAL (operator request): the feed is
+        //    off on purpose, not failed.
+        if !p.enabled {
+            self.draw_switching(ui, "STANDBY");
+            return;
+        }
+        // 3. Genuine failure (server on, no fresh frame) -> the real error.
         if self.feed_offline(p) {
             components::placeholder(ui, "NO SIGNAL");
             return;
@@ -139,17 +148,24 @@ impl App {
         }
     }
 
-    /// The TRANSITIONING animation: black-and-white analog VHS snow with
-    /// scanlines and a slow rolling tracking band, plus a small mono
-    /// "SWITCHING" label. B&W only (retro surveillance, not broken-TV).
+    /// Black-and-white analog VHS snow with scanlines and a slow rolling
+    /// tracking band, plus a small mono `label` (e.g. "SWITCHING" during a
+    /// feed switch, "STANDBY" when the server is off). B&W only (retro
+    /// surveillance, not broken-TV).
     ///
     /// Cheap by construction: a small grey noise field (NOISE_W x NOISE_H)
-    /// is regenerated each frame from a persistent xorshift RNG (so it
-    /// crawls) and uploaded to ONE reused texture, then scaled up to fill
-    /// the feed with NEAREST sampling for crisp snow -- no full-res
-    /// per-pixel loop, no per-frame allocation beyond the small field. The
-    /// ~30fps repaint is requested (mod.rs) only while transitioning.
-    fn draw_switching(&mut self, ui: &mut egui::Ui) {
+    /// regenerated each frame from a persistent xorshift RNG (so it crawls)
+    /// into ONE reused texture, scaled up NEAREST -- no full-res per-pixel
+    /// loop. The dominant cost is the repaint itself (a full-window
+    /// re-render), so it self-schedules at STATIC_FPS_INTERVAL (15fps) only
+    /// while it's actually on screen, and stops the moment live video or
+    /// NO SIGNAL takes over.
+    fn draw_switching(&mut self, ui: &mut egui::Ui, label: &str) {
+        // The repaint cadence (and the hidden-window gate that stops this
+        // busy-looping at ~97% CPU when minimized) is centralized in
+        // update() -- see there. Field size barely affects cost (the
+        // repaint dominates, not the noise gen), so keep it fine enough for
+        // crisp snow rather than blocky. 15fps is the real cost lever.
         const NOISE_W: usize = 224;
         const NOISE_H: usize = 126;
         self.noise_frame = self.noise_frame.wrapping_add(1);
@@ -193,13 +209,13 @@ impl App {
             );
         }
 
-        // Label: a pulsing dot + "SWITCHING" in mono, over a subtle dark
-        // plate for legibility against the snow. Small, lower-center.
+        // Label: a pulsing dot + `label` in mono, over a subtle dark plate
+        // for legibility against the snow. Small, lower-center.
         let t = self.start.elapsed().as_secs_f32();
         let pulse = 0.55 + 0.45 * (t * 3.0).sin();
         let center = egui::pos2(rect.center().x, rect.bottom() - 34.0);
         let font = egui::FontId::monospace(13.0);
-        let text = "SWITCHING";
+        let text = label;
         let galley = painter.layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE);
         let dot_r = 4.0;
         let gap = 8.0;

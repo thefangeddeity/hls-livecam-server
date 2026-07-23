@@ -179,15 +179,24 @@ fn main() {
             // Built here, not earlier in main(): Windows tray APIs are
             // thread-affine like window handles, so this has to happen on
             // the thread eframe's event loop actually runs on.
+            // Shared window-hidden flag: the close-intercept sets it, the
+            // tray Show clears it, and the GUI reads it to stop requesting
+            // repaints while minimized (else an animation busy-loops the
+            // hidden window at ~97% CPU).
+            let window_hidden = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let tray = tray::build();
             match &tray {
                 Some(t) => {
                     // Off-thread tray menu handling (run 8): Show/Quit work
                     // even while the window is hidden, when the GUI loop
-                    // isn't repainting. Quit reaps every child and hard-exits.
+                    // isn't repainting. Quit reaps every child and hard-exits;
+                    // Show un-hides the window via its raw HWND.
+                    let hwnd = window_hwnd(cc);
                     tray::spawn_menu_handler(
                         t,
                         cc.egui_ctx.clone(),
+                        hwnd,
+                        window_hidden.clone(),
                         pipeline.clone(),
                         preview_ctl.clone(),
                         rt_handle.clone(),
@@ -204,6 +213,7 @@ fn main() {
                 video_frame,
                 preview_ctl,
                 tray,
+                window_hidden,
             )))
         }),
     );
@@ -212,6 +222,24 @@ fn main() {
         launch_log(&format!("fatal: GUI failed: {e}"));
         std::process::exit(1);
     }
+}
+
+/// The raw Win32 HWND of the eframe window, for the off-thread tray "Show"
+/// (which un-hides it at the OS level). 0 if unavailable.
+#[cfg(windows)]
+fn window_hwnd(cc: &eframe::CreationContext<'_>) -> isize {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    if let Ok(h) = cc.window_handle() {
+        if let RawWindowHandle::Win32(w) = h.as_raw() {
+            return w.hwnd.get();
+        }
+    }
+    0
+}
+
+#[cfg(not(windows))]
+fn window_hwnd(_cc: &eframe::CreationContext<'_>) -> isize {
+    0
 }
 
 /// Set the window's ICON_BIG (taskbar) and ICON_SMALL (title bar) from the
