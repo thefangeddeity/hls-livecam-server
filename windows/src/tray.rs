@@ -39,9 +39,23 @@ pub fn build() -> Option<Tray> {
     })
 }
 
-/// A tiny solid green square -- matches the app's palette, no asset file
-/// needed for a v1 tray glyph.
+/// The app's own mark (two cats in a moonlit circle), cropped tight to the
+/// glyph and pre-scaled to 32px for the notification area -- generated from
+/// assets/icon-256.png into assets/tray-icon-32.png. Decoded via the same
+/// PNG path main.rs uses for the window icon, so no new dependency. Falls
+/// back to a solid green square if decode ever fails, so the tray still
+/// appears rather than the app refusing to build a tray at all.
 fn app_icon() -> tray_icon::Icon {
+    const TRAY_PNG: &[u8] = include_bytes!("../assets/tray-icon-32.png");
+    match eframe::icon_data::from_png_bytes(TRAY_PNG) {
+        Ok(icon) => tray_icon::Icon::from_rgba(icon.rgba, icon.width, icon.height)
+            .unwrap_or_else(|_| fallback_icon()),
+        Err(_) => fallback_icon(),
+    }
+}
+
+/// Last-resort tray glyph if the PNG can't be decoded: a solid green square.
+fn fallback_icon() -> tray_icon::Icon {
     const SIZE: u32 = 32;
     let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
     for px in rgba.chunks_exact_mut(4) {
@@ -135,4 +149,22 @@ fn show_window(ctx: &eframe::egui::Context, _hwnd: isize) {
     ctx.send_viewport_cmd(ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(ViewportCommand::Focus);
     ctx.request_repaint();
+}
+
+#[cfg(test)]
+mod tests {
+    /// Guards that the embedded tray asset actually decodes to a valid 32px
+    /// RGBA icon -- i.e. app_icon() uses the real mark, not the green
+    /// fallback. Catches a corrupt/replaced/mis-sized asset at build time
+    /// rather than shipping a silently-wrong tray glyph.
+    #[test]
+    fn tray_asset_decodes_to_32px_rgba() {
+        const TRAY_PNG: &[u8] = include_bytes!("../assets/tray-icon-32.png");
+        let icon = eframe::icon_data::from_png_bytes(TRAY_PNG).expect("tray png decodes");
+        assert_eq!((icon.width, icon.height), (32, 32), "tray icon must be 32x32");
+        assert_eq!(icon.rgba.len(), 32 * 32 * 4, "expected RGBA8 buffer");
+        // from_rgba is what the tray builder calls -- prove it accepts it.
+        tray_icon::Icon::from_rgba(icon.rgba, icon.width, icon.height)
+            .expect("tray_icon accepts the decoded buffer");
+    }
 }
