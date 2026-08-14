@@ -27,6 +27,12 @@ FRAME_H         = 720
 FRAME_BYTES     = FRAME_W * FRAME_H * 3
 _cam_proc = None
 _pub_proc = None
+# Set the instant SIGTERM arrives. Both supervisor loops respawn any child
+# they find dead, so without this they immediately undo _shutdown()'s work:
+# the replacement ffmpeg then outlives the interpreter, the unit's cgroup
+# never empties, and systemd waits out its full stop timeout before SIGKILL
+# -- leaving the unit 'failed' and an ffmpeg still holding the camera.
+_shutting_down = threading.Event()
 GOL_COLS        = 80
 
 def _read_device_env():
@@ -107,7 +113,7 @@ def _start_cam_reader(denv):
 
 def _drain_loop(cam_holder, denv):
     global _cam_frame, _cam_proc
-    while True:
+    while not _shutting_down.is_set():
         try:
             raw = cam_holder[0].stdout.read(FRAME_BYTES)
             if len(raw) == FRAME_BYTES:
@@ -115,10 +121,14 @@ def _drain_loop(cam_holder, denv):
                     _cam_frame = raw
             else:
                 time.sleep(2.0)
+                if _shutting_down.is_set():
+                    return
                 cam_holder[0].terminate()
                 cam_holder[0] = _start_cam_reader(denv)
                 _cam_proc = cam_holder[0]
         except Exception:
+            if _shutting_down.is_set():
+                return
             time.sleep(1.0)
 
 def _writer_loop():
@@ -144,11 +154,13 @@ def _writer_loop():
     time.sleep(1.0)
 
     prev_mode = None
-    while True:
+    while not _shutting_down.is_set():
         with _mode_lock:
             mode = _mode
 
         if pub_holder[0].poll() is not None:
+            if _shutting_down.is_set():
+                return
             pub_holder[0] = _start_loopback_publisher(denv)
             _pub_proc = pub_holder[0]
             time.sleep(0.5)
@@ -276,12 +288,41 @@ def info():
     return {'hostname': hostname, 'tailscale': tailscale}
 
 def _shutdown(signum, frame):
-    for p in (_pub_proc, _cam_proc):
-        if p:
-            try: p.terminate()
-            except Exception: pass
-    sys.exit(0)
+    """Stop cleanly: no respawns, no surviving children, prompt exit.
+
+    Reaping matters beyond tidiness -- a leaked ffmpeg keeps the v4l2 camera
+    and the loopback device open, so the next start finds the device busy.
+    """
+    _shutting_down.set()
+
+    procs = [p for p in (_pub_proc, _cam_proc) if p is not None]
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+    # Give them a moment to go on SIGTERM, then insist. Bounded well inside
+    # systemd's stop timeout so the unit stops cleanly rather than being
+    # killed and marked failed.
+    deadline = time.time() + 5.0
+    for p in procs:
+        try:
+            p.wait(timeout=max(0.0, deadline - time.time()))
+        except Exception:
+            try:
+                p.kill()
+                p.wait(timeout=2.0)
+            except Exception:
+                pass
+
+    # os._exit rather than sys.exit: this runs on the main thread while it is
+    # inside the WSGI server's accept loop, and SystemExit raised there is not
+    # reliably propagated. The children are already reaped above, so there is
+    # nothing left to unwind.
+    os._exit(0)
 
 if __name__ == '__main__':
     signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     app.run(host='127.0.0.1', port=5000)

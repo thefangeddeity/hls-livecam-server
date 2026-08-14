@@ -120,6 +120,7 @@ def proc(name):
 # ---------- SYSTEM STATUS ----------
 def system_status(hls, ff, mm):
     if hls == "LIVE":    return "LIVE"
+    if hls == "STALE":   return "DEGRADED"
     if hls == "ERROR":   return "ERROR"
     if ff or mm:         return "DEGRADED"
     return "DOWN"
@@ -152,22 +153,93 @@ def usb_power_state():
     return "UNKNOWN"
 
 # ---------- HLS WORKER ----------
+# A frozen stream still answers 200. The master playlist is static -- it
+# names the variant and nothing else -- so fetching it proves the HTTP
+# server is up, not that video is still being produced. Checking only that
+# was enough to report LIVE while the pipeline had stopped cold.
+#
+# The variant playlist does carry liveness: EXT-X-MEDIA-SEQUENCE increments
+# as segments roll. Watch that instead, and only call it LIVE when it moves.
+# Sized off the stream's own segment length rather than a fixed count. This
+# runs on old and repurposed hardware where segment production legitimately
+# lags under load, and a threshold tuned to a fast machine would report a
+# healthy-but-slow stream as stalled. Wait for several segments' worth of
+# silence, with a floor so a short target duration cannot make it hair
+# trigger.
+HLS_POLL_SECONDS = 5
+HLS_STALL_SEGMENTS = 6      # segments' worth of silence before calling it
+HLS_STALL_FLOOR_S = 20      # ...and never less than this many seconds
+
+def _stall_polls(target_duration):
+    """How many consecutive quiet polls count as a stall, for this stream."""
+    seconds = max(HLS_STALL_FLOOR_S, HLS_STALL_SEGMENTS * max(target_duration, 1))
+    return max(2, int(round(seconds / HLS_POLL_SECONDS)))
+
+def _hls_media_sequence():
+    """(sequence, segment_count, target_duration) from the variant, or None."""
+    base = "http://127.0.0.1:8888/cam/"
+    with urllib.request.urlopen(base + "index.m3u8", timeout=2) as r:
+        if r.status != 200:
+            return None
+        master = r.read().decode("utf-8", "replace")
+    variant = None
+    for line in master.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            variant = line
+            break
+    if not variant:
+        return None
+    with urllib.request.urlopen(base + variant, timeout=2) as r:
+        if r.status != 200:
+            return None
+        body = r.read().decode("utf-8", "replace")
+    seq = 0
+    m = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", body)
+    if m:
+        seq = int(m.group(1))
+    segs = len([l for l in body.splitlines()
+                if l.strip() and not l.startswith("#")])
+    target = 0
+    m = re.search(r"#EXT-X-TARGETDURATION:(\d+)", body)
+    if m:
+        target = int(m.group(1))
+    return seq, segs, target
+
 def hls_worker():
     global hls_state
+    last_seq = None
+    stalled_for = 0
     while True:
         state = "DOWN"
         try:
-            with urllib.request.urlopen(
-                "http://127.0.0.1:8888/cam/index.m3u8", timeout=2
-            ) as r:
-                state = "LIVE" if r.status == 200 else "ERROR"
+            res = _hls_media_sequence()
+            if res is None:
+                state = "ERROR"
+                last_seq = None
+                stalled_for = 0
+            else:
+                seq, segs, target = res
+                if last_seq is not None and seq == last_seq:
+                    stalled_for += 1
+                else:
+                    stalled_for = 0
+                last_seq = seq
+                # Serving, but no new segment for several segments' worth of
+                # time: the endpoint is answering while the pipeline behind
+                # it has stopped.
+                state = "STALE" if stalled_for >= _stall_polls(target) else "LIVE"
         except urllib.error.URLError:
             state = "DOWN"
+            last_seq = None
+            stalled_for = 0
         except Exception:
             state = "ERROR"
+            last_seq = None
+            stalled_for = 0
         with hls_lock:
             hls_state = state
-        time.sleep(5)
+        time.sleep(HLS_POLL_SECONDS)
 
 def get_hls():
     with hls_lock:
@@ -629,7 +701,7 @@ def status_attr(status, dim=False):
         return curses.A_DIM
     if status in ("LIVE", "OK"):
         return curses.color_pair(1) | curses.A_BOLD
-    if status in ("DEGRADED", "RUNNING", "SHARED"):
+    if status in ("DEGRADED", "RUNNING", "SHARED", "STALE"):
         return curses.color_pair(2) | curses.A_BOLD
     if status in ("ERROR", "DOWN", "FAIL"):
         return curses.color_pair(3) | curses.A_BOLD
