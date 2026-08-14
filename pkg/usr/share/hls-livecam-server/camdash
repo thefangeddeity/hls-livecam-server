@@ -475,6 +475,67 @@ def run_service_onoff():
         except Exception:
             pass
 
+# ---------- GUI SUPPORT (additive; run-5 Linux GUI port) ----------
+# Bridges camdash's Linux-native API to what gui/probes.py and gui/app.py
+# expect, written against macOS camdash's shape (API_BASE, RTSP_PORT,
+# HLS_PORT, API_PORT constants; a unified _livecam() action dispatcher;
+# camera_present_cached(); _cpu_temp()). None of this existed here before --
+# verified, not assumed, per run-5's own instruction to check rather than
+# take the port for granted. Purely additive: nothing above is touched, and
+# the curses UI does not reference any of this.
+API_BASE  = "http://127.0.0.1:5000"
+RTSP_PORT = 8554
+HLS_PORT  = 8888
+API_PORT  = 5000
+
+_cam_present_cache = [None, 0.0]
+
+def camera_present_cached():
+    """Device-path presence, cached 60s. Cheap stat, but called every
+    SlowWorker tick -- same caching shape as local_ip()/disk_model() on the
+    macOS side."""
+    now = time.time()
+    if _cam_present_cache[0] is None or now - _cam_present_cache[1] > 60:
+        dev = read_device_env().get("VIDEO_DEVICE", "")
+        _cam_present_cache[0] = bool(dev and os.path.exists(dev))
+        _cam_present_cache[1] = now
+    return _cam_present_cache[0]
+
+def _cpu_temp():
+    """Package temperature via the x86_pkg_temp thermal zone. Returns "?" if
+    that zone isn't present rather than guessing at a different one -- same
+    honesty rule the macOS side uses for its own no-SMC-access case."""
+    try:
+        for zone in sorted(os.listdir("/sys/class/thermal")):
+            if not zone.startswith("thermal_zone"):
+                continue
+            base = f"/sys/class/thermal/{zone}"
+            with open(f"{base}/type") as f:
+                if f.read().strip() != "x86_pkg_temp":
+                    continue
+            with open(f"{base}/temp") as f:
+                return round(int(f.read().strip()) / 1000, 1)
+    except Exception:
+        pass
+    return "?"
+
+def _livecam(action):
+    """Dispatch macOS-shaped action names to Linux camdash's own, separately
+    named functions. run_service_toggle()/run_service_onoff() are already
+    self-toggling (they read current state and flip it), so "start"/"stop"
+    both route to the pause toggle and "enable"/"disable" both route to the
+    persistent on/off toggle -- the caller already computed the right verb
+    from the same state this function will re-check."""
+    if action == "repair":
+        run_repair()
+    elif action == "dark":
+        run_dark_toggle()
+    elif action in ("start", "stop"):
+        run_service_toggle()
+    elif action in ("enable", "disable"):
+        run_service_onoff()
+    return None
+
 # ---------- UI HELPERS ----------
 def safe(scr, y, x, s, a=0):
     try:
