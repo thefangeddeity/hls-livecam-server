@@ -21,7 +21,6 @@
     --success: #30d158;
     --warn: #ff9f0a;
     --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.6);
-    --term-green: #3a9e5a;
     --radius: 12px;
     --radius-sm: 8px;
   }
@@ -186,16 +185,40 @@
     z-index: 20;
   }
   .switch-overlay.visible { display: flex; }
-  .switch-count {
-    font-size: 48px; font-weight: 700;
-    color: rgba(255,255,255,0.5);
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
+  /* The static fills the frame; image-rendering keeps the upscale crisp
+     rather than smoothing the snow into grey mush. */
+  .switch-static {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    image-rendering: pixelated;
   }
   .switch-label {
+    position: relative;
     font-size: 13px;
-    color: rgba(255,255,255,0.3);
+    color: rgba(255,255,255,0.75);
     letter-spacing: 0.04em;
+    background: rgba(0,0,0,0.45);
+    padding: 4px 10px;
+    border-radius: 4px;
+  }
+  .hide-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 6px;
+    pointer-events: none;
+    z-index: 15;
+  }
+  .hide-overlay.visible { display: flex; }
+  .hide-title {
+    font-size: 15px; font-weight: 600;
+    color: rgba(255,255,255,0.55);
+    letter-spacing: 0.04em;
+  }
+  .hide-sub {
+    font-size: 12px;
+    color: rgba(255,255,255,0.3);
   }
   .error-overlay {
     position: absolute; inset: 0;
@@ -364,6 +387,9 @@
   }
   .video-wrap:hover .fs-btn { opacity: 1; }
   @media (max-width: 720px) { .fs-btn { opacity: 0.7; } }
+  .reload-btn { right: 64px; }
+  .reload-btn.spinning svg { animation: spin 0.6s linear; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
   /* ── MOBILE ── */
   @media (max-width: 720px) {
@@ -385,6 +411,22 @@
     .msg-box-wrap { flex: none; }
     .message-section { flex: none; }
   }
+
+  /* ── Light theme (design system v1 §3b) ──────────────────────────────────
+     Surface anchors are Apple's light-mode system greys rather than a
+     per-channel invert of the dark ramp; a blind invert reads bluish, not
+     neutral. Status hues (accent/danger/success/warn) are held unchanged. */
+  html[data-theme="light"] {
+    --bg: #f2f2f7;
+    --panel: #ffffff;
+    --panel-2: #e9e9ee;
+    --border: #d1d1d6;
+    --border-strong: #c7c7cc;
+    --text: #1c1c1e;
+    --text-dim: #6e6e73;
+    --text-muted: #8e8e93;
+    --shadow: 0 1px 3px rgba(0,0,0,0.10), 0 4px 14px rgba(0,0,0,0.10);
+  }
 </style>
 </head>
 <body>
@@ -393,7 +435,7 @@
   <div class="brand">
     <span>HLS Livecam</span>
     <span class="sep">//</span>
-    <span id="hostName" style="color:var(--term-green);font-weight:500;"></span>
+    <span id="hostName" style="color:var(--success);font-weight:500;"></span>
   </div>
   <div class="status-bar">
     <span class="live-pill" id="liveIndicator">CONNECTING</span>
@@ -412,9 +454,18 @@
         <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
       </svg>
     </button>
+    <button class="fs-btn reload-btn" id="reloadBtn" onclick="manualReload()" title="Reload feed">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M14 8A6 6 0 1 1 12.5 4.5M14 2v4h-4" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
     <div class="switch-overlay" id="switchOverlay">
-      <div class="switch-count" id="switchCount"></div>
+      <canvas class="switch-static" id="switchStatic"></canvas>
       <div class="switch-label">Switching feed…</div>
+    </div>
+    <div class="hide-overlay" id="hideOverlay">
+      <div class="hide-title">No signal</div>
+      <div class="hide-sub">The camera is switched off</div>
     </div>
     <div class="error-overlay" id="errorOverlay">
       <div class="title">Signal lost</div>
@@ -453,6 +504,9 @@
           <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
           <label class="mute-label">
             <input type="checkbox" id="bwCheck" onchange="toggleBW()"> B&W Blur
+          </label>
+          <label class="mute-label">
+            <input type="checkbox" id="themeCheck" onchange="toggleTheme()"> Light theme
           </label>
           <label class="mute-label">
             <input type="checkbox" id="lockCheck" onchange="toggleLock()"> Lock message
@@ -642,6 +696,21 @@
     updateMuteBtn();
   }
 
+  // ── THEME — per-browser, not per-device state on the server ──
+  var lightTheme = localStorage.getItem('lightTheme') === 'true';
+  function applyTheme() {
+    if (lightTheme) document.documentElement.setAttribute('data-theme', 'light');
+    else document.documentElement.removeAttribute('data-theme');
+    var cb = document.getElementById('themeCheck');
+    if (cb) cb.checked = lightTheme;
+  }
+  function toggleTheme() {
+    lightTheme = !lightTheme;
+    localStorage.setItem('lightTheme', lightTheme);
+    applyTheme();
+  }
+  applyTheme();
+
   function sendBuzz() {
     buzzBtn.disabled = true;
     fetch('/api/buzz', { method: 'POST' })
@@ -670,32 +739,92 @@
 
 
   var switchOverlay = document.getElementById('switchOverlay');
-  var switchCount   = document.getElementById('switchCount');
-  var countInterval = null;
+  var switchStatic  = document.getElementById('switchStatic');
+  var staticTimer   = null;
+  var staticFrameN  = 0;
+
+  // Analog VHS snow, ported from the Windows node's draw_switching()
+  // (windows/src/gui/panels.rs): a small grey noise field regenerated each
+  // frame, every other row dimmed for scanlines, and a dark tracking band
+  // rolling slowly up the frame, scaled up with smoothing off.
+  //
+  // Windows covers a feed switch with this rather than a countdown -- there
+  // is no timer to read, so nothing has to predict how long the switch takes.
+  var NOISE_W = 224, NOISE_H = 126;
+
+  function drawStatic() {
+    var ctx = switchStatic.getContext('2d');
+    if (switchStatic.width !== NOISE_W) {
+      switchStatic.width = NOISE_W; switchStatic.height = NOISE_H;
+    }
+    var img = ctx.createImageData(NOISE_W, NOISE_H);
+    var d = img.data;
+    staticFrameN++;
+    var bandPos = Math.floor(staticFrameN / 2) % NOISE_H;
+    var i = 0;
+    for (var y = 0; y < NOISE_H; y++) {
+      var scan = (y % 2 === 0) ? 1.0 : 0.72;
+      var band = Math.abs(y - bandPos) < 3 ? 0.35 : 1.0;
+      var mul = scan * band;
+      for (var x = 0; x < NOISE_W; x++) {
+        var v = (Math.random() * 256 * mul) | 0;
+        d[i++] = v; d[i++] = v; d[i++] = v; d[i++] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function startStatic() {
+    if (staticTimer) return;
+    drawStatic();
+    staticTimer = setInterval(drawStatic, 1000 / 15);   // 15fps, as on Windows
+  }
+
+  function stopStatic() {
+    if (staticTimer) { clearInterval(staticTimer); staticTimer = null; }
+  }
+
+  // Covers a feed switch with static until the stream is genuinely back,
+  // rather than for a fixed count. The old 16s countdown was chosen when
+  // segments were 4s; it both outlasted the real switch and told every
+  // viewer to stare at a number.
+  var TRANSITION_MAX_MS = 9000;
 
   function fadeOut() {
     video.style.opacity = '0';
     if (fadeInTimer) clearTimeout(fadeInTimer);
-    if (countInterval) clearInterval(countInterval);
-    var secs = 16;
-    switchCount.textContent = secs;
     switchOverlay.classList.add('visible');
-    countInterval = setInterval(function() {
-      secs--;
-      switchCount.textContent = secs > 0 ? secs : '';
-      if (secs <= 0) { clearInterval(countInterval); countInterval = null; }
-    }, 1000);
-    fadeInTimer = setTimeout(function() {
+    startStatic();
+
+    var done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      video.removeEventListener('playing', onPlaying);
+      if (fadeInTimer) { clearTimeout(fadeInTimer); fadeInTimer = null; }
+      stopStatic();
       video.style.opacity = '1';
       switchOverlay.classList.remove('visible');
-      fadeInTimer = null;
-    }, 16000);
+    }
+    // Clear the static when the new stream actually starts, with a bounded
+    // fallback so a switch that never recovers cannot strand the overlay on
+    // screen forever.
+    function onPlaying() { setTimeout(finish, 250); }
+    video.addEventListener('playing', onPlaying);
+    fadeInTimer = setTimeout(finish, TRANSITION_MAX_MS);
   }
+
+  var hideOverlay = document.getElementById('hideOverlay');
 
   function updateFeedButtons() {
     showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
     cloakBtn.className = 'btn' + (feedMode === 'cloak' ? '' : ' primary');
     hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
+    // Hide publishes a black frame, which on its own is indistinguishable
+    // from a dead stream. Say plainly that it is deliberate -- and keep it
+    // distinct from the "Signal lost / Retrying..." error overlay, which
+    // means something is actually wrong.
+    hideOverlay.classList.toggle('visible', feedMode === 'hide');
   }
   // ── FEED MODE — server-side ──
   function setFeedMode(mode) {
@@ -725,7 +854,17 @@
       .then(function(r) { return r.ok ? r.text() : null; })
       .catch(function() { return null; })
       .then(function(m) {
-        if (m && m.trim() !== feedMode) { feedMode = m.trim(); updateFeedButtons(); }
+        if (m && m.trim() !== feedMode) {
+          // A change made by any other operator or viewer. Previously this
+          // only relabelled the buttons, so every viewer except the one who
+          // clicked saw the feed cut over uncovered. Run the same transition
+          // here and the cover becomes universal.
+          feedMode = m.trim();
+          updateFeedButtons();
+          updateBWBtn();
+          fadeOut();
+          setTimeout(reloadStream, 1000);
+        }
       });
   }
   setInterval(pollFeedMode, 3000);
@@ -751,6 +890,12 @@
   }
 
   function showError() {
+    // Hide mode publishes black deliberately. If the stream also drops while
+    // it is on, "Signal lost / Retrying..." contradicts the "camera is
+    // switched off" notice already on screen -- two different explanations
+    // for the same blank frame. The deliberate one wins; the stream recovers
+    // on its own either way.
+    if (feedMode === 'hide') return;
     errorOverlay.classList.add('visible');
     reconnectBtn.hidden = false;
   }
@@ -814,6 +959,37 @@
   }
 
   function reloadStream() { initHLS(); }
+
+  var reloadBtn = document.getElementById('reloadBtn');
+  function manualReload() {
+    reloadBtn.classList.add('spinning');
+    setTimeout(function() { reloadBtn.classList.remove('spinning'); }, 600);
+    reloadStream();
+  }
+
+  // ── APP-SWITCH / BACKGROUND RECOVERY ──
+  // iOS WebKit (Safari, and Firefox-for-iOS, which is WebKit under the hood
+  // per Apple's engine policy) tears down the media decode session when the
+  // tab is backgrounded. On return, hls.js/MediaSource frequently just sits
+  // stalled with no error event -- there's nothing to "recover" from the
+  // player's point of view, so the only reliable fix is a full reconnect.
+  var hiddenAt = null;
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now();
+    } else if (document.visibilityState === 'visible' && hiddenAt !== null) {
+      var awayMs = Date.now() - hiddenAt;
+      hiddenAt = null;
+      // Skip short glances away (notification shade, quick app-switcher
+      // peek) so we don't reconnect a stream that never actually stalled.
+      if (awayMs > 2000) reloadStream();
+    }
+  });
+  // iOS Safari/Firefox sometimes restore the page from bfcache on
+  // app-switch return instead of firing visibilitychange -- catch that too.
+  window.addEventListener('pageshow', function(e) {
+    if (e.persisted) reloadStream();
+  });
 
   function toggleFullscreen() {
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);

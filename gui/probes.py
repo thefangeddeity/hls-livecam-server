@@ -313,7 +313,14 @@ def _top_processes(n):
     rows = []
     for p in psutil.process_iter(["name", "cpu_percent"]):
         try:
-            rows.append((p.info["name"] or "", p.info["cpu_percent"] or 0.0))
+            cpu = p.info["cpu_percent"] or 0.0
+            # Idle processes are dropped rather than listed at 0.0%. The panel
+            # sizes its row count to the available height, so anything not
+            # filtered here pads the list out with dozens of sleeping kernel
+            # threads -- the fixed 24-row version simply never reached them.
+            if cpu <= 0.0:
+                continue
+            rows.append((p.info["name"] or "", cpu))
         except Exception:
             pass
     rows.sort(key=lambda r: r[1], reverse=True)

@@ -766,6 +766,10 @@ class BottomBar(QFrame):
                        f"This persists across reboots."):
             return
         self.win.set_action_busy(True, "Disabling…" if enabled else "Enabling…")
+        # Record the intent before the action runs: the header must read
+        # STOPPED for the whole wind-down, not flip through DEGRADED while
+        # processes are still exiting.
+        self.win.intentional_off = (action == "disable")
         probes.run_async(cd._livecam, action,
                          done=lambda _: self.win.set_action_busy(False))
 
@@ -785,6 +789,7 @@ class BottomBar(QFrame):
                        f"{'Stop' if running else 'Start'} mediamtx and broadcast-api?"):
             return
         self.win.set_action_busy(True, "Stopping…" if running else "Starting…")
+        self.win.intentional_off = (action == "stop")
         probes.run_async(cd._livecam, action,
                          done=lambda _: self.win.set_action_busy(False))
 
@@ -814,6 +819,11 @@ class Dashboard(QWidget):
         # regardless of which panel started it.
         self.action_busy = False
         self.action_label = ""
+        # True once this session deliberately stopped the server, so the
+        # header can tell "operator stopped it" from "it fell over". Seeded
+        # from the units' enabled state so a server left off persistently is
+        # already recognised as intentional on launch, before any action.
+        self.intentional_off = not probes.cd.services_enabled()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(T.GAP_REGION, T.GAP_REGION, T.GAP_REGION, T.GAP_REGION)
@@ -1020,19 +1030,46 @@ class Dashboard(QWidget):
         self.uptime.setText(f"uptime {up // 3600}h {(up % 3600) // 60}m")
 
         svc = snap.get("svc", False)
-        base = cd.system_status(snap.get("hls", "DOWN"), snap.get("ff"), snap.get("mm"))
+        hls = snap.get("hls", "DOWN")
+        base = cd.system_status(hls, snap.get("ff"), snap.get("mm"))
+
+        # A server the operator deliberately stopped is not degraded, and
+        # Repair is not the remedy for it. Two independent signals say the
+        # off-state is intentional:
+        #   - self.intentional_off: this session's own Pause/Stop action.
+        #   - not enabled: the units are disabled, so someone turned the
+        #     server off persistently -- true across restarts of this GUI,
+        #     which the in-session flag alone cannot cover.
+        # Anything else that is down is down unexpectedly, and still reads
+        # DEGRADED/DOWN with the Repair suggestion intact.
+        deliberate = self.intentional_off or not snap.get("enabled", False)
+
+        # hls == "UNKNOWN" is "not polled yet", not "broken": hls_worker
+        # publishes UNKNOWN until its first cycle completes. system_status()
+        # maps it to DEGRADED whenever any ffmpeg/mediamtx process is alive,
+        # so a perfectly healthy stack reads DEGRADED for the first seconds
+        # after launch. Treat it as pending rather than crying wolf.
+        pending = hls == "UNKNOWN" and base == "DEGRADED"
 
         # §2/§6c: the on-air pill is RED and pulsing. Service-up rows stay green.
         if not svc:
-            self.pill.set_state("OFF", "OFF")
+            self.pill.set_state("OFF", "STOPPED" if deliberate else "OFF")
+        elif deliberate and base != "LIVE":
+            # Services winding down after a deliberate stop: processes linger
+            # briefly, so svc can still read True while nothing is serving.
+            self.pill.set_state("OFF", "STOPPED")
         elif base == "LIVE":
             self.pill.set_state("LIVE", "LIVE")
+        elif pending:
+            self.pill.set_state("PENDING", "CHECKING")
         else:
             self.pill.set_state(base)
 
         quals = []
-        if not svc:
-            quals.append("services stopped")
+        if not svc or deliberate:
+            quals.append("stopped by operator" if deliberate else "services stopped")
+        elif pending:
+            quals.append("checking stream")
         elif base in ("DEGRADED", "ERROR", "DOWN"):
             quals.append("suggest repair")
         if snap.get("dark"):
