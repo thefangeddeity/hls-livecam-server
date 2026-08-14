@@ -1,4 +1,22 @@
 # Changelog
+## [5.3.0] - 2026-08-13
+### Added
+- camdash-gui: PySide6 operator dashboard for Linux, ported from the macOS build.
+  Installed alongside camdash — the curses monitor is unchanged and still the
+  headless/SSH surface; the GUI is the desktop one.
+- camdash: additive GUI-support layer (API_BASE/RTSP_PORT/HLS_PORT/API_PORT,
+  `camera_present_cached()`, `_cpu_temp()` via x86_pkg_temp, and a `_livecam()`
+  dispatcher over the existing run_* service functions). The curses UI does not
+  reference any of it.
+- setup (Arch): registers camdash-gui.desktop and prepares the per-user config
+  directory the GUI persists window geometry into, chowned to the invoking user
+  (root-owned would be silently unwritable from the user's session).
+
+### Notes
+- GUI is Arch-only. PySide6 has no Debian bookworm packages (the split pyside6
+  packages start at trixie) and the Debian node is headless, so `gui/` lives at
+  the repo root rather than under `pkg/`, and the .deb payload is unchanged.
+
 ## [3.0.3] - 2026-05-06
 ### Fixed
 - camdash: VIDEO STACK shows N/A for MSSG API, DARK, FPS, REPAIR when server is off ([o] toggle)
