@@ -19,7 +19,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QSettings, Qt, QTimer
 from PySide6.QtGui import QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -889,13 +889,33 @@ class Dashboard(QWidget):
         self.clock.start(1000)
         self._tick_clock()
 
-        self._fit_to_workarea()
+        self._restore_geometry()
 
     # Plank does not reserve space via an EWMH strut, so availableGeometry()
     # accounts for the top panel but not the dock at the bottom -- sizing to
     # it alone puts the window under the dock. Measured on tanzania: the dock
     # occupies the bottom ~72px of usable height at its current icon size.
     DOCK_CLEARANCE = 72
+
+    def _settings(self):
+        return QSettings("hls-livecam", "camdash-gui")
+
+    def _restore_geometry(self):
+        """Reuse the last session's window geometry; fall back to a derived fit.
+
+        Saved geometry is validated against the current screen rather than
+        trusted outright -- a size from a larger display, or a position on a
+        monitor that is no longer attached, would otherwise restore a window
+        that is off-screen or under the dock.
+        """
+        saved = self._settings().value("geometry")
+        if saved is not None and self.restoreGeometry(saved):
+            screen = self.screen() or QGuiApplication.primaryScreen()
+            if screen is not None:
+                area = screen.availableGeometry()
+                if area.contains(self.frameGeometry()):
+                    return
+        self._fit_to_workarea()
 
     def _fit_to_workarea(self):
         """Size and place against the usable work area, not raw screen size.
@@ -1070,6 +1090,7 @@ class Dashboard(QWidget):
         self._apply_video_state()
 
     def closeEvent(self, event):
+        self._settings().setValue("geometry", self.saveGeometry())
         if self.video is not None:
             self.video.stop()
         self.fast.stop()
