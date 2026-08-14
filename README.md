@@ -1,6 +1,6 @@
 # hls-livecam-server
 
-A Debian package that turns a USB webcam into a live HLS stream with a browser-based family presence system — message board, dark mode cloak, buzz notifications, and a terminal monitor.
+Turns an old laptop or a USB webcam into a live HLS stream with a browser-based family presence system — message board, dark mode cloak, buzz notifications, and a terminal monitor.
 
 ![camstack TUI monitor](screenshots/camstack.jpg)
 
