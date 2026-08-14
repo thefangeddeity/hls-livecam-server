@@ -416,6 +416,39 @@ SUDOEOF
 chown root:root /etc/sudoers.d/hls-livecam-studio
 chmod 440 /etc/sudoers.d/hls-livecam-studio
 
+# ── Operator GUI (camdash-gui) ────────────────────────────────
+# Registers the desktop entry so the GUI appears in the applications menu
+# and can be pinned to the dock, and prepares the per-user config directory
+# the GUI saves its window geometry into.
+if [ -f /usr/local/bin/camdash-gui ]; then
+  install -Dm644 /usr/share/hls-livecam-server/camdash-gui.desktop \
+                 /usr/share/applications/camdash-gui.desktop 2>/dev/null || true
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+
+  # Window geometry is persisted via QSettings to
+  # $XDG_CONFIG_HOME/hls-livecam/camdash-gui.conf. This setup script runs as
+  # root, so anything it touches under the user's home must be chowned back --
+  # a root-owned config dir is silently unwritable from the user's session,
+  # and the GUI would then reset its size on every launch with no visible
+  # error. Pre-creating it owned correctly is what makes persistence work on
+  # a fresh machine rather than only after the first successful save.
+  if [ -n "$SUDO_USER_NAME" ]; then
+    USER_HOME=$(getent passwd "$SUDO_USER_NAME" | cut -d: -f6)
+    if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
+      GUI_CONF_DIR="${XDG_CONFIG_HOME:-$USER_HOME/.config}/hls-livecam"
+      mkdir -p "$GUI_CONF_DIR"
+      chown "$SUDO_USER_NAME":"$SUDO_USER_NAME" "$GUI_CONF_DIR" 2>/dev/null || true
+      chmod 700 "$GUI_CONF_DIR" 2>/dev/null || true
+      # If an earlier run (or a GUI launched under sudo) left a root-owned
+      # config behind, hand it back rather than leaving it unwritable.
+      if [ -e "$GUI_CONF_DIR/camdash-gui.conf" ]; then
+        chown "$SUDO_USER_NAME":"$SUDO_USER_NAME" "$GUI_CONF_DIR/camdash-gui.conf" 2>/dev/null || true
+      fi
+      echo -e "  ${GREEN}Operator GUI registered; config dir ready for $SUDO_USER_NAME.${NC}"
+    fi
+  fi
+fi
+
 # ── Done ──────────────────────────────────────────────────────
 IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
 echo ""
