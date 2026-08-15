@@ -42,7 +42,21 @@ COCO_LABELS = {
 
 LABEL_ALIAS = {
     'bowl': 'cat plate',
+    'motion': 'motion',
 }
+
+
+def make_detector(kind, **kw):
+    """Factory, so the pipeline never imports a specific implementation."""
+    kind = (kind or 'null').strip().lower()
+    if kind == 'motion':
+        return MotionDetector(**{k: v for k, v in kw.items()
+                                 if k in ('scale', 'threshold', 'min_area_frac',
+                                          'dilate', 'max_boxes')}).load()
+    if kind == 'onnx':
+        return OnnxDetector(**{k: v for k, v in kw.items()
+                               if k in ('model_path', 'size', 'conf', 'nms')}).load()
+    return NullDetector().load()
 
 
 class Detection:
@@ -88,6 +102,69 @@ class NullDetector(Detector):
 
     def detect(self, frame):
         return []
+
+
+class MotionDetector(Detector):
+    """Detector with no model: motion regions become boxes labelled 'motion'.
+
+    Useful beyond testing. It exercises the whole path -- cadence, tracking,
+    labelling, rendering -- on real video with nothing installed, and on a
+    node too slow to run a real detector it still produces a usable HUD that
+    says where something is happening, just not what it is.
+
+    Frame differencing on a downscaled luminance image rather than MOG2: a
+    background model has to be learned and re-learned after every lighting
+    change, while a fixed camera watching for "what moved since a moment
+    ago" needs neither the memory nor the warm-up.
+    """
+
+    def __init__(self, scale=0.25, threshold=18, min_area_frac=0.004,
+                 dilate=9, max_boxes=6):
+        self.scale = float(scale)
+        self.threshold = int(threshold)
+        self.min_area_frac = float(min_area_frac)
+        self.dilate = int(dilate)
+        self.max_boxes = int(max_boxes)
+        self._prev = None
+
+    def detect(self, frame):
+        h, w = frame.shape[:2]
+        small = cv2.resize(frame, None, fx=self.scale, fy=self.scale,
+                           interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+        gray = cv2.GaussianBlur(gray, (0, 0), sigmaX=1.5)
+
+        if self._prev is None or self._prev.shape != gray.shape:
+            self._prev = gray
+            return []
+
+        diff = cv2.absdiff(gray, self._prev)
+        self._prev = gray
+        _, mask = cv2.threshold(diff, self.threshold, 255, cv2.THRESH_BINARY)
+        if self.dilate > 0:
+            k = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (self.dilate | 1, self.dilate | 1))
+            # Close first: a moving subject shows as scattered patches where
+            # its texture happens to differ, and those belong to one object.
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+            mask = cv2.dilate(mask, k)
+
+        cont, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        frame_area = gray.shape[0] * gray.shape[1]
+        found = []
+        for c in cont:
+            area = cv2.contourArea(c)
+            if area < self.min_area_frac * frame_area:
+                continue
+            x, y, bw, bh = cv2.boundingRect(c)
+            inv = 1.0 / self.scale
+            # Confidence from relative size: nothing here knows what the
+            # object is, so the only honest signal is how much moved.
+            conf = min(0.99, 0.4 + (area / frame_area) * 3.0)
+            found.append(Detection('motion', conf, x * inv, y * inv,
+                                   bw * inv, bh * inv))
+        found.sort(key=lambda d: d.w * d.h, reverse=True)
+        return found[:self.max_boxes]
 
 
 class OnnxDetector(Detector):

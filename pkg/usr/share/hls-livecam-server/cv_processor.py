@@ -42,6 +42,11 @@ from collections import deque
 import numpy as np
 import cv2
 
+try:
+    import cv_detect as _cvd
+except Exception:      # detection is optional; the pipeline runs without it
+    _cvd = None
+
 # Flow is computed on a downscaled grayscale pair purely to build a coarse
 # motion mask -- a full-resolution dense flow field is not needed to answer
 # "is this pixel neighborhood moving," and it costs several times more.
@@ -93,6 +98,19 @@ _DEFAULTS = {
     'CV_SHARPIE_MIN_LEN':     140,   # discard contours shorter than this
     'CV_SHARPIE_SMOOTH':      13,    # median kernel; flattens speckle pre-banding
     'CV_SHARPIE_CLOSE':       7,     # morphological close/open, for unbroken strokes
+    # Detection + Shakey HUD. Runs every Nth frame, never per frame: a
+    # detector pass costs far more than the frame budget on this hardware.
+    # The tracker carries boxes between passes and the HUD is drawn every
+    # frame from tracker state, so labels persist smoothly instead of
+    # strobing at the detection cadence.
+    'CV_DETECT_ENABLED':      0,     # off by default
+    'CV_DETECT_BACKEND':      'motion',   # motion | onnx | null
+    'CV_DETECT_INTERVAL':     8,     # run the detector every N frames
+    'CV_DETECT_MODEL':        '',    # path to .onnx, for the onnx backend
+    'CV_DETECT_CONF':         0.35,
+    'CV_DETECT_MIN_AREA':     0.004, # motion backend: ignore blobs smaller than this
+    'CV_HUD_ENABLED':         1,     # draw boxes/labels when detection is on
+
     'CV_SHARPIE_SCALE':       0.5,   # compute the drawing at this scale. Strokes are
                                       # thick by design, so the detail lost is detail
                                       # the drawing discards anyway -- and contour
@@ -224,6 +242,27 @@ class CVProcessor:
         self._sharpie_smooth = _read_int(denv, 'CV_SHARPIE_SMOOTH')
         self._sharpie_close = _read_int(denv, 'CV_SHARPIE_CLOSE')
         self._sharpie_scale = _read_float(denv, 'CV_SHARPIE_SCALE')
+
+        self._detect_enabled = _read_int(denv, 'CV_DETECT_ENABLED') != 0
+        self._detect_interval = max(1, _read_int(denv, 'CV_DETECT_INTERVAL'))
+        self._hud_enabled = _read_int(denv, 'CV_HUD_ENABLED') != 0
+        self._frame_n = 0
+        self._detector = None
+        self._tracker = None
+        if self._detect_enabled and _cvd is not None:
+            backend = str((denv or {}).get('CV_DETECT_BACKEND',
+                                           _DEFAULTS['CV_DETECT_BACKEND']))
+            try:
+                self._detector = _cvd.make_detector(
+                    backend,
+                    model_path=str((denv or {}).get('CV_DETECT_MODEL', '')),
+                    conf=_read_float(denv, 'CV_DETECT_CONF'),
+                    min_area_frac=_read_float(denv, 'CV_DETECT_MIN_AREA'))
+                self._tracker = _cvd.Tracker()
+            except Exception:
+                # A missing or unreadable model must not take the feed down;
+                # the pipeline degrades to no HUD.
+                self._detector = None
         self._sharpen_motion = _read_int(denv, 'CV_SHARPEN_MOTION') != 0
         self._denoise_motion = _read_int(denv, 'CV_DENOISE_MOTION') != 0
 
@@ -263,10 +302,14 @@ class CVProcessor:
             t5 = time.perf_counter()
             out = self._draw_sharpie(toned)
             t['edges'] = time.perf_counter() - t5
+            t6 = time.perf_counter()
+            out, tracks = self._detect_and_hud(frame, out)
+            t['detect'] = time.perf_counter() - t6
             t['total'] = time.perf_counter() - t0
             return out, {
                 'motion': 0.0,
                 'sharpness': 0.0,
+                'tracks': len(tracks),
                 'edge_weight': 1.0,
                 'artifact_mask': self._artifact_mask is not None,
                 'artifact_learning': False,
@@ -329,6 +372,10 @@ class CVProcessor:
         edged, edge_weight = self._draw_edges(sharpened, sharpness)
         t['edges'] = time.perf_counter() - t5
 
+        t6 = time.perf_counter()
+        edged, hud_tracks = self._detect_and_hud(frame, edged)
+        t['detect'] = time.perf_counter() - t6
+
         self._frames.append(frame)
         self._gray_small.append(small_gray)
 
@@ -339,6 +386,7 @@ class CVProcessor:
             'edge_weight': round(edge_weight, 3),
             'artifact_mask': self._artifact_mask is not None,
             'artifact_learning': self._artifact_learning,
+            'tracks': len(hud_tracks),
             'timings_ms': {k: round(v * 1000, 3) for k, v in t.items()},
             'history': len(self._frames),
         }
@@ -431,6 +479,26 @@ class CVProcessor:
         amount = self._edge_strength * w
         ink = cv2.cvtColor(strokes, cv2.COLOR_GRAY2RGB)
         return cv2.addWeighted(frame, 1.0, ink, -amount, 0), w
+
+    def _detect_and_hud(self, source_frame, canvas):
+        """Run the detector on cadence, then draw tracker state every frame."""
+        if self._detector is None or self._tracker is None:
+            return canvas, []
+        self._frame_n += 1
+        if self._frame_n % self._detect_interval == 0:
+            try:
+                dets = self._detector.detect(source_frame)
+                for d in dets:
+                    # Coat pattern is refined from the source image, not the
+                    # drawing -- the line art has no colour left to judge by.
+                    d.cls = _cvd.classify_coat(source_frame, d)
+                self._tracker.update(dets)
+            except Exception:
+                pass
+        tracks = [t for t in self._tracker.tracks.values() if t.state != 'departed']
+        if self._hud_enabled and tracks:
+            canvas = _cvd.draw_hud(canvas, tracks)
+        return canvas, tracks
 
     def _draw_sharpie(self, frame):
         """Line drawing on white: quantise luminance, outline the bands.
