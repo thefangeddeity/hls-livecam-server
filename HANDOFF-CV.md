@@ -90,10 +90,46 @@ resolution and upscale the masks (flow already does this at 0.25 — the tone
 stage does not), drop the flow cadence below per-frame, or accept a lower
 output resolution.
 
-**I did not benchmark tina.** The operator stopped that run to prioritise
-feature work. tina's number is still unknown and it is the number that
-governs. Do not assume it scales linearly from tanzania — different CPU
-generation, and OpenCV's threading will behave differently on 4 cores.
+### tina's number, measured by the CLI session
+
+I did not benchmark tina; the CLI session did, on real frames pulled from
+tina's own live HLS output:
+
+- **~180–190 ms/frame steady state against the 66.7 ms budget — ~2.8x over.**
+- CPU is an Intel Core i3-2330M (2011, 4 threads, **no AVX2**).
+- Dominated by `createCLAHE` (~75 ms) and Farneback flow (~56 ms).
+
+Their conclusion, which the measurements support: no combination of
+clipLimit / tileGridSize / unsharp / threshold values closes a 2.8x gap. It is
+an architecture/CPU mismatch, not a tuning problem.
+
+### PM decision: run tina as-is, pare back if stressful
+
+Taken with the numbers in hand. What makes this safe rather than reckless —
+verified by reading the code, not assumed:
+
+`_cam_frame` is a **single slot**, not a queue. The drain thread overwrites it
+with the newest frame; the writer takes whatever is currently there. Running
+over budget therefore degrades to **lower fps with bounded latency and bounded
+memory** — it cannot accumulate lag or grow a backlog. That is already the
+"prefer a current frame over every historical frame" property the processor
+brief asks for, and it holds today.
+
+Expect roughly 5 fps on tina rather than 15. That is what "stressful" will
+look like: a slow feed, not a growing delay.
+
+### The interaction to watch on tina
+
+Adaptive edge mode engages *precisely* on soft feeds — which is tina, whose
+lens is genuinely dirty and hazy. So tanzania pays ~0 for the stage (edges
+absent) while **tina will have it fully engaged, adding ~40 ms on top of an
+already 2.8x-over baseline.**
+
+The lever already exists and needs no code change: `CV_EDGE_ENABLED=0` in
+tina's `/etc/hls-livecam/device.env` turns the stage off for that node alone.
+That is the first thing to pare back if tina stutters — before touching CLAHE
+or flow, because it is the only stage that can be removed without changing
+what the other modes look like.
 
 ---
 
