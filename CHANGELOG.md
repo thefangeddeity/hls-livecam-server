@@ -1,4 +1,22 @@
 # Changelog
+## [5.5.1] - 2026-08-15
+### Fixed
+- **Feed-mode and message-lock persistence were silently no-ops.**
+  `/var/lib/hls-livecam/` was `root:root 0755`; `broadcast-api` runs as
+  `http` and could not write `feed_mode` or `msg_lock` into it. The write
+  was wrapped in a bare `except: pass`, so every POST appeared to succeed
+  while never reaching disk. On restart, `feed_mode` always fell back to
+  `SAFE_FEED_MODE` regardless of what the operator last chose -- a
+  deliberate `hide` did not survive a restart, silently replaced by `cv`.
+  Found live, verified by setting `hide`, restarting, and observing the
+  fallback. `feed_mode` and `msg_lock` are now included in the same
+  `CAMDASH_STATE_FILES` chown/chmod loop `camdash-feed.state` and
+  `cell_aspect` already used (root:www-data/http 0664), in both setup
+  scripts. A live system already on 5.5.0 needs `hls-livecam-setup`
+  re-run (or the two files manually chowned) to pick this up -- the
+  package payload alone does not fix already-broken permissions on an
+  existing install.
+
 ## [5.5.0] - 2026-08-15
 ### Added
 - **CV Mode pivot, Phase 1.** Show/Blur/Hide + a separate B&W control is

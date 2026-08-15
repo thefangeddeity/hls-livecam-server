@@ -279,7 +279,7 @@ chmod 0664 "$WEB_ROOT/broadcast.txt" "$WEB_ROOT/buzz.txt"
 # same rule as broadcast.txt/buzz.txt: root:http 664, camdash runs as the
 # logged-in user and needs group-write. chown/chmod unconditionally (not just
 # touch-if-absent) so an upgrade heals a file a prior version left root:root.
-CAMDASH_STATE_FILES=("camdash-feed.state" "cell_aspect")
+CAMDASH_STATE_FILES=("camdash-feed.state" "cell_aspect" "feed_mode" "msg_lock")
 for f in "${CAMDASH_STATE_FILES[@]}"; do
   fpath="$LIB_DIR/$f"
   [ -f "$fpath" ] || touch "$fpath"
