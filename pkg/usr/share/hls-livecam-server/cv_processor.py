@@ -69,6 +69,20 @@ _DEFAULTS = {
     'CV_EDGE_STRENGTH':       0.75,  # opacity of the darkest strokes at full engagement
     'CV_EDGE_SIGMA':          1.0,   # base stroke width; scaled up as the image softens
     'CV_EDGE_SIGMA_MAX':      3.5,   # cap, so a very soft frame does not draw slabs
+
+    # Lens-artifact subtraction. Water spots and dirt on the lens are static,
+    # sharp and high-contrast while the scene behind them is soft and moving.
+    # That asymmetry is what makes them separable: sample across frames that
+    # contain motion, and anything high-frequency that never moves is on the
+    # glass, not in the room.
+    'CV_ARTIFACT_ENABLED':    0,     # off by default; opt in per node
+    'CV_ARTIFACT_SAMPLES':    30,    # frames sampled to learn the mask
+    'CV_ARTIFACT_MIN_MOTION': 0.4,   # mean flow required for a frame to count
+    'CV_ARTIFACT_THRESHOLD':  18,    # high-pass response counted as an artifact
+    'CV_ARTIFACT_DILATE':     2,     # grow the mask so stroke edges are covered
+    'CV_ARTIFACT_MAX_AREA':   0.04,  # refuse a mask covering more than this
+                                      # fraction of frame -- that is a wrong
+                                      # answer, not a very dirty lens
 }
 
 
@@ -140,6 +154,16 @@ class CVProcessor:
         self._edge_sigma = _read_float(denv, 'CV_EDGE_SIGMA')
         self._edge_sigma_max = _read_float(denv, 'CV_EDGE_SIGMA_MAX')
 
+        self._artifact_enabled = _read_int(denv, 'CV_ARTIFACT_ENABLED') != 0
+        self._artifact_samples = _read_int(denv, 'CV_ARTIFACT_SAMPLES')
+        self._artifact_min_motion = _read_float(denv, 'CV_ARTIFACT_MIN_MOTION')
+        self._artifact_threshold = _read_int(denv, 'CV_ARTIFACT_THRESHOLD')
+        self._artifact_dilate = _read_int(denv, 'CV_ARTIFACT_DILATE')
+        self._artifact_max_area = _read_float(denv, 'CV_ARTIFACT_MAX_AREA')
+        self._artifact_mask = None      # HxW uint8, 255 where lens is dirty
+        self._artifact_samples_buf = []  # luminance frames collected while learning
+        self._artifact_learning = self._artifact_enabled
+
         hi_threshold = _read_int(denv, 'CV_HIGHLIGHT_THRESHOLD')
         hi_ceiling = _read_int(denv, 'CV_HIGHLIGHT_CEILING')
         hi_gamma = _read_float(denv, 'CV_HIGHLIGHT_GAMMA')
@@ -193,6 +217,14 @@ class CVProcessor:
         # temporal blend removes that confound. (Tenengrad scores better in
         # comparative focus studies but is documented as having weak noise
         # immunity, which is the wrong trade for an old webcam.)
+        # Sampling uses the denoised luminance the tone stage kept, and runs
+        # only while learning -- once the mask exists this costs nothing.
+        if self._artifact_learning:
+            self._collect_artifact_sample(self._last_luma, motion_mean)
+        if self._artifact_enabled and self._artifact_mask is not None:
+            toned = self._subtract_artifacts(toned)
+            sharpened = self._sharpen(toned, moving_mask)
+
         t5 = time.perf_counter()
         sharpness = self._measure_sharpness(self._last_luma)
         edged, edge_weight = self._draw_edges(sharpened, sharpness)
@@ -206,6 +238,8 @@ class CVProcessor:
             'motion': motion_mean,
             'sharpness': round(sharpness, 2),
             'edge_weight': round(edge_weight, 3),
+            'artifact_mask': self._artifact_mask is not None,
+            'artifact_learning': self._artifact_learning,
             'timings_ms': {k: round(v * 1000, 3) for k, v in t.items()},
             'history': len(self._frames),
         }
@@ -284,6 +318,78 @@ class CVProcessor:
         amount = self._edge_strength * w
         ink = cv2.cvtColor(strokes, cv2.COLOR_GRAY2RGB)
         return cv2.addWeighted(frame, 1.0, ink, -amount, 0), w
+
+    # ── lens-artifact subtraction ───────────────────────────────────────
+    def relearn_artifacts(self):
+        """Discard the current mask and start sampling again."""
+        self._artifact_mask = None
+        self._artifact_samples_buf = []
+        self._artifact_learning = self._artifact_enabled
+
+    def _collect_artifact_sample(self, luma, motion_mean):
+        """Sample luminance while the scene is moving.
+
+        Motion is the requirement, not an optimisation: the method separates
+        lens from scene by exploiting that the scene changes and the glass
+        does not. Sampling a still scene would bake furniture into the mask.
+        """
+        if not self._artifact_learning or luma is None:
+            return
+        if motion_mean < self._artifact_min_motion:
+            return
+        self._artifact_samples_buf.append(luma.copy())
+        if len(self._artifact_samples_buf) >= self._artifact_samples:
+            self._build_artifact_mask()
+
+    def _build_artifact_mask(self):
+        """Median across samples, high-passed, thresholded.
+
+        Median rather than mean: a mean is dragged by whatever passed through
+        frame, while a median discards anything not present in most samples.
+        What survives is what was there the whole time -- the glass.
+        """
+        self._artifact_learning = False
+        stack = np.stack(self._artifact_samples_buf, axis=0)
+        self._artifact_samples_buf = []
+
+        median = np.median(stack, axis=0).astype(np.uint8)
+        # High-pass: artifacts are small and sharp; the scene's persistent
+        # structure is broad. Subtracting a blurred copy keeps only the fine
+        # detail that survived the median.
+        low = cv2.GaussianBlur(median, (0, 0), sigmaX=4.0)
+        high = cv2.absdiff(median, low)
+        _, mask = cv2.threshold(high, self._artifact_threshold, 255, cv2.THRESH_BINARY)
+
+        if self._artifact_dilate > 0:
+            k = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (2 * self._artifact_dilate + 1, 2 * self._artifact_dilate + 1))
+            mask = cv2.dilate(mask, k)
+
+        # A mask covering a large fraction of the frame means the separation
+        # failed -- a static camera on a still scene, or a threshold far too
+        # low. Repairing that much of every frame would do more damage than
+        # the dirt. Refuse it and leave the feed alone.
+        area = float((mask > 0).sum()) / mask.size
+        if area > self._artifact_max_area:
+            self._artifact_mask = None
+            return
+        self._artifact_mask = mask
+
+    def _subtract_artifacts(self, frame):
+        """Fill masked pixels from their surroundings.
+
+        A blur-and-composite rather than cv2.inpaint: inpainting solves a PDE
+        per region and is far too expensive per frame on the hardware this
+        targets, while the mask is sparse specks whose neighbourhoods are
+        genuinely representative. One blur and one masked copy.
+        """
+        if self._artifact_mask is None:
+            return frame
+        filled = cv2.GaussianBlur(frame, (0, 0), sigmaX=3.0)
+        result = frame.copy()
+        cv2.copyTo(filled, self._artifact_mask, result)
+        return result
 
     def _temporal_denoise(self, frame, moving_mask):
         """Temporally average against up to two prior frames, then restore
