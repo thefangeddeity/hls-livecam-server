@@ -78,6 +78,28 @@ _DEFAULTS = {
     'CV_EDGE_PERCENTILE':     99.0,  # DoG normalisation reference; lower = heavier ink
     'CV_EDGE_GAMMA':          0.65,  # <1 lifts mid-strength edges toward full ink
 
+    # Edge style. 'overlay' inks strokes over the photo. 'sharpie' discards
+    # the photo entirely and returns a line drawing on white.
+    #
+    # Sharpie exists because on a genuinely defocused lens there is no fine
+    # detail to recover -- enhancement either does nothing or manufactures
+    # halos. What such a frame still has is large regions of distinct
+    # brightness, so the drawing traces region *boundaries* rather than
+    # texture. Tracing texture is what makes a blurry frame come out as
+    # scattered dashes instead of strokes.
+    'CV_EDGE_STYLE':          'overlay',
+    'CV_SHARPIE_LEVELS':      4,     # luminance bands; more = concentric clutter
+    'CV_SHARPIE_THICK':       3,     # stroke width in px
+    'CV_SHARPIE_MIN_LEN':     140,   # discard contours shorter than this
+    'CV_SHARPIE_SMOOTH':      13,    # median kernel; flattens speckle pre-banding
+    'CV_SHARPIE_CLOSE':       7,     # morphological close/open, for unbroken strokes
+    'CV_SHARPIE_SCALE':       0.5,   # compute the drawing at this scale. Strokes are
+                                      # thick by design, so the detail lost is detail
+                                      # the drawing discards anyway -- and contour
+                                      # finding plus morphology is superlinear in
+                                      # pixel count, so this is the difference between
+                                      # ~150ms and ~40ms.
+
     # Enhancement on moving subjects. The pipeline skips denoise and sharpen
     # wherever the motion mask is set, on the reasoning that motion blur is
     # an optical fact rather than missing detail. That holds for a fast pan;
@@ -194,6 +216,14 @@ class CVProcessor:
         self._edge_sigma_max = _read_float(denv, 'CV_EDGE_SIGMA_MAX')
         self._edge_percentile = _read_float(denv, 'CV_EDGE_PERCENTILE')
         self._edge_gamma = _read_float(denv, 'CV_EDGE_GAMMA')
+        self._edge_style = str((denv or {}).get('CV_EDGE_STYLE',
+                                                _DEFAULTS['CV_EDGE_STYLE'])).strip().lower()
+        self._sharpie_levels = max(2, _read_int(denv, 'CV_SHARPIE_LEVELS'))
+        self._sharpie_thick = max(1, _read_int(denv, 'CV_SHARPIE_THICK'))
+        self._sharpie_min_len = _read_int(denv, 'CV_SHARPIE_MIN_LEN')
+        self._sharpie_smooth = _read_int(denv, 'CV_SHARPIE_SMOOTH')
+        self._sharpie_close = _read_int(denv, 'CV_SHARPIE_CLOSE')
+        self._sharpie_scale = _read_float(denv, 'CV_SHARPIE_SCALE')
         self._sharpen_motion = _read_int(denv, 'CV_SHARPEN_MOTION') != 0
         self._denoise_motion = _read_int(denv, 'CV_DENOISE_MOTION') != 0
 
@@ -220,6 +250,29 @@ class CVProcessor:
         is always the same HxWx3 uint8 RGB shape as the input."""
         t = {}
         t0 = time.perf_counter()
+
+        # Sharpie discards the photo, so everything that exists to improve the
+        # photo is wasted work: optical flow, the temporal blend and the
+        # unsharp pass are ~70ms of the frame and none of it survives into a
+        # line drawing. Tone still runs -- the drawing needs its equalised
+        # luminance, and without equalisation the bands all land inside the
+        # blown-out end of the histogram.
+        if self._edge_enabled and self._edge_style == 'sharpie':
+            toned = self._tone_correct(frame)
+            t['tone'] = time.perf_counter() - t0
+            t5 = time.perf_counter()
+            out = self._draw_sharpie(toned)
+            t['edges'] = time.perf_counter() - t5
+            t['total'] = time.perf_counter() - t0
+            return out, {
+                'motion': 0.0,
+                'sharpness': 0.0,
+                'edge_weight': 1.0,
+                'artifact_mask': self._artifact_mask is not None,
+                'artifact_learning': False,
+                'timings_ms': {k: round(v * 1000, 3) for k, v in t.items()},
+                'history': len(self._frames),
+            }
 
         small_gray = cv2.cvtColor(
             cv2.resize(frame, None, fx=_FLOW_SCALE, fy=_FLOW_SCALE, interpolation=cv2.INTER_AREA),
@@ -347,6 +400,9 @@ class CVProcessor:
             # metric itself. This is the tanzania case.
             return frame, 0.0
 
+        if self._edge_style == 'sharpie':
+            return self._draw_sharpie(frame), w
+
         sigma = min(self._edge_sigma * (1.0 + 2.0 * w), self._edge_sigma_max)
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         g1 = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma)
@@ -375,6 +431,51 @@ class CVProcessor:
         amount = self._edge_strength * w
         ink = cv2.cvtColor(strokes, cv2.COLOR_GRAY2RGB)
         return cv2.addWeighted(frame, 1.0, ink, -amount, 0), w
+
+    def _draw_sharpie(self, frame):
+        """Line drawing on white: quantise luminance, outline the bands.
+
+        Reuses the luminance the tone stage already produced -- it has been
+        denoised and CLAHE-equalised, which is exactly the input this wants,
+        and re-deriving it would double the cost of the most expensive part.
+        Equalisation matters: without it the bands all land inside the
+        blown-out end of the histogram and the drawing loses the bright half
+        of the scene.
+        """
+        h, w_px = frame.shape[:2]
+        g = self._last_luma if self._last_luma is not None else \
+            cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        sc = self._sharpie_scale
+        if 0.1 < sc < 1.0:
+            g = cv2.resize(g, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
+        gh, gw = g.shape[:2]
+
+        k = self._sharpie_smooth | 1
+        g = cv2.medianBlur(g, k if k <= 9 else 9)
+
+        step = max(1, 256 // self._sharpie_levels)
+        ink = np.zeros((gh, gw), np.uint8)
+        close_k = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self._sharpie_close | 1, self._sharpie_close | 1))
+
+        for lv in range(1, self._sharpie_levels):
+            band = ((g >= lv * step).astype(np.uint8)) * 255
+            # Close then open: joins a band broken by noise into one region,
+            # then drops the specks that would otherwise each get outlined.
+            band = cv2.morphologyEx(band, cv2.MORPH_CLOSE, close_k)
+            band = cv2.morphologyEx(band, cv2.MORPH_OPEN, close_k)
+            cont, _ = cv2.findContours(band, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+            for c in cont:
+                if cv2.arcLength(c, False) >= self._sharpie_min_len:
+                    cv2.drawContours(ink, [c], -1, 255, self._sharpie_thick)
+
+        if ink.shape[:2] != (h, w_px):
+            ink = cv2.resize(ink, (w_px, h), interpolation=cv2.INTER_NEAREST)
+
+        canvas = np.full_like(frame, 255)
+        canvas[ink > 0] = (25, 25, 25)
+        return canvas
 
     # ── lens-artifact subtraction ───────────────────────────────────────
     def relearn_artifacts(self):
