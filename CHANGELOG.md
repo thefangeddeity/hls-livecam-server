@@ -1,4 +1,17 @@
 # Changelog
+## [5.5.0] - 2026-08-15
+### Added
+- **CV Mode pivot, Phase 1.** Show/Blur/Hide + a separate B&W control is
+  replaced by Show/CV Mode/Hide across the web viewer, camdash, and the
+  Linux operator GUI. `/api/feed-mode` accepts `cloak` as a permanent input
+  alias for the canonical `cv`; `/api/bw-mode` stays routable but is now a
+  no-op. New `cv_processor.py`: a stateful temporal processor (bounded
+  3-frame history, optical-flow-gated motion mask, temporal denoise, CLAHE
+  tone correction, damped unsharp sharpening), wired into `broadcast-api`
+  in place of the old PNG/PIL cloak render. Profiled at ~31ms/frame
+  steady-state against a ~40ms budget on real captured frames. Detection
+  and recording are not part of this phase.
+
 ## [5.4.0] - 2026-08-14
 ### Fixed
 - **Feed mode persists across restarts, and defaults to `cloak`.** A restart
