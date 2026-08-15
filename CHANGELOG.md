@@ -1,4 +1,34 @@
 # Changelog
+## [5.4.0] - 2026-08-14
+### Fixed
+- **Feed mode persists across restarts, and defaults to `cloak`.** A restart
+  previously reset the feed to `show`, exposing the clear camera after the
+  operator had deliberately chosen cloak. `show` is now never reached by
+  fallback -- only by explicit choice.
+- **GOP regression.** Run-1's 1s keyframe interval was lost when a package
+  install overwrote a live-only fix. Now sourced from `device.env` as
+  `GOP_SECONDS` (default 1) and committed in `pkg/`.
+- **broadcast-api now stops cleanly.** Its supervisor loops respawned the
+  children that SIGTERM had just killed, so the replacement ffmpeg outlived
+  the process, systemd waited out its full stop timeout, and an orphaned
+  ffmpeg kept the camera device open. 90s-and-failed is now 47ms and clean.
+- **Stalled streams are detected.** `hls_worker` only checked the master
+  playlist for HTTP 200 -- a static file that answers 200 while the pipeline
+  behind it is stopped. It now watches `EXT-X-MEDIA-SEQUENCE` and reports
+  STALE, with the threshold derived from the stream's own TARGETDURATION so
+  slow hardware is not misreported as broken.
+- **Hide no longer derives from the camera image.** It row-shuffled and
+  rolled the live frame; it now publishes black, matching the Windows node.
+- Header no longer reads DEGRADED for a deliberately stopped server, or for
+  a healthy one whose HLS state has not been polled yet.
+
+### Changed
+- Feed switches are covered by VHS static instead of a 16s countdown, and
+  the cover is now shown to **every** viewer -- previously only the browser
+  that clicked saw it.
+- Hide shows viewers "No signal / The camera is switched off" rather than an
+  unexplained black frame.
+
 ## [5.3.0] - 2026-08-13
 ### Added
 - camdash-gui: PySide6 operator dashboard for Linux, ported from the macOS build.
