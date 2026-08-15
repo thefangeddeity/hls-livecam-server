@@ -57,6 +57,12 @@ _DEFAULTS = {
     'CV_HIGHLIGHT_CEILING':   255,   # 255 = disabled; <255 caps the L channel there, freeing
                                       # numeric headroom below white for CLAHE to work with
     'CV_HIGHLIGHT_GAMMA':     1.0,   # curve shape of the compression; 1.0 = linear
+    'CV_SHADOW_LIFT':         0.0,   # 0 = off. Raises dark values so detail in
+                                      # shadow survives; a dark subject against a
+                                      # bright surface is otherwise crushed to a
+                                      # silhouette while the rolloff only helps
+                                      # the bright end.
+    'CV_SHADOW_RANGE':        110,   # L value below which the lift applies
 
     # Adaptive edge mode. Below a sharpness threshold, enhancement stops
     # helping -- CLAHE on mush is still mush -- so the pipeline switches to
@@ -69,6 +75,18 @@ _DEFAULTS = {
     'CV_EDGE_STRENGTH':       0.75,  # opacity of the darkest strokes at full engagement
     'CV_EDGE_SIGMA':          1.0,   # base stroke width; scaled up as the image softens
     'CV_EDGE_SIGMA_MAX':      3.5,   # cap, so a very soft frame does not draw slabs
+    'CV_EDGE_PERCENTILE':     99.0,  # DoG normalisation reference; lower = heavier ink
+    'CV_EDGE_GAMMA':          0.65,  # <1 lifts mid-strength edges toward full ink
+
+    # Enhancement on moving subjects. The pipeline skips denoise and sharpen
+    # wherever the motion mask is set, on the reasoning that motion blur is
+    # an optical fact rather than missing detail. That holds for a fast pan;
+    # it is wrong for a pet ambling across a soft, dirty lens, where the blur
+    # is mostly focus and the moving subject is the whole point of watching.
+    # Enabled by default: on this camera the subject matters more than the
+    # theoretical risk of sharpening genuine motion blur.
+    'CV_SHARPEN_MOTION':      1,     # sharpen moving regions too
+    'CV_DENOISE_MOTION':      0,     # but do NOT temporally blend them (ghosting)
 
     # Lens-artifact subtraction. Water spots and dirt on the lens are static,
     # sharp and high-contrast while the scene behind them is soft and moving.
@@ -98,6 +116,27 @@ def _read_int(denv, key):
         return int(float(denv.get(key, _DEFAULTS[key])))
     except (TypeError, ValueError):
         return _DEFAULTS[key]
+
+
+def _tone_curve_lut(threshold, ceiling, gamma, shadow_lift=0.0, shadow_range=110):
+    """Full tone curve: shadow lift at the dark end, highlight rolloff at the
+    bright end, identity through the middle.
+
+    The rolloff alone only ever helps a blown-out surface. A dark subject in
+    the same frame -- black fur on white bedding -- is at the other end of the
+    histogram and is crushed to a silhouette regardless of what the highlights
+    do. The lift raises those values with a gamma curve, weighted so it fades
+    out by `shadow_range` and leaves midtones alone.
+    """
+    lut = _highlight_rolloff_lut(threshold, ceiling, gamma).astype(np.float32)
+    if shadow_lift > 0.0:
+        x = np.arange(256, dtype=np.float32)
+        # Gamma < 1 raises dark values; strength tapers to zero at shadow_range
+        # so the curve stays continuous instead of stepping at the boundary.
+        lifted = 255.0 * np.power(x / 255.0, 1.0 / (1.0 + shadow_lift))
+        w = np.clip((shadow_range - x) / max(shadow_range, 1), 0.0, 1.0)
+        lut = lut * (1.0 - w) + lifted * w
+    return np.clip(lut, 0, 255).astype(np.uint8)
 
 
 def _highlight_rolloff_lut(threshold, ceiling, gamma):
@@ -153,6 +192,10 @@ class CVProcessor:
         self._edge_strength = _read_float(denv, 'CV_EDGE_STRENGTH')
         self._edge_sigma = _read_float(denv, 'CV_EDGE_SIGMA')
         self._edge_sigma_max = _read_float(denv, 'CV_EDGE_SIGMA_MAX')
+        self._edge_percentile = _read_float(denv, 'CV_EDGE_PERCENTILE')
+        self._edge_gamma = _read_float(denv, 'CV_EDGE_GAMMA')
+        self._sharpen_motion = _read_int(denv, 'CV_SHARPEN_MOTION') != 0
+        self._denoise_motion = _read_int(denv, 'CV_DENOISE_MOTION') != 0
 
         self._artifact_enabled = _read_int(denv, 'CV_ARTIFACT_ENABLED') != 0
         self._artifact_samples = _read_int(denv, 'CV_ARTIFACT_SAMPLES')
@@ -167,7 +210,10 @@ class CVProcessor:
         hi_threshold = _read_int(denv, 'CV_HIGHLIGHT_THRESHOLD')
         hi_ceiling = _read_int(denv, 'CV_HIGHLIGHT_CEILING')
         hi_gamma = _read_float(denv, 'CV_HIGHLIGHT_GAMMA')
-        self._highlight_lut = _highlight_rolloff_lut(hi_threshold, hi_ceiling, hi_gamma)
+        self._highlight_lut = _tone_curve_lut(
+            hi_threshold, hi_ceiling, hi_gamma,
+            _read_float(denv, 'CV_SHADOW_LIFT'),
+            _read_int(denv, 'CV_SHADOW_RANGE'))
 
     def process(self, frame):
         """frame: HxWx3 uint8 RGB. Returns (frame, metadata); output frame
@@ -307,14 +353,25 @@ class CVProcessor:
         g2 = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma * 1.6)
         dog = cv2.subtract(g1, g2)
 
-        # Normalise so stroke darkness is comparable frame to frame rather
-        # than tracking absolute scene contrast.
-        mx = float(dog.max())
-        if mx <= 1e-6:
+        # Normalise against a high percentile, not the maximum. On a noisy
+        # frame the max is a single outlier pixel, so dividing by it scales
+        # every genuine stroke down to nothing -- which is exactly why the
+        # first version drew almost nothing on a soft, grainy feed. A
+        # percentile puts real edges at full range and lets the outliers
+        # clip, which is what they should do.
+        ref = float(np.percentile(dog, self._edge_percentile))
+        if ref <= 1e-6:
             return frame, 0.0
-        strokes = cv2.multiply(dog, 255.0 / mx)
+        strokes = cv2.convertScaleAbs(dog, alpha=255.0 / ref)
 
-        # Darken along strokes: multiply toward black, scaled by engagement.
+        # Gamma below 1 lifts mid-strength edges toward full ink instead of
+        # leaving the drawing dominated by only the few strongest contours.
+        if self._edge_gamma != 1.0:
+            lut = np.clip(255.0 * (np.arange(256) / 255.0) ** self._edge_gamma,
+                          0, 255).astype(np.uint8)
+            strokes = cv2.LUT(strokes, lut)
+
+        # Darken along strokes, scaled by engagement.
         amount = self._edge_strength * w
         ink = cv2.cvtColor(strokes, cv2.COLOR_GRAY2RGB)
         return cv2.addWeighted(frame, 1.0, ink, -amount, 0), w
@@ -405,9 +462,12 @@ class CVProcessor:
         else:
             avg = cv2.addWeighted(frame, 0.5, self._frames[-1], 0.5, 0)
 
-        if moving_mask is None or not moving_mask.any():
+        if self._denoise_motion or moving_mask is None or not moving_mask.any():
             return avg
 
+        # Still composite the crisp frame back over motion here: temporal
+        # blending a moving subject ghosts it, which is a different and much
+        # more visible failure than leaving it un-denoised.
         result = avg.copy()
         cv2.copyTo(frame, moving_mask, result)
         return result
@@ -438,7 +498,11 @@ class CVProcessor:
         amount = self._unsharp_amount
         sharpened = cv2.addWeighted(frame, 1.0 + amount, blurred, -amount, 0)
 
-        if moving_mask is None or not moving_mask.any():
+        # With CV_SHARPEN_MOTION the moving subject is sharpened like
+        # everything else. That is the point on this camera: the cat is what
+        # someone is watching, and excluding it left the subject the softest
+        # thing in frame.
+        if self._sharpen_motion or moving_mask is None or not moving_mask.any():
             return sharpened
 
         result = sharpened.copy()
