@@ -1,2 +1,4 @@
 *.deb
 pkg/usr/local/etc/mediamtx.yml.default
+__pycache__/
+*.pyc

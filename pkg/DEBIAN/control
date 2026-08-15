@@ -3,7 +3,7 @@ Version: 5.2.3
 Section: video
 Priority: optional
 Architecture: amd64
-Depends: ffmpeg, nginx, v4l-utils, python3, python3-psutil, python3-flask, python3-pil, python3-numpy, wget, ca-certificates
+Depends: ffmpeg, nginx, v4l-utils, python3, python3-psutil, python3-flask, python3-pil, python3-numpy, python3-opencv, wget, ca-certificates
 Recommends: curl, smartmontools
 Maintainer: hls-livecam-server maintainers <hls-livecam@example.org>
 Description: HLS webcam streaming server with web viewer
