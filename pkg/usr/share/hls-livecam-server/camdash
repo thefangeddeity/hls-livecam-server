@@ -759,7 +759,6 @@ def sample_metrics():
         "dark":  os.path.exists(DARK_FLAG),
         "feed_mode": _api_get("feed-mode", "show"),
         "msg_lock":  _api_get("msg-lock", "false"),
-        "bw_mode":   _api_get("bw-mode", "false"),
         "svc":   services_running(),
         "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
     }
@@ -1366,23 +1365,18 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     safe(scr, y, 2, f"nginx:    {_nginx_label}", _nginx_attr); y += 1
     _feed_mode = snap.get('feed_mode', 'show')
     _showing  = _feed_mode == 'show'
-    _cloaking = _feed_mode == 'cloak'
+    # Accept both -- our own broadcast-api emits 'cv' now, but a node still
+    # on the pre-pivot build (or mid-fleet-rollout) may report 'cloak'.
+    _cving    = _feed_mode in ('cv', 'cloak')
     _hiding   = _feed_mode == 'hide'
     _msg_locked = snap.get('msg_lock', 'false') == 'true'
-    _bw_mode  = snap.get('bw_mode', 'false') == 'true'
     y += 1
     show_a   = curses.A_REVERSE if (svc and _showing)  else curses.A_DIM
-    blur_a   = curses.A_REVERSE if (svc and _cloaking) else curses.A_DIM
+    cv_a     = curses.A_REVERSE if (svc and _cving)    else curses.A_DIM
     hide_a   = curses.A_REVERSE if (svc and _hiding)   else curses.A_DIM
     repair_a = curses.color_pair(2) | curses.A_BOLD if cur_repair == 'RUNNING' else curses.A_DIM
     safe(scr, y, 2, "[ Show   ]", show_a);   y += 1
-    bw_cb = "[*]" if _bw_mode else "[ ]"
-    bw_a  = curses.color_pair(2) | curses.A_BOLD if (svc and _bw_mode) else curses.A_DIM
-    if _cloaking:
-        safe(scr, y, 2, "[ Blur   ]", blur_a)
-        safe(scr, y, 13, f"{bw_cb} B&W", bw_a); y += 1
-    else:
-        safe(scr, y, 2, "[ Blur   ]", blur_a);   y += 1
+    safe(scr, y, 2, "[ CV     ]", cv_a);     y += 1
     safe(scr, y, 2, "[ Hide   ]", hide_a);   y += 1
     safe(scr, y, 2, "[ Repair ]", repair_a); y += 1
     svc_a = curses.color_pair(1) | curses.A_BOLD if svc else curses.color_pair(3) | curses.A_BOLD
@@ -1512,10 +1506,10 @@ def draw_footer(scr, editing, svc=False):
             footer1 = "[i] cam IPs \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
             footer2 = ""
         elif _footer_locked:
-            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] cv \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
         else:
-            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] cv \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
     _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
@@ -1778,14 +1772,14 @@ def main(scr):
                     pass
             threading.Thread(target=_set_show, daemon=True).start()
         elif k == ord('b'):
-            def _set_blur():
+            def _set_cv():
                 import urllib.request
                 try:
-                    req = urllib.request.Request('http://127.0.0.1:5000/api/feed-mode', data=b'cloak', method='POST')
+                    req = urllib.request.Request('http://127.0.0.1:5000/api/feed-mode', data=b'cv', method='POST')
                     urllib.request.urlopen(req, timeout=1)
                 except Exception:
                     pass
-            threading.Thread(target=_set_blur, daemon=True).start()
+            threading.Thread(target=_set_cv, daemon=True).start()
         elif k == ord('h'):
             def _set_hide():
                 import urllib.request
@@ -1813,15 +1807,6 @@ def main(scr):
                 except Exception:
                     pass
             threading.Thread(target=_toggle_lock, daemon=True).start()
-        elif k == ord('w'):
-            def _toggle_bw():
-                import urllib.request
-                try:
-                    req = urllib.request.Request('http://127.0.0.1:5000/api/bw-mode', data=b'', method='POST')
-                    urllib.request.urlopen(req, timeout=1)
-                except Exception:
-                    pass
-            threading.Thread(target=_toggle_bw, daemon=True).start()
         elif k == ord('z'):
             curses.flash()
             curses.beep()

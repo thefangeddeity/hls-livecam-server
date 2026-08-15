@@ -293,17 +293,11 @@ class FeedPanel(Panel):
         strip.addWidget(Divider(vertical=True))
         strip.addSpacing(GUTTER)
         self.b_show = _compact(QPushButton("Show"))
-        self.b_blur = _compact(QPushButton("Blur"))
+        self.b_cv   = _compact(QPushButton("CV"))
         self.b_hide = _compact(QPushButton("Hide"))
-        for b, m in ((self.b_show, "show"), (self.b_blur, "cloak"), (self.b_hide, "hide")):
+        for b, m in ((self.b_show, "show"), (self.b_cv, "cv"), (self.b_hide, "hide")):
             b.clicked.connect(lambda _=False, mode=m: self._set_mode(mode))
             strip.addWidget(b)
-
-        # "&&" — Qt eats a single & as a mnemonic marker and would render "BW".
-        self.bw = _compact(QCheckBox("B&&W"))
-        self.bw.clicked.connect(self._toggle_bw)
-        strip.addSpacing(GUTTER)
-        strip.addWidget(self.bw)
 
         self.sup_status = QLabel("")
         self.sup_status.setObjectName("Hint")
@@ -326,9 +320,6 @@ class FeedPanel(Panel):
     def _set_mode(self, mode):
         probes.run_async(probes.set_feed_mode, mode, done=self._refresh)
 
-    def _toggle_bw(self):
-        probes.run_async(probes.toggle_bw, done=self._refresh)
-
     def _buzz(self):
         QGuiApplication.beep()
         probes.run_async(probes.buzz)
@@ -345,26 +336,19 @@ class FeedPanel(Panel):
 
     def update_from(self, snap):
         mode = snap.get("feed_mode", "show")
-        bw = snap.get("bw_mode", "false") == "true"
         svc = snap.get("svc", False)
+        # Accept both -- our own broadcast-api emits 'cv' now, but a node
+        # still on the pre-pivot build may report 'cloak'.
+        is_cv = mode in ("cv", "cloak")
 
-        # §6b naming: user-facing word is Blur; `cloak` is the API value only.
-        label = {"show": "SHOW", "cloak": "BLUR", "hide": "HIDE"}.get(mode, mode.upper())
-        if mode == "cloak" and bw:
-            label += " · B&W"
+        label = {"show": "SHOW", "hide": "HIDE"}.get(mode, "CV MODE" if is_cv else mode.upper())
         self.mode.setText(label)
 
         _toggle_style(self.b_show, svc and mode == "show")
-        _toggle_style(self.b_blur, svc and mode == "cloak")
+        _toggle_style(self.b_cv, svc and is_cv)
         _toggle_style(self.b_hide, svc and mode == "hide")
 
-        self.bw.blockSignals(True)
-        self.bw.setChecked(bw)
-        self.bw.blockSignals(False)
-        # B&W only means anything while Blur is active (§6b: it's a modifier).
-        self.bw.setEnabled(svc and mode == "cloak")
-
-        for b in (self.b_show, self.b_blur, self.b_hide, self.b_buzz):
+        for b in (self.b_show, self.b_cv, self.b_hide, self.b_buzz):
             b.setEnabled(svc)
         _toggle_style(self.b_feed, self.win.feed_on)
 

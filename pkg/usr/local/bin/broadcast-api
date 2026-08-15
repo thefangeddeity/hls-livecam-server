@@ -6,12 +6,11 @@ Studio model: pyfakewebcam writes frames to v4l2loopback (/dev/video10).
 Publisher ffmpeg reads from loopback, pushes to mediamtx. Non-blocking.
 """
 from flask import Flask, request, abort
-import os, subprocess, time, sys, threading, io, signal
+import os, subprocess, time, sys, threading, signal
 import numpy as np
 import pyfakewebcam
 sys.path.insert(0, '/usr/share/hls-livecam-server')
-import block_art as _ba
-from PIL import Image
+import cv_processor as _cvp
 
 app = Flask(__name__)
 
@@ -25,10 +24,19 @@ FEED_MODE_FILE  = "/var/lib/hls-livecam/feed_mode"
 # consequence: this is a privacy control on a camera pointed at a family's
 # living space. A restart previously reset it to 'show', exposing the clear
 # camera even though the operator had deliberately chosen cloak -- observed
-# twice in one run. Cloak is the safe default when no prior state exists;
+# twice in one run. CV is the safe default when no prior state exists;
 # 'show' is never assumed.
-SAFE_FEED_MODE  = 'cloak'
-VALID_MODES     = ('show', 'cloak', 'hide')
+SAFE_FEED_MODE  = 'cv'
+VALID_MODES     = ('show', 'cv', 'hide')
+# CV Mode pivot (SPEC fleet contract): 'cloak' was the pre-pivot name for
+# this mode. Every node in the fleet talks to every other node's endpoints
+# and will not ship the pivot on the same day, so this alias is accepted on
+# input indefinitely -- not just through a transition window.
+MODE_ALIASES    = {'cloak': 'cv'}
+
+def _normalize_mode(val):
+    return MODE_ALIASES.get(val, val)
+
 MAX_LEN         = 120
 DEVICE_ENV      = '/etc/hls-livecam/device.env'
 LOOPBACK_DEVICE = '/dev/video10'
@@ -43,7 +51,6 @@ _pub_proc = None
 # never empties, and systemd waits out its full stop timeout before SIGKILL
 # -- leaving the unit 'failed' and an ffmpeg still holding the camera.
 _shutting_down = threading.Event()
-GOL_COLS        = 80
 
 def _read_device_env():
     env = {}
@@ -63,7 +70,7 @@ def _read_feed_mode():
     """Last deliberate mode, or the safe default. Never 'show' by fallback."""
     try:
         with open(FEED_MODE_FILE) as f:
-            val = f.read().strip()
+            val = _normalize_mode(f.read().strip())
         if val in VALID_MODES:
             return val
     except Exception:
@@ -80,7 +87,6 @@ def _write_feed_mode(mode):
 
 _mode      = _read_feed_mode()
 _mode_lock = threading.Lock()
-_bw_mode   = False
 try:
     with open(LOCK_FILE) as _f: _msg_lock = _f.read().strip() == "true"
 except FileNotFoundError: _msg_lock = True
@@ -89,9 +95,6 @@ _hide_frame     = None
 # -- Camera frame cache --
 _cam_frame      = None
 _cam_frame_lock = threading.Lock()
-
-def _png_to_raw(png_bytes):
-    return Image.open(io.BytesIO(png_bytes)).convert('RGB').tobytes()
 
 # Hide publishes a black frame. Matches the Windows node, whose hide_command
 # is `-f lavfi -i color=black:s=1280x720:r=30` -- viewers get a blank screen
@@ -193,6 +196,7 @@ def _writer_loop():
     _pub_proc = pub_holder[0]
     time.sleep(1.0)
 
+    cv_proc = _cvp.CVProcessor()
     prev_mode = None
     while not _shutting_down.is_set():
         with _mode_lock:
@@ -214,12 +218,12 @@ def _writer_loop():
 
             if mode == 'show':
                 frame_arr = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
-            elif mode == 'cloak':
-                if _bw_mode:
-                    rendered = _png_to_raw(_ba.render_cloak_bytes_bw(raw, FRAME_W, FRAME_H, GOL_COLS))
-                else:
-                    rendered = _png_to_raw(_ba.render_cloak_bytes(raw, FRAME_W, FRAME_H, GOL_COLS))
-                frame_arr = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3)
+            elif mode == 'cv':
+                # Stays in NumPy/OpenCV array form throughout -- no PNG/PIL
+                # round trip. That cycle is what the old cloak render did,
+                # and it measured ~190ms/frame here against a 66.7ms budget.
+                raw_arr = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
+                frame_arr, _cv_meta = cv_proc.process(raw_arr)
             else:  # hide
                 frame_arr = _render_hide_frame(FRAME_W, FRAME_H)
             prev_mode = mode
@@ -234,15 +238,17 @@ def _writer_loop():
 
 threading.Thread(target=_writer_loop, daemon=True).start()
 
+# CV Mode pivot: the standalone B&W control is gone (SPEC §1-2). The route
+# stays routable -- older clients on other fleet nodes still call it -- but
+# is now a permanent no-op reporting the disabled state. No stored state:
+# there is nothing left for a toggle to flip.
 @app.route('/api/bw-mode', methods=['GET'])
 def bw_mode_get():
-    return ('true' if _bw_mode else 'false'), 200
+    return 'false', 200
 
 @app.route('/api/bw-mode', methods=['POST'])
 def bw_mode_post():
-    global _bw_mode
-    _bw_mode = not _bw_mode
-    return ('true' if _bw_mode else 'false'), 200
+    return 'false', 200
 
 @app.route('/api/feed-mode', methods=['GET'])
 def feed_mode_get():
@@ -252,8 +258,8 @@ def feed_mode_get():
 @app.route('/api/feed-mode', methods=['POST'])
 def feed_mode_post():
     global _mode
-    new_mode = request.get_data(as_text=True).strip()
-    if new_mode not in ('show', 'cloak', 'hide'):
+    new_mode = _normalize_mode(request.get_data(as_text=True).strip())
+    if new_mode not in VALID_MODES:
         abort(400)
     with _mode_lock:
         _mode = new_mode

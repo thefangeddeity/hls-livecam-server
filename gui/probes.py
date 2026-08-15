@@ -89,10 +89,6 @@ def set_feed_mode(mode):
     return _post("feed-mode", mode.encode())
 
 
-def toggle_bw():
-    return _post("bw-mode")
-
-
 def toggle_msg_lock():
     return _post("msg-lock")
 
@@ -281,7 +277,6 @@ class SlowWorker(QThread):
                     "dark": os.path.exists(cd.DARK_FLAG),
                     "feed_mode": cd._api_get("feed-mode", "show"),
                     "msg_lock": cd._api_get("msg-lock", "false"),
-                    "bw_mode": cd._api_get("bw-mode", "false"),
                     "cputemp": cd._cpu_temp(),
                     "smart": smart_lines(),
                     "broadcast": cd.read_broadcast(),

@@ -272,7 +272,7 @@ QPushButton[toggled="true"] {{
     font-weight: 600;
 }}
 
-/* Compact density: the FEED strip packs Feed/mode/B&W/Pause/Repair/Buzz into
+/* Compact density: the FEED strip packs Feed/mode/CV/Pause/Repair/Buzz into
    one row, more controls than the standard 6px/10px padding comfortably
    holds at anything narrower than a wide window. Toolbar-style tighter
    controls here only -- same pattern as Xcode/Photos.app toolbars -- rather

@@ -495,16 +495,13 @@
       <div class="section">
         <div class="section-title">Controls</div>
         <div class="controls-stack">
-          <div class="feed-mode-label">Show, blur, or hide feed</div>
+          <div class="feed-mode-label">Show, enhance, or hide feed</div>
           <div class="feed-mode-grid">
             <button class="btn" id="showBtn" onclick="setFeedMode('show')">Show</button>
-            <button class="btn" id="cloakBtn" onclick="setFeedMode('cloak')">Blur</button>
+            <button class="btn" id="cvBtn" onclick="setFeedMode('cv')">CV Mode</button>
             <button class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
           </div>
           <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
-          <label class="mute-label">
-            <input type="checkbox" id="bwCheck" onchange="toggleBW()"> B&W Blur
-          </label>
           <label class="mute-label">
             <input type="checkbox" id="themeCheck" onchange="toggleTheme()"> Light theme
           </label>
@@ -548,7 +545,7 @@
   var errorOverlay = document.getElementById('errorOverlay');
   var darkOverlay  = document.getElementById('darkOverlay');
   var showBtn      = document.getElementById('showBtn');
-  var cloakBtn     = document.getElementById('cloakBtn');
+  var cvBtn        = document.getElementById('cvBtn');
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
   var muteCheck    = document.getElementById('muteCheck');
@@ -559,7 +556,7 @@
   var hls = null;
   var recovering = false, retryTimer = null;
   var liveAt = null, uptimeInterval = null;
-  var feedMode = 'show'; // 'show' | 'cloak' | 'hide'
+  var feedMode = 'show'; // 'show' | 'cv' | 'hide'
   var fadeInTimer = null;
 
   var protoEl = document.getElementById('protoVal');
@@ -631,30 +628,6 @@
   function updateMuteBtn() {
     muteCheck.checked = buzzMuted;
   }
-
-  var bwMode = false;
-  function updateBWBtn() {
-    var cb = document.getElementById('bwCheck');
-    cb.checked = bwMode;
-    cb.disabled = (feedMode !== 'cloak');
-    cb.parentElement.style.opacity = (feedMode !== 'cloak') ? '0.4' : '1';
-  }
-  function toggleBW() {
-    if (feedMode === 'cloak') fadeOut();
-    fetch('/api/bw-mode', { method: 'POST' })
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .catch(function() { return null; })
-      .then(function(v) { if (v !== null) { bwMode = v.trim() === 'true'; updateBWBtn(); } });
-  }
-  function pollBWMode() {
-    fetch('/api/bw-mode', { cache: 'no-store' })
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .catch(function() { return null; })
-      .then(function(v) { if (v !== null) { bwMode = v.trim() === 'true'; updateBWBtn(); } });
-  }
-  pollBWMode();
-  setInterval(pollBWMode, 5000);
-  updateBWBtn();
 
   var msgLock = false;
   function updateLockBtn() { document.getElementById('lockCheck').checked = msgLock; }
@@ -818,7 +791,7 @@
 
   function updateFeedButtons() {
     showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
-    cloakBtn.className = 'btn' + (feedMode === 'cloak' ? '' : ' primary');
+    cvBtn.className = 'btn' + (feedMode === 'cv' ? '' : ' primary');
     hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
     // Hide publishes a black frame, which on its own is indistinguishable
     // from a dead stream. Say plainly that it is deliberate -- and keep it
@@ -830,7 +803,7 @@
   function setFeedMode(mode) {
     if (mode === feedMode) return;
     fadeOut();
-    showBtn.disabled = true; cloakBtn.disabled = true; hideBtn.disabled = true;
+    showBtn.disabled = true; cvBtn.disabled = true; hideBtn.disabled = true;
     fetch('/api/feed-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
@@ -842,10 +815,9 @@
       if (m) {
         feedMode = m.trim();
         updateFeedButtons();
-        updateBWBtn();
         setTimeout(reloadStream, 1000);
       }
-      showBtn.disabled = false; cloakBtn.disabled = false; hideBtn.disabled = false;
+      showBtn.disabled = false; cvBtn.disabled = false; hideBtn.disabled = false;
     });
   }
 
@@ -861,7 +833,6 @@
           // here and the cover becomes universal.
           feedMode = m.trim();
           updateFeedButtons();
-          updateBWBtn();
           fadeOut();
           setTimeout(reloadStream, 1000);
         }
