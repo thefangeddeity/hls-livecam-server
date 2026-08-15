@@ -1056,7 +1056,19 @@ class Dashboard(QWidget):
             quals.append("checking stream")
         elif base in ("DEGRADED", "ERROR", "DOWN"):
             quals.append("suggest repair")
-        if snap.get("dark"):
+        # The feed mode is a fact about what viewers are seeing, and it
+        # belongs in the header alongside the health state. CV Mode had no
+        # qualifier of its own, so the only thing shown was "feed hidden"
+        # from the dark flag -- which reads as though CV Mode hides the
+        # feed, when it is the one mode that actively processes it.
+        mode = snap.get("feed_mode", "")
+        if mode in ("cv", "cloak"):
+            quals.append("Computer Vision enabled")
+        elif mode == "hide":
+            quals.append("feed hidden")
+        elif snap.get("dark"):
+            # Dark is a separate mechanism from feed mode; only surface it
+            # when the mode itself has not already explained the picture.
             quals.append("feed hidden")
         self.qualifiers.setText(" | ".join(quals))
 

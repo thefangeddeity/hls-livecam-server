@@ -1196,7 +1196,16 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
         qualifiers.append("services stopped")
     elif base_status in ("DEGRADED", "ERROR", "DOWN"):
         qualifiers.append("suggest repair")
-    if dark:
+    # Feed mode belongs in the header next to health. Without a qualifier of
+    # its own, CV Mode showed only "feed hidden" from the dark flag, which
+    # reads as though CV hides the feed when it is the mode that processes
+    # it. Backported from the GUI so both surfaces say the same thing.
+    _qual_mode = snap.get('feed_mode', 'show')
+    if _qual_mode in ('cv', 'cloak'):
+        qualifiers.append("Computer Vision enabled")
+    elif _qual_mode == 'hide':
+        qualifiers.append("feed hidden")
+    elif dark:
         qualifiers.append("feed hidden")
     mid = "\u2022 " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else "")
     _mid_x = w // 2 - len(mid) // 2

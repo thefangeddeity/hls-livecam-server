@@ -57,6 +57,18 @@ _DEFAULTS = {
     'CV_HIGHLIGHT_CEILING':   255,   # 255 = disabled; <255 caps the L channel there, freeing
                                       # numeric headroom below white for CLAHE to work with
     'CV_HIGHLIGHT_GAMMA':     1.0,   # curve shape of the compression; 1.0 = linear
+
+    # Adaptive edge mode. Below a sharpness threshold, enhancement stops
+    # helping -- CLAHE on mush is still mush -- so the pipeline switches to
+    # drawing the structure it can still find. Threshold-driven and
+    # automatic, so the same config behaves correctly on a sharp camera and
+    # a soft one without per-install tuning.
+    'CV_EDGE_ENABLED':        1,     # 0 disables the stage entirely
+    'CV_EDGE_SHARPNESS_MIN':  35.0,  # variance-of-Laplacian below which edges engage
+    'CV_EDGE_SHARPNESS_OFF':  70.0,  # ...and at/above which they are fully absent
+    'CV_EDGE_STRENGTH':       0.75,  # opacity of the darkest strokes at full engagement
+    'CV_EDGE_SIGMA':          1.0,   # base stroke width; scaled up as the image softens
+    'CV_EDGE_SIGMA_MAX':      3.5,   # cap, so a very soft frame does not draw slabs
 }
 
 
@@ -109,6 +121,7 @@ class CVProcessor:
 
     def __init__(self, denv=None):
         denv = denv or {}
+        self._last_luma = None  # denoised L channel, kept by _tone_correct
         self._frames = deque(maxlen=self.HISTORY)  # raw RGB frames, newest last
         self._gray_small = deque(maxlen=self.HISTORY)  # matching downscaled gray, for flow
 
@@ -119,6 +132,13 @@ class CVProcessor:
         clip = _read_float(denv, 'CV_CLAHE_CLIP')
         tiles = _read_int(denv, 'CV_CLAHE_TILES')
         self._clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(tiles, tiles))
+
+        self._edge_enabled = _read_int(denv, 'CV_EDGE_ENABLED') != 0
+        self._edge_sharp_min = _read_float(denv, 'CV_EDGE_SHARPNESS_MIN')
+        self._edge_sharp_off = _read_float(denv, 'CV_EDGE_SHARPNESS_OFF')
+        self._edge_strength = _read_float(denv, 'CV_EDGE_STRENGTH')
+        self._edge_sigma = _read_float(denv, 'CV_EDGE_SIGMA')
+        self._edge_sigma_max = _read_float(denv, 'CV_EDGE_SIGMA_MAX')
 
         hi_threshold = _read_int(denv, 'CV_HIGHLIGHT_THRESHOLD')
         hi_ceiling = _read_int(denv, 'CV_HIGHLIGHT_CEILING')
@@ -166,16 +186,104 @@ class CVProcessor:
         sharpened = self._sharpen(toned, moving_mask)
         t['sharpen'] = time.perf_counter() - t4
 
+        # Sharpness is measured on the *denoised* luminance, not the raw
+        # frame. Sensor noise is high-frequency, so a variance-of-Laplacian
+        # taken before denoising reads grain as detail and a blurry, noisy
+        # frame scores as sharp -- exactly backwards. Measuring after the
+        # temporal blend removes that confound. (Tenengrad scores better in
+        # comparative focus studies but is documented as having weak noise
+        # immunity, which is the wrong trade for an old webcam.)
+        t5 = time.perf_counter()
+        sharpness = self._measure_sharpness(self._last_luma)
+        edged, edge_weight = self._draw_edges(sharpened, sharpness)
+        t['edges'] = time.perf_counter() - t5
+
         self._frames.append(frame)
         self._gray_small.append(small_gray)
 
         t['total'] = time.perf_counter() - t0
         metadata = {
             'motion': motion_mean,
+            'sharpness': round(sharpness, 2),
+            'edge_weight': round(edge_weight, 3),
             'timings_ms': {k: round(v * 1000, 3) for k, v in t.items()},
             'history': len(self._frames),
         }
-        return sharpened, metadata
+        return edged, metadata
+
+    def _measure_sharpness(self, luma):
+        """Variance of the Laplacian on a quarter-scale luminance image.
+
+        Takes the L channel the tone stage has already extracted, rather
+        than converting and downscaling a colour frame again -- measured at
+        10.2ms per frame when it did its own full-resolution colour resize,
+        paid on *every* frame including sharp ones where no edges are drawn.
+        Downscaling a single channel that already exists is a fraction of
+        that.
+
+        Quarter scale also suppresses, via INTER_AREA averaging, the sensor
+        grain that would otherwise inflate the score. Absolute values are
+        therefore lower than a full-resolution figure, which is why the
+        thresholds are configuration rather than constants.
+        """
+        small = cv2.resize(luma, None, fx=_FLOW_SCALE, fy=_FLOW_SCALE,
+                           interpolation=cv2.INTER_AREA)
+        return float(cv2.Laplacian(small, cv2.CV_64F).var())
+
+    def _edge_weight(self, sharpness):
+        """0 when the image is sharp enough to leave alone, 1 when it is
+        thoroughly soft, ramped between. A ramp rather than a hard switch:
+        a binary cutoff makes edges snap in and out as the score dithers
+        across the threshold, which is far more distracting than the edges
+        themselves."""
+        lo, hi = self._edge_sharp_min, self._edge_sharp_off
+        if hi <= lo:
+            return 1.0 if sharpness <= lo else 0.0
+        if sharpness >= hi:
+            return 0.0
+        if sharpness <= lo:
+            return 1.0
+        return float((hi - sharpness) / (hi - lo))
+
+    def _draw_edges(self, frame, sharpness):
+        """XDoG-style line overlay, engaged only as the image goes soft.
+
+        Difference-of-Gaussians rather than Canny: it yields tonal strokes
+        that vary with edge strength instead of uniform binary hairlines,
+        which is what reads as a drawing rather than a mask. Flow-based
+        (coherent) line drawing is the better-looking method but costs
+        several times more, and this has to run on the weakest node in the
+        fleet.
+
+        Stroke width scales with how soft the image is, per the brief: a
+        heavily blurred frame has no fine structure left to trace, so a
+        hairline would follow noise. Returns (frame, weight_applied).
+        """
+        if not self._edge_enabled:
+            return frame, 0.0
+        w = self._edge_weight(sharpness)
+        if w <= 0.0:
+            # Sharp feed: absent entirely, and costing nothing beyond the
+            # metric itself. This is the tanzania case.
+            return frame, 0.0
+
+        sigma = min(self._edge_sigma * (1.0 + 2.0 * w), self._edge_sigma_max)
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        g1 = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma)
+        g2 = cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma * 1.6)
+        dog = cv2.subtract(g1, g2)
+
+        # Normalise so stroke darkness is comparable frame to frame rather
+        # than tracking absolute scene contrast.
+        mx = float(dog.max())
+        if mx <= 1e-6:
+            return frame, 0.0
+        strokes = cv2.multiply(dog, 255.0 / mx)
+
+        # Darken along strokes: multiply toward black, scaled by engagement.
+        amount = self._edge_strength * w
+        ink = cv2.cvtColor(strokes, cv2.COLOR_GRAY2RGB)
+        return cv2.addWeighted(frame, 1.0, ink, -amount, 0), w
 
     def _temporal_denoise(self, frame, moving_mask):
         """Temporally average against up to two prior frames, then restore
@@ -206,6 +314,11 @@ class CVProcessor:
         plateau of saturated values with nothing left to redistribute."""
         lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
         l, a, b = cv2.split(lab)
+        # Kept for the sharpness metric: this is the denoised luminance,
+        # before CLAHE stretches local contrast. Measuring after CLAHE would
+        # report the enhancement rather than the underlying focus, and the
+        # decision to draw edges has to be made about the source image.
+        self._last_luma = l
         l = cv2.LUT(l, self._highlight_lut)
         l2 = self._clahe.apply(l)
         return cv2.cvtColor(cv2.merge((l2, a, b)), cv2.COLOR_LAB2RGB)
