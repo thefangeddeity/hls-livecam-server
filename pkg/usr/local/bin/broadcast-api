@@ -19,6 +19,16 @@ BROADCAST_FILE  = "/var/www/hls-livecam/broadcast.txt"
 BUZZ_FILE       = "/var/www/hls-livecam/buzz.txt"
 DARK_FLAG       = "/var/lib/hls-livecam/dark"
 LOCK_FILE       = "/var/lib/hls-livecam/msg_lock"
+FEED_MODE_FILE  = "/var/lib/hls-livecam/feed_mode"
+
+# The one default in this system where the wrong value has a real-world
+# consequence: this is a privacy control on a camera pointed at a family's
+# living space. A restart previously reset it to 'show', exposing the clear
+# camera even though the operator had deliberately chosen cloak -- observed
+# twice in one run. Cloak is the safe default when no prior state exists;
+# 'show' is never assumed.
+SAFE_FEED_MODE  = 'cloak'
+VALID_MODES     = ('show', 'cloak', 'hide')
 MAX_LEN         = 120
 DEVICE_ENV      = '/etc/hls-livecam/device.env'
 LOOPBACK_DEVICE = '/dev/video10'
@@ -49,7 +59,26 @@ def _read_device_env():
     return env
 
 # -- Mode state --
-_mode      = 'show'
+def _read_feed_mode():
+    """Last deliberate mode, or the safe default. Never 'show' by fallback."""
+    try:
+        with open(FEED_MODE_FILE) as f:
+            val = f.read().strip()
+        if val in VALID_MODES:
+            return val
+    except Exception:
+        pass
+    return SAFE_FEED_MODE
+
+def _write_feed_mode(mode):
+    try:
+        os.makedirs(os.path.dirname(FEED_MODE_FILE), exist_ok=True)
+        with open(FEED_MODE_FILE, 'w') as f:
+            f.write(mode)
+    except Exception:
+        pass
+
+_mode      = _read_feed_mode()
 _mode_lock = threading.Lock()
 _bw_mode   = False
 try:
@@ -87,13 +116,24 @@ def _render_hide_frame(width, height):
 
 def _start_loopback_publisher(denv):
     fr = int(denv.get('FRAMERATE', 15))
+    # Keyframe interval, in seconds of video. mediamtx can only cut a segment
+    # at a keyframe, so this is what actually determines segment length: at
+    # GOP 4s the configured 1s hlsSegmentDuration is silently ignored and the
+    # manifest reports TARGETDURATION:4, which is where the viewer's live-edge
+    # lag comes from.
+    #
+    # Run-1 established 1s and verified it live. It was lost because the fix
+    # was applied to the installed file and never mirrored here, so the next
+    # package install overwrote it. Sourced from device.env now so it can be
+    # retuned without editing code, and committed here so it survives.
+    gop_seconds = int(denv.get('GOP_SECONDS', 1))
     return subprocess.Popen([
         'ffmpeg', '-hide_banner', '-loglevel', 'error',
         '-f', 'v4l2', '-i', LOOPBACK_DEVICE,
         '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-vf', f'fps={fr},format=yuv420p',
         '-profile:v', 'high', '-level', '4.0',
-        '-b:v', '1500k', '-g', str(fr * 4),
+        '-b:v', '1500k', '-g', str(max(1, fr * gop_seconds)),
         '-rtsp_transport', 'tcp', '-f', 'rtsp', 'rtsp://127.0.0.1:8554/cam'
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -217,6 +257,9 @@ def feed_mode_post():
         abort(400)
     with _mode_lock:
         _mode = new_mode
+    # Persist immediately: a mode set by the operator must survive a restart,
+    # a crash, or a package upgrade.
+    _write_feed_mode(new_mode)
     return new_mode, 200
 
 @app.route('/api/broadcast', methods=['POST'])

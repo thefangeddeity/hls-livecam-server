@@ -174,6 +174,11 @@ VIDEO_DEVICE=$STABLE_DEV
 V4L2_INPUT_FMT=$INPUT_FMT
 VIDEO_SIZE=1280x720
 FRAMERATE=$FRAMERATE
+# Keyframe interval in seconds. mediamtx can only cut a segment at a
+# keyframe, so this determines real segment length -- at 4 the configured
+# 1s hlsSegmentDuration is silently ignored and viewers get ~12s of
+# live-edge lag. Raise it only if the encoder cannot keep up.
+GOP_SECONDS=1
 EOF
 echo -e "  ${GREEN}Written to $DEVICE_ENV${NC}"
 
