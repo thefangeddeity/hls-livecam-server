@@ -103,11 +103,11 @@ _DEFAULTS = {
     # The tracker carries boxes between passes and the HUD is drawn every
     # frame from tracker state, so labels persist smoothly instead of
     # strobing at the detection cadence.
-    'CV_DETECT_ENABLED':      0,     # off by default
-    'CV_DETECT_BACKEND':      'motion',   # motion | onnx | null
+    'CV_DETECT_ENABLED':      1,     # off by default
+    'CV_DETECT_BACKEND':      'onnx',   # motion | onnx | null
     'CV_DETECT_INTERVAL':     8,     # run the detector every N frames
-    'CV_DETECT_MODEL':        '',    # path to .onnx, for the onnx backend
-    'CV_DETECT_CONF':         0.35,
+    'CV_DETECT_MODEL':        '/usr/share/hls-livecam-server/models/candidates/yolov8n.onnx',
+    'CV_DETECT_CONF':         0.12,
     'CV_DETECT_MIN_AREA':     0.004, # motion backend: ignore blobs smaller than this
     'CV_HUD_ENABLED':         1,     # draw boxes/labels when detection is on
 
@@ -253,15 +253,32 @@ class CVProcessor:
             backend = str((denv or {}).get('CV_DETECT_BACKEND',
                                            _DEFAULTS['CV_DETECT_BACKEND']))
             try:
+                _raw_model = (denv or {}).get('CV_DETECT_MODEL')
+                _effective_model = str(
+                    _raw_model or _DEFAULTS['CV_DETECT_MODEL']
+                )
+
+                print(
+                    "SHAKEY DETECTOR CONFIG:"
+                    f" backend={backend!r}"
+                    f" raw_model={_raw_model!r}"
+                    f" effective_model={_effective_model!r}"
+                    f" exists={__import__('os').path.exists(_effective_model)!r}",
+                    flush=True,
+                )
+
                 self._detector = _cvd.make_detector(
                     backend,
-                    model_path=str((denv or {}).get('CV_DETECT_MODEL', '')),
+                    model_path=_effective_model,
                     conf=_read_float(denv, 'CV_DETECT_CONF'),
                     min_area_frac=_read_float(denv, 'CV_DETECT_MIN_AREA'))
                 self._tracker = _cvd.Tracker()
-            except Exception:
-                # A missing or unreadable model must not take the feed down;
-                # the pipeline degrades to no HUD.
+            except Exception as exc:
+                print(
+                    f"SHAKEY DETECTOR INIT ERROR: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
                 self._detector = None
         self._sharpen_motion = _read_int(denv, 'CV_SHARPEN_MOTION') != 0
         self._denoise_motion = _read_int(denv, 'CV_DENOISE_MOTION') != 0
@@ -285,8 +302,6 @@ class CVProcessor:
             _read_int(denv, 'CV_SHADOW_RANGE'))
 
     def process(self, frame):
-        """frame: HxWx3 uint8 RGB. Returns (frame, metadata); output frame
-        is always the same HxWx3 uint8 RGB shape as the input."""
         t = {}
         t0 = time.perf_counter()
 
@@ -378,6 +393,18 @@ class CVProcessor:
 
         self._frames.append(frame)
         self._gray_small.append(small_gray)
+
+        # SHAKey HUD: render on the FINAL display frame, immediately before
+        # returning it. This is deliberately after all visual processing so
+        # the HUD cannot be consumed by the enhancement/edge pipeline.
+        if self._hud_enabled:
+            edged = _cvd.draw_hud(edged, hud_tracks)
+            if self._frame_n % self._detect_interval == 0:
+                print(
+                    f"SHAKEY HUD RENDER: frame={self._frame_n} "
+                    f"tracks={len(hud_tracks)} enabled=1",
+                    flush=True,
+                )
 
         t['total'] = time.perf_counter() - t0
         metadata = {
@@ -481,23 +508,45 @@ class CVProcessor:
         return cv2.addWeighted(frame, 1.0, ink, -amount, 0), w
 
     def _detect_and_hud(self, source_frame, canvas):
-        """Run the detector on cadence, then draw tracker state every frame."""
-        if self._detector is None or self._tracker is None:
-            return canvas, []
+        """Run detector on cadence; always render SHAKey telemetry."""
         self._frame_n += 1
-        if self._frame_n % self._detect_interval == 0:
-            try:
-                dets = self._detector.detect(source_frame)
-                for d in dets:
-                    # Coat pattern is refined from the source image, not the
-                    # drawing -- the line art has no colour left to judge by.
-                    d.cls = _cvd.classify_coat(source_frame, d)
-                self._tracker.update(dets)
-            except Exception:
-                pass
-        tracks = [t for t in self._tracker.tracks.values() if t.state != 'departed']
-        if self._hud_enabled and tracks:
+        tracks = []
+
+        if self._detector is not None and self._tracker is not None:
+            if self._frame_n % self._detect_interval == 0:
+                try:
+                    dets = self._detector.detect(source_frame)
+
+                    for d in dets:
+                        d.cls = _cvd.classify_coat(source_frame, d)
+
+                    self._tracker.update(dets)
+
+                    print(
+                        "SHAKEY DETECT:"
+                        f" frame={self._frame_n}"
+                        f" detections={len(dets)}"
+                        f" tracks={len(self._tracker.tracks)}"
+                        f" detail={[f"{d.cls}:{d.confidence:.3f}" for d in dets]}",
+                        flush=True,
+                    )
+
+                except Exception as exc:
+                    print(
+                        f"SHAKEY DETECT ERROR:"
+                        f" frame={self._frame_n}"
+                        f" {type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+
+            tracks = [
+                t for t in self._tracker.tracks.values()
+                if t.state != 'departed'
+            ]
+
+        if self._hud_enabled:
             canvas = _cvd.draw_hud(canvas, tracks)
+
         return canvas, tracks
 
     def _draw_sharpie(self, frame):

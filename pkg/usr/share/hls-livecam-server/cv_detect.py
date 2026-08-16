@@ -37,11 +37,15 @@ COCO_LABELS = {
     0:  'human',
     15: 'cat',
     45: 'bowl',      # the cat plate
-    46: 'bowl',
+    46: 'banana',    # retained model class; not a display target
+    56: 'chair',
+    57: 'couch',
+    59: 'bed',
+    75: 'vase',
+    77: 'teddy bear',
 }
 
 LABEL_ALIAS = {
-    'bowl': 'cat plate',
     'motion': 'motion',
 }
 
@@ -168,16 +172,9 @@ class MotionDetector(Detector):
 
 
 class OnnxDetector(Detector):
-    """Single-stage ONNX detector via cv2.dnn.
+    """Single-stage ONNX detector via cv2.dnn."""
 
-    cv2.dnn rather than onnxruntime: OpenCV is already a hard dependency on
-    every node, so this adds a file rather than a package. Both tanzania
-    (cv2 5.0) and tina (cv2 4.10) can load ONNX through it.
-
-    Expects a YOLO-family output: (1, 84, N) or (1, N, 84).
-    """
-
-    def __init__(self, model_path, size=320, conf=0.35, nms=0.45, classes=None):
+    def __init__(self, model_path, size=640, conf=0.35, nms=0.45, classes=None):
         self.model_path = model_path
         self.size = int(size)
         self.conf = float(conf)
@@ -187,8 +184,6 @@ class OnnxDetector(Detector):
 
     def load(self):
         self.net = cv2.dnn.readNetFromONNX(self.model_path)
-        # Explicitly CPU: the deployment target has no usable GPU and an
-        # accidental fallback attempt costs startup time for nothing.
         self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
         self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
         return self
@@ -196,78 +191,160 @@ class OnnxDetector(Detector):
     def detect(self, frame):
         if self.net is None:
             return []
-        h, w = frame.shape[:2]
-        blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (self.size, self.size),
-                                     swapRB=False, crop=False)
-        self.net.setInput(blob)
-        out = self.net.forward()
 
-        out = np.squeeze(out)
+        h, w = frame.shape[:2]
+
+        scale = min(self.size / w, self.size / h)
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+
+        resized = cv2.resize(
+            frame, (nw, nh), interpolation=cv2.INTER_LINEAR
+        )
+
+        canvas = np.zeros(
+            (self.size, self.size, 3), dtype=frame.dtype
+        )
+
+        pad_x = (self.size - nw) // 2
+        pad_y = (self.size - nh) // 2
+
+        canvas[
+            pad_y:pad_y + nh,
+            pad_x:pad_x + nw
+        ] = resized
+
+        lab = cv2.cvtColor(canvas, cv2.COLOR_RGB2LAB)
+        l_chan, a_chan, b_chan = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        l_chan = clahe.apply(l_chan)
+        detector_canvas = cv2.cvtColor(
+            cv2.merge((l_chan, a_chan, b_chan)),
+            cv2.COLOR_LAB2RGB,
+        )
+
+        detector_canvas = np.ascontiguousarray(
+            detector_canvas, dtype=np.uint8
+        )
+
+        blob = cv2.dnn.blobFromImage(
+            detector_canvas,
+            scalefactor=1.0 / 255.0,
+            size=(self.size, self.size),
+            mean=(0.0, 0.0, 0.0),
+            swapRB=False,
+            crop=False,
+            ddepth=cv2.CV_32F,
+        )
+
+        self.net.setInput(blob)
+        out = np.squeeze(self.net.forward())
+
         if out.ndim != 2:
             return []
-        # Accept either orientation; YOLOv8 emits (84, N), older exports (N, 84).
+
         if out.shape[0] < out.shape[1]:
             out = out.T
 
-        boxes, confs, ids = [], [], []
-        sx, sy = w / self.size, h / self.size
+        try:
+            probe = out[:, 4:]
+            best_by_class = []
+            for cid in (0, 15, 45, 56, 57, 59, 75, 77):
+                if cid < probe.shape[1]:
+                    best_by_class.append(
+                        f"{cid}:{float(probe[:, cid].max()):.4f}"
+                    )
+            with open("/tmp/tanzania-yolo-live.log", "a") as f:
+                f.write(
+                    " ".join(best_by_class) +
+                    f" | shape={out.shape} conf={self.conf:.3f}\n"
+                )
+        except Exception:
+            pass
+
+        boxes = []
+        confs = []
+        ids = []
+
+        inv_scale = 1.0 / scale
+
         for row in out:
+            if row.shape[0] < 6:
+                continue
+
             scores = row[4:]
             cid = int(np.argmax(scores))
             score = float(scores[cid])
+
             if score < self.conf or cid not in self.classes:
                 continue
-            cx, cy, bw, bh = row[:4]
-            boxes.append([int((cx - bw / 2) * sx), int((cy - bh / 2) * sy),
-                          int(bw * sx), int(bh * sy)])
+            cx, cy, bw, bh = map(float, row[:4])
+
+            x1 = (cx - bw / 2.0 - pad_x) * inv_scale
+            y1 = (cy - bh / 2.0 - pad_y) * inv_scale
+            x2 = (cx + bw / 2.0 - pad_x) * inv_scale
+            y2 = (cy + bh / 2.0 - pad_y) * inv_scale
+
+            x1 = max(0.0, min(float(w - 1), x1))
+            y1 = max(0.0, min(float(h - 1), y1))
+            x2 = max(0.0, min(float(w), x2))
+            y2 = max(0.0, min(float(h), y2))
+
+            bw_px = int(round(x2 - x1))
+            bh_px = int(round(y2 - y1))
+
+            if bw_px <= 0 or bh_px <= 0:
+                continue
+
+            boxes.append([
+                int(round(x1)),
+                int(round(y1)),
+                bw_px,
+                bh_px,
+            ])
             confs.append(score)
             ids.append(cid)
 
         if not boxes:
             return []
-        keep = cv2.dnn.NMSBoxes(boxes, confs, self.conf, self.nms)
+
+        keep = cv2.dnn.NMSBoxes(
+            boxes,
+            confs,
+            self.conf,
+            self.nms,
+        )
+
         if len(keep) == 0:
             return []
+
         dets = []
+
         for i in np.array(keep).flatten():
-            x, y, bw, bh = boxes[i]
-            dets.append(Detection(self.classes[ids[i]], confs[i], x, y, bw, bh))
+            i = int(i)
+            x, y, bw_px, bh_px = boxes[i]
+
+            dets.append(
+                Detection(
+                    self.classes[ids[i]],
+                    confs[i],
+                    x,
+                    y,
+                    bw_px,
+                    bh_px,
+                )
+            )
+
         return dets
 
     def close(self):
         self.net = None
 
-
 def classify_coat(frame, det):
-    """tuxedo vs tabby, from colour statistics on the detected crop.
+    """Return the detector's original class unchanged.
 
-    Not a model: no general detector has these as classes, because a coat
-    pattern is not an object category. The separation is straightforward
-    though -- a tuxedo is bimodal black and white with almost no saturation,
-    a tabby sits at mid luminance with brown/orange hue. Returns the refined
-    label, or the original if the crop is unusable or ambiguous.
+    YOLO is authoritative. No heuristic post-classification is applied.
     """
-    if det.cls != 'cat':
-        return det.cls
-    x, y, w, h = det.box
-    x, y = max(0, x), max(0, y)
-    crop = frame[y:y + h, x:x + w]
-    if crop.size == 0 or crop.shape[0] < 8 or crop.shape[1] < 8:
-        return det.cls
-
-    hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
-    sat = float(hsv[..., 1].mean())
-    val = hsv[..., 2]
-    dark = float((val < 70).mean())
-    light = float((val > 185).mean())
-
-    # Bimodal and desaturated: black-and-white coat.
-    if sat < 60 and dark > 0.25 and light > 0.12:
-        return 'tuxedo cat'
-    # Warm and mid-toned: tabby.
-    hue = float(np.median(hsv[..., 0][val > 40])) if (val > 40).any() else 0.0
-    if sat >= 60 and 5 <= hue <= 30:
-        return 'tabby cat'
     return det.cls
 
 
@@ -343,37 +420,327 @@ class Tracker:
         return list(self.tracks.values())
 
 
-def draw_hud(canvas, tracks, ink=(25, 25, 25)):
-    """Shakey-style: wireframe box, corner ticks, label above.
-
-    Drawn in the same ink as the line art so the overlay belongs to the
-    drawing rather than sitting on top of it as a separate UI layer.
-    """
+def draw_hud(canvas, tracks, ink=(220, 220, 220)):
+    """SHAKey HUD: confidence-weighted, collision-aware target annotations."""
     out = canvas
-    for tr in tracks:
-        if tr.state == 'departed':
-            continue
-        x, y, w, h = tr.box
-        x, y = max(0, x), max(0, y)
-        dashed = tr.state == 'missing'
+    h, w = out.shape[:2]
 
-        cv2.rectangle(out, (x, y), (x + w, y + h), ink, 1 if dashed else 2)
-        # Corner ticks -- the Shakey/SRI look, and they keep the box legible
-        # against a drawing made of similar-weight strokes.
-        t = max(8, min(w, h) // 6)
-        for (px, py, dx, dy) in ((x, y, 1, 1), (x + w, y, -1, 1),
-                                 (x, y + h, 1, -1), (x + w, y + h, -1, -1)):
-            cv2.line(out, (px, py), (px + dx * t, py), ink, 3)
-            cv2.line(out, (px, py), (px, py + dy * t), ink, 3)
+    active = [
+        tr for tr in tracks
+        if tr.state != 'departed'
+    ]
 
-        label = LABEL_ALIAS.get(tr.cls, tr.cls)
-        text = f"{label.upper()}  {tr.confidence*100:.0f}%"
-        if dashed:
-            text += "  ?"
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        ly = max(th + 6, y - 6)
-        cv2.rectangle(out, (x, ly - th - 5), (x + tw + 8, ly + 3), (255, 255, 255), -1)
-        cv2.rectangle(out, (x, ly - th - 5), (x + tw + 8, ly + 3), ink, 1)
-        cv2.putText(out, text, (x + 4, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.5, ink, 1,
-                    cv2.LINE_AA)
+    visible = [
+        tr for tr in active
+        if LABEL_ALIAS.get(tr.cls, tr.cls).upper() != 'MOTION'
+    ]
+
+    count = len(visible)
+    text = f"DETECTING {count} ITEM{'S' if count != 1 else ''}"
+
+    # macOS-light-inspired telemetry:
+    # smaller, lighter, quieter, and using the same visual weight as the
+    # floating target labels rather than the old heavy surveillance text.
+    telemetry_ink = tuple(
+        max(1, min(255, int(round(channel * 0.88))))
+        for channel in ink
+    )
+
+    telemetry_font = cv2.FONT_HERSHEY_SIMPLEX
+    telemetry_scale = 0.52
+    telemetry_thickness = 1
+    telemetry_spacing = 3
+
+    tx = 18
+    ty = h - 42
+
+    for char in text:
+        (cw, ch), _ = cv2.getTextSize(
+            char,
+            telemetry_font,
+            telemetry_scale,
+            telemetry_thickness,
+        )
+
+        cv2.putText(
+            out,
+            char,
+            (tx, ty),
+            telemetry_font,
+            telemetry_scale,
+            telemetry_ink,
+            telemetry_thickness,
+            cv2.LINE_AA,
+        )
+
+        tx += cw + telemetry_spacing
+
+    tag_font = cv2.FONT_HERSHEY_SIMPLEX
+    tag_scale = 0.52
+    tag_thickness = 2
+
+    pad_x = 8
+    pad_y = 6
+    tag_gap = 12
+    tag_height = 24
+
+    hud_clear = (8, 8, min(w - 8, 430), 155)
+
+    def rects_overlap(a, b, margin=4):
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        return not (
+            ax2 + margin < bx1 or
+            bx2 + margin < ax1 or
+            ay2 + margin < by1 or
+            by2 + margin < ay1
+        )
+
+    def clamp_rect(x1, y1, x2, y2):
+        rw = x2 - x1
+        rh = y2 - y1
+
+        if rw > w - 16:
+            x1, x2 = 8, w - 8
+        else:
+            x1 = max(8, min(w - 8 - rw, x1))
+            x2 = x1 + rw
+
+        if rh > h - 16:
+            y1, y2 = 8, h - 8
+        else:
+            y1 = max(8, min(h - 8 - rh, y1))
+            y2 = y1 + rh
+
+        return (int(x1), int(y1), int(x2), int(y2))
+
+    def box_anchor(box, side):
+        x1, y1, x2, y2 = box
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+
+        if side == 'top':
+            return cx, y1
+        if side == 'bottom':
+            return cx, y2
+        if side == 'left':
+            return x1, cy
+        return x2, cy
+
+    def label_anchor(rect, side):
+        x1, y1, x2, y2 = rect
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+
+        if side == 'top':
+            return cx, y2
+        if side == 'bottom':
+            return cx, y1
+        if side == 'left':
+            return x2, cy
+        return x1, cy
+
+    targets = []
+
+    for tr in visible:
+        label = LABEL_ALIAS.get(tr.cls, tr.cls).upper()
+
+        bx, by, bw, bh = tr.box
+
+        bx1 = max(4, min(w - 5, int(bx)))
+        by1 = max(4, min(h - 5, int(by)))
+        bx2 = max(bx1 + 2, min(w - 4, int(bx + bw)))
+        by2 = max(by1 + 2, min(h - 4, int(by + bh)))
+
+        confidence = max(
+            0.0,
+            min(1.0, float(getattr(tr, 'confidence', 0.0)))
+        )
+
+        text = f"{label} {confidence:.2f}"
+
+        (tw, th), baseline = cv2.getTextSize(
+            text,
+            tag_font,
+            tag_scale,
+            tag_thickness,
+        )
+
+        tag_w = tw + pad_x * 2
+        tag_h = max(tag_height, th + baseline + pad_y * 2)
+
+        targets.append({
+            'track': tr,
+            'label': text,
+            'box': (bx1, by1, bx2, by2),
+            'tag_w': tag_w,
+            'tag_h': tag_h,
+            'area': max(1, bw * bh),
+            'confidence': confidence,
+        })
+
+    # Higher-confidence detections get first choice of clean placement.
+    targets.sort(
+        key=lambda t: (
+            -t['confidence'],
+            -t['area'],
+            t['box'][1],
+            t['box'][0],
+        )
+    )
+
+    occupied = [hud_clear]
+    side_order = ('top', 'right', 'bottom', 'left')
+
+    for item in targets:
+        bx1, by1, bx2, by2 = item['box']
+        tw = item['tag_w']
+        th = item['tag_h']
+
+        candidates = []
+
+        for side in side_order:
+            if side == 'top':
+                cx = (bx1 + bx2) // 2
+                x1 = cx - tw // 2
+                y1 = by1 - tag_gap - th
+            elif side == 'bottom':
+                cx = (bx1 + bx2) // 2
+                x1 = cx - tw // 2
+                y1 = by2 + tag_gap
+            elif side == 'left':
+                cy = (by1 + by2) // 2
+                x1 = bx1 - tag_gap - tw
+                y1 = cy - th // 2
+            else:
+                cy = (by1 + by2) // 2
+                x1 = bx2 + tag_gap
+                y1 = cy - th // 2
+
+            rect = clamp_rect(x1, y1, x1 + tw, y1 + th)
+
+            score = 0
+
+            if rects_overlap(rect, item['box'], margin=3):
+                score += 10000
+
+            for other in occupied:
+                if rects_overlap(rect, other, margin=5):
+                    score += 1000
+
+            if side in ('top', 'bottom'):
+                score += abs(
+                    ((rect[0] + rect[2]) // 2) -
+                    ((bx1 + bx2) // 2)
+                )
+            else:
+                score += abs(
+                    ((rect[1] + rect[3]) // 2) -
+                    ((by1 + by2) // 2)
+                )
+
+            candidates.append((score, side, rect))
+
+        _, side, tag_rect = min(candidates, key=lambda x: x[0])
+
+        item['side'] = side
+        item['tag_rect'] = tag_rect
+        occupied.append(tag_rect)
+
+    def confidence_ink(confidence):
+        # macOS-light-style HUD: confidence changes salience, but even
+        # weak detections remain comfortably visible against the scene.
+        t = max(0.0, min(1.0, confidence))
+
+        # Gentle perceptual curve: avoid making low-confidence objects
+        # visually disappear while still giving strong detections priority.
+        t = t * t * (3.0 - 2.0 * t)
+
+        # Light-theme luminance floor. The HUD should read as luminous
+        # neutral UI rather than a dim surveillance overlay.
+        floor = 0.68
+        strength = floor + (1.0 - floor) * t
+
+        return tuple(
+            max(1, min(255, int(round(channel * strength))))
+            for channel in ink
+        )
+
+    def confidence_thickness(confidence, minimum=1, maximum=3):
+        t = max(0.0, min(1.0, confidence))
+        return minimum + int(round((maximum - minimum) * t))
+
+    for item in targets:
+        bx1, by1, bx2, by2 = item['box']
+        tag_rect = item['tag_rect']
+        side = item['side']
+        confidence = item['confidence']
+
+        target_ink = confidence_ink(confidence)
+        box_thickness = confidence_thickness(confidence, 1, 3)
+        line_thickness = confidence_thickness(confidence, 1, 2)
+
+        cv2.rectangle(
+            out,
+            (bx1, by1),
+            (bx2, by2),
+            target_ink,
+            box_thickness,
+            cv2.LINE_AA,
+        )
+
+        p1 = box_anchor(item['box'], side)
+        p2 = label_anchor(tag_rect, side)
+
+        cv2.line(
+            out,
+            p1,
+            p2,
+            target_ink,
+            line_thickness,
+            cv2.LINE_AA,
+        )
+
+        tx1, ty1, tx2, ty2 = tag_rect
+
+        cv2.rectangle(
+            out,
+            (tx1, ty1),
+            (tx2, ty2),
+            (0, 0, 0),
+            -1,
+        )
+
+        cv2.rectangle(
+            out,
+            (tx1, ty1),
+            (tx2, ty2),
+            target_ink,
+            1,
+            cv2.LINE_AA,
+        )
+
+        (tw, th), baseline = cv2.getTextSize(
+            item['label'],
+            tag_font,
+            tag_scale,
+            tag_thickness,
+        )
+
+        text_x = tx1 + (tx2 - tx1 - tw) // 2
+        text_y = ty1 + (ty2 - ty1 + th) // 2
+
+        cv2.putText(
+            out,
+            item['label'],
+            (text_x, text_y),
+            tag_font,
+            tag_scale,
+            target_ink,
+            tag_thickness,
+            cv2.LINE_AA,
+        )
+
     return out
+
+
