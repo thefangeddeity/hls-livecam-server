@@ -17,6 +17,11 @@ LIB_DIR="/var/lib/hls-livecam"
 # Arch: use conf.d instead of sites-available/sites-enabled
 NGINX_CONF="/etc/nginx/conf.d/hls-livecam.conf"
 
+MODEL_DIR="/usr/share/hls-livecam-server/models/candidates"
+MODEL_PATH="$MODEL_DIR/yolov8n.onnx"
+MODEL_URL="https://github.com/thefangeddeity/hls-livecam-server/releases/download/models-v1/yolov8n.onnx"
+MODEL_SHA256="b2bc52f40e8e1c532427d5bde3575a5d5b571b739fab2c6df443733ed1589cbd"
+
 echo ""
 echo -e "${CYAN}${BOLD}╔══════════════════════════════════════╗${NC}"
 echo -e "${CYAN}${BOLD}║   hls-livecam-server setup (Arch)    ║${NC}"
@@ -134,6 +139,29 @@ else
   echo -e "  ${GREEN}Already installed.${NC}"
 fi
 
+# ── Download detection model ────────────────────────────────
+# Lives in models/candidates/, not models/, because this is a stopgap:
+# yolov8n is the only variant light enough for tina, so every node
+# gets the tiny model for now. Once "high CPU / low CPU" mode (which
+# will replace the fps choice above) is built and tested, stronger
+# nodes will pick a larger model from this same folder instead.
+echo ""
+echo -e "${BOLD}Installing CV detection model...${NC}"
+if [ ! -f "$MODEL_PATH" ]; then
+  mkdir -p "$MODEL_DIR"
+  wget -q --show-progress "$MODEL_URL" -O /tmp/yolov8n.onnx
+  echo "  Verifying integrity..."
+  echo "${MODEL_SHA256}  /tmp/yolov8n.onnx" | sha256sum -c - || {
+    echo -e "  ${RED}ERROR: SHA256 mismatch — model corrupt or tampered.${NC}"
+    rm -f /tmp/yolov8n.onnx
+    exit 1
+  }
+  mv /tmp/yolov8n.onnx "$MODEL_PATH"
+  echo -e "  ${GREEN}Installed.${NC}"
+else
+  echo -e "  ${GREEN}Already installed.${NC}"
+fi
+
 # ── Write fresh MediaMTX config ───────────────────────────────
 echo ""
 echo -e "${BOLD}Writing MediaMTX config...${NC}"
@@ -166,11 +194,13 @@ print("  Config written.")
 PYEOF
 
 # ── Write device.env ──────────────────────────────────────────
+# Merges rather than overwrites: anything already in device.env that
+# setup doesn't manage (CV_* tuning you've hand-edited, etc.) survives
+# a re-run instead of getting silently wiped.
 echo ""
 echo -e "${BOLD}Writing device config...${NC}"
 mkdir -p "$(dirname $DEVICE_ENV)"
-cat > "$DEVICE_ENV" <<EOF
-VIDEO_DEVICE=$STABLE_DEV
+MANAGED_BLOCK="VIDEO_DEVICE=$STABLE_DEV
 V4L2_INPUT_FMT=$INPUT_FMT
 VIDEO_SIZE=1280x720
 FRAMERATE=$FRAMERATE
@@ -179,7 +209,39 @@ FRAMERATE=$FRAMERATE
 # 1s hlsSegmentDuration is silently ignored and viewers get ~12s of
 # live-edge lag. Raise it only if the encoder cannot keep up.
 GOP_SECONDS=1
-EOF
+# Stopgap: yolov8n is the only model light enough for tina, so every
+# node points at the same tiny model for now. See models/candidates/
+# comment above.
+CV_DETECT_MODEL=$MODEL_PATH"
+
+python3 - <<PYEOF
+path = "$DEVICE_ENV"
+managed_keys = {"VIDEO_DEVICE", "V4L2_INPUT_FMT", "VIDEO_SIZE", "FRAMERATE",
+                 "GOP_SECONDS", "CV_DETECT_MODEL"}
+managed_block = """$MANAGED_BLOCK"""
+
+preserved_lines = []
+try:
+    with open(path) as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            if not line.strip() or line.strip().startswith("#"):
+                continue
+            key = line.split("=", 1)[0].strip()
+            if key and key not in managed_keys:
+                preserved_lines.append(line)
+except FileNotFoundError:
+    pass
+
+content = managed_block + "\n"
+if preserved_lines:
+    content += "\n# --- preserved from a previous config; not managed by setup ---\n"
+    content += "\n".join(preserved_lines) + "\n"
+
+with open(path, "w") as f:
+    f.write(content)
+print("  Config written.")
+PYEOF
 echo -e "  ${GREEN}Written to $DEVICE_ENV${NC}"
 
 # ── Install systemd services ──────────────────────────────────
