@@ -36,12 +36,12 @@ import cv2
 COCO_LABELS = {
     0:  'human',
     15: 'cat',
-    45: 'bowl',      # the cat plate
-    46: 'banana',    # retained model class; not a display target
-    56: 'chair',
-    57: 'couch',
-    59: 'bed',
-    75: 'vase',
+#    24: 'handbag',      # helps find lost items
+#    24: 'backpack',    # helps find lost items
+#    56: 'chair',
+#    57: 'couch',
+#    59: 'bed',
+#    76: 'scissors',    # helps find lost items
     77: 'teddy bear',
 }
 
@@ -436,7 +436,7 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220)):
     ]
 
     count = len(visible)
-    text = f"DETECTING {count} ITEM{'S' if count != 1 else ''}"
+    text = f"DETECTING {count} TARGET{'S' if count != 1 else ''}"
 
     # macOS-light-inspired telemetry:
     # smaller, lighter, quieter, and using the same visual weight as the
