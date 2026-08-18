@@ -1,10 +1,10 @@
 Package: hls-livecam-server
-Version: 5.5.1
+Version: 5.6.3
 Section: video
 Priority: optional
 Architecture: amd64
 Depends: ffmpeg, nginx, v4l-utils, python3, python3-psutil, python3-flask, python3-pil, python3-numpy, python3-opencv, wget, ca-certificates
-Recommends: curl, smartmontools
+Recommends: curl, smartmontools, fonts-dejavu-core
 Maintainer: hls-livecam-server maintainers <hls-livecam@example.org>
 Description: HLS webcam streaming server with web viewer
  Streams a USB webcam via HLS using MediaMTX and ffmpeg.
