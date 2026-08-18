@@ -134,6 +134,13 @@ _DEFAULTS = {
                                       # finding plus morphology is superlinear in
                                       # pixel count, so this is the difference between
                                       # ~150ms and ~40ms.
+    # Weight of the original (toned) photo blended back into the sharpie
+    # line drawing. 0 = pure line drawing on white (this file's tracked
+    # default, unchanged behaviour for any node that doesn't set this).
+    # 1 = pure photo, sharpie strokes invisible. tina's established
+    # baseline is 0.6 (60% original / 40% sharpie) -- device.env, not
+    # hardcoded, since this is exactly as per-camera as CLAHE or unsharp.
+    'CV_SHARPIE_BLEND':       0.0,
 
     # Enhancement on moving subjects. The pipeline skips denoise and sharpen
     # wherever the motion mask is set, on the reasoning that motion blur is
@@ -259,6 +266,7 @@ class CVProcessor:
         self._sharpie_smooth = _read_int(denv, 'CV_SHARPIE_SMOOTH')
         self._sharpie_close = _read_int(denv, 'CV_SHARPIE_CLOSE')
         self._sharpie_scale = _read_float(denv, 'CV_SHARPIE_SCALE')
+        self._sharpie_blend = max(0.0, min(1.0, _read_float(denv, 'CV_SHARPIE_BLEND')))
 
         self._detect_enabled = _read_int(denv, 'CV_DETECT_ENABLED') != 0
         self._detect_interval = max(1, _read_int(denv, 'CV_DETECT_INTERVAL'))
@@ -611,6 +619,8 @@ class CVProcessor:
 
         canvas = np.full_like(frame, 255)
         canvas[ink > 0] = (25, 25, 25)
+        if self._sharpie_blend > 0.0:
+            canvas = cv2.addWeighted(frame, self._sharpie_blend, canvas, 1.0 - self._sharpie_blend, 0)
         return canvas
 
     # ── lens-artifact subtraction ───────────────────────────────────────
