@@ -47,6 +47,11 @@ try:
 except Exception:      # detection is optional; the pipeline runs without it
     _cvd = None
 
+try:
+    import cv_notify as _cvn
+except Exception:      # notification is optional; absence disables it
+    _cvn = None
+
 # Flow is computed on a downscaled grayscale pair purely to build a coarse
 # motion mask -- a full-resolution dense flow field is not needed to answer
 # "is this pixel neighborhood moving," and it costs several times more.
@@ -274,6 +279,17 @@ class CVProcessor:
         self._frame_n = 0
         self._detector = None
         self._tracker = None
+        self._notifier = None
+        # Notification is independent of detection succeeding: build it
+        # first so a detector init failure still leaves a valid (disabled)
+        # notifier rather than an attribute that does not exist.
+        if _cvn is not None:
+            try:
+                self._notifier = _cvn.make_notifier(
+                    denv, log=lambda m: print(m, flush=True))
+            except Exception as exc:
+                print(f"NOTIFY INIT ERROR: {type(exc).__name__}: {exc}",
+                      flush=True)
         if self._detect_enabled and _cvd is not None:
             backend = str((denv or {}).get('CV_DETECT_BACKEND',
                                            _DEFAULTS['CV_DETECT_BACKEND']))
@@ -548,6 +564,16 @@ class CVProcessor:
                         d.cls = _cvd.classify_coat(source_frame, d)
 
                     self._tracker.update(dets)
+
+                    # Notify on promotion only. The evidence accumulator has
+                    # already decided this is real; the notifier needs the
+                    # edge, and dedupes per track itself. Enqueue-and-return
+                    # -- the send runs on its own thread, so a slow SMTP
+                    # server cannot reach the frame path from here.
+                    if self._notifier is not None:
+                        for tr in self._tracker.tracks.values():
+                            if getattr(tr, 'promoted', False):
+                                self._notifier.on_promotion(tr, source_frame)
 
                     print(
                         "SHAKEY DETECT:"
