@@ -350,7 +350,8 @@ def classify_coat(frame, det):
 
 class Track:
     __slots__ = ('track_id', 'cls', 'confidence', 'box',
-                 'first_seen', 'last_seen', 'state', 'misses')
+                 'first_seen', 'last_seen', 'state', 'misses',
+                 'evidence', 'promoted')
 
     def __init__(self, track_id, det):
         self.track_id = track_id
@@ -361,6 +362,11 @@ class Track:
         self.last_seen = det.timestamp
         self.state = 'new'
         self.misses = 0
+        # Leaky-integrator evidence, not the last-seen confidence: a single
+        # weak frame must not promote a track. See Tracker.update() for the
+        # accumulation step.
+        self.evidence = det.confidence
+        self.promoted = False
 
     @property
     def centre(self):
@@ -375,13 +381,42 @@ class Tracker:
     detector here runs at a low cadence on a fixed camera watching one or
     two slow subjects -- association by proximity is sufficient and costs
     nothing. Replaceable behind the same interface if that changes.
+
+    Evidence accumulation (run-14): on hardware where a real detection
+    scores 0.02-0.07 -- below any per-frame confidence floor that would
+    also admit noise -- per-frame thresholding throws away the one signal
+    that actually distinguishes a real subject from noise: recurrence.
+    A weak detection landing in the same track pass after pass is real; a
+    weak detection that never recurs in the same track is noise, and the
+    nearest-centre association above already refuses to link detections
+    that jumped somewhere else.
+
+    Each track keeps a leaky-integrator score (`evidence`), not a moving
+    average: on a match, `evidence = evidence * decay + confidence`, so
+    repeated weak hits on the same track *sum* toward the promotion
+    threshold rather than merely tracking the last confidence seen. On a
+    miss, `evidence *= decay` only -- pure decay, no addition -- so a track
+    that stops matching fades back out. The steady-state value for a
+    constant confidence c recurring every pass is c / (1 - decay): with the
+    default decay of 0.85 that is ~6.7x a single frame's score, which is
+    exactly the "recurrence is the signal" property this exists for.
+
+    `promoted` flips on once `evidence` crosses `promote_threshold` and
+    back off if it later decays below it -- not a one-way latch -- so a
+    track does not stay labelled after the subject leaves and the pass
+    count needed to un-promote is the same order as to promote (no separate
+    hysteresis band; kept simple per the brief, revisit if this flickers in
+    practice).
     """
 
-    def __init__(self, max_misses=5, max_distance=180):
+    def __init__(self, max_misses=5, max_distance=180,
+                 evidence_decay=0.85, promote_threshold=0.35):
         self.tracks = {}
         self._next_id = 1
         self.max_misses = int(max_misses)
         self.max_distance = int(max_distance)
+        self.evidence_decay = float(evidence_decay)
+        self.promote_threshold = float(promote_threshold)
 
     def update(self, detections):
         unmatched = dict(self.tracks)
@@ -402,6 +437,8 @@ class Tracker:
                 tr.last_seen = det.timestamp
                 tr.state = 'present'
                 tr.misses = 0
+                tr.evidence = tr.evidence * self.evidence_decay + det.confidence
+                tr.promoted = tr.evidence >= self.promote_threshold
                 unmatched.pop(best, None)
             else:
                 tr = Track(self._next_id, det)
@@ -410,10 +447,14 @@ class Tracker:
 
         # Anything unmatched this pass is missing, then departed. Kept for a
         # few passes so a single failed detection does not blink a label out
-        # and back with a new id.
+        # and back with a new id. Evidence decays here too -- a track that
+        # stops matching loses its promoted state at the same rate it would
+        # have gained it, not instantly and not never.
         for tid, tr in list(unmatched.items()):
             tr.misses += 1
             tr.state = 'missing'
+            tr.evidence *= self.evidence_decay
+            tr.promoted = tr.evidence >= self.promote_threshold
             if tr.misses > self.max_misses:
                 tr.state = 'departed'
                 self.tracks.pop(tid, None)
@@ -541,8 +582,22 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220)):
         return x1, cy
 
     targets = []
+    # Evidence accumulated but not yet past promote_threshold: trackable,
+    # not yet labelled -- motion-detector behaviour, already useful on its
+    # own. Rendered as a plain outline below, not put through the tag
+    # placement/collision system at all -- it has no text to place.
+    plain_boxes = []
 
     for tr in visible:
+        if not getattr(tr, 'promoted', True):
+            bx, by, bw, bh = tr.box
+            bx1 = max(4, min(w - 5, int(bx)))
+            by1 = max(4, min(h - 5, int(by)))
+            bx2 = max(bx1 + 2, min(w - 4, int(bx + bw)))
+            by2 = max(by1 + 2, min(h - 4, int(by + bh)))
+            plain_boxes.append((bx1, by1, bx2, by2))
+            continue
+
         label = LABEL_ALIAS.get(tr.cls, tr.cls).upper()
 
         bx, by, bw, bh = tr.box
@@ -740,6 +795,14 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220)):
             tag_thickness,
             cv2.LINE_AA,
         )
+
+    # Below-threshold tracks: thin, dim outline only -- no tag, no
+    # confidence number, no collision placement. Accumulated evidence
+    # hasn't crossed the promotion threshold yet, so there is nothing
+    # honest to label it with.
+    plain_ink = tuple(max(1, int(round(c * 0.35))) for c in ink)
+    for (bx1, by1, bx2, by2) in plain_boxes:
+        cv2.rectangle(out, (bx1, by1), (bx2, by2), plain_ink, 1, cv2.LINE_AA)
 
     return out
 

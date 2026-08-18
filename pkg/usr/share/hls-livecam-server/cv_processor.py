@@ -111,6 +111,23 @@ _DEFAULTS = {
     'CV_DETECT_MIN_AREA':     0.004, # motion backend: ignore blobs smaller than this
     'CV_HUD_ENABLED':         1,     # draw boxes/labels when detection is on
 
+    # Track-level evidence accumulation (run-14). Per-frame confidence
+    # thresholding throws away the signal that separates a real subject
+    # from noise on hardware where a genuine detection scores 0.02-0.07:
+    # recurrence. Evidence is a leaky integrator per track -- on a match,
+    # evidence = evidence*decay + confidence (repeated weak hits *sum*
+    # toward the threshold); on a miss, evidence *= decay (pure decay, so
+    # a departed subject's track stops being labelled). A track only gets
+    # a label + confidence number once evidence crosses the threshold;
+    # below it, it is still tracked and drawn (a plain box), just
+    # unlabelled -- motion-detector behaviour. Steady-state for a constant
+    # confidence c recurring every pass is c/(1-decay): with the defaults
+    # below, a genuine 0.05 recurring hit settles at ~0.42, comfortably
+    # promotable, while a one-off 0.02 noise hit that never recurs decays
+    # away before it gets close.
+    'CV_TRACK_EVIDENCE_DECAY':    0.88,
+    'CV_TRACK_PROMOTE_THRESHOLD': 0.30,
+
     'CV_SHARPIE_SCALE':       0.5,   # compute the drawing at this scale. Strokes are
                                       # thick by design, so the detail lost is detail
                                       # the drawing discards anyway -- and contour
@@ -272,7 +289,9 @@ class CVProcessor:
                     model_path=_effective_model,
                     conf=_read_float(denv, 'CV_DETECT_CONF'),
                     min_area_frac=_read_float(denv, 'CV_DETECT_MIN_AREA'))
-                self._tracker = _cvd.Tracker()
+                self._tracker = _cvd.Tracker(
+                    evidence_decay=_read_float(denv, 'CV_TRACK_EVIDENCE_DECAY'),
+                    promote_threshold=_read_float(denv, 'CV_TRACK_PROMOTE_THRESHOLD'))
             except Exception as exc:
                 print(
                     f"SHAKEY DETECTOR INIT ERROR: "
