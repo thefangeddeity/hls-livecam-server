@@ -761,12 +761,13 @@
   // rather than for a fixed count. The old 16s countdown was chosen when
   // segments were 4s; it both outlasted the real switch and told every
   // viewer to stare at a number.
-  // 9000 -> 11000 (run-18 §1). The 9s figure was itself a recalibration: the
-  // original 16s was chosen when segments were 4s, and run-6 replaced it with
-  // a bounded fallback sized to the measured switch. In practice the cover
-  // clears on the video's own 'playing' event, so this only matters when that
-  // event never arrives -- and 9s was leaving the tail of the switch visible.
-  var TRANSITION_MAX_MS = 11000;
+  // 9000 -> 11000 (run-18 §1) -> 13000 (run-20 aside). The 9s figure was
+  // itself a recalibration: the original 16s was chosen when segments were
+  // 4s, and run-6 replaced it with a bounded fallback sized to the measured
+  // switch. In practice the cover clears on the video's own 'playing' event,
+  // so this only matters when that event never arrives -- and 11s was still
+  // visually gated two seconds short of the real switch (PM-observed).
+  var TRANSITION_MAX_MS = 13000;
 
   function fadeOut() {
     video.style.opacity = '0';
