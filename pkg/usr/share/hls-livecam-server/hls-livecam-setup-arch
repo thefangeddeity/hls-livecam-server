@@ -103,14 +103,12 @@ else
 fi
 
 # ── Framerate ─────────────────────────────────────────────────
+# Fixed at 15fps (run-21): the 30fps option was measured (run-20) to
+# deliver 9.7-10.7fps in CV Mode against 14.00 at 15fps requested — it
+# made the flagship feature worse even on the strongest node in the
+# fleet, so there is no longer a real choice to offer here.
+FRAMERATE=15
 echo ""
-echo -e "${BOLD}Select capture framerate:${NC}"
-select FPS_CHOICE in "High (30fps)" "Low (15fps — recommended for older hardware)"; do
-  case $REPLY in
-    1) FRAMERATE=30; break ;;
-    2) FRAMERATE=15; break ;;
-  esac
-done
 echo -e "  ${GREEN}Framerate: ${FRAMERATE}fps${NC}"
 
 # ── Download MediaMTX ─────────────────────────────────────────
@@ -142,9 +140,9 @@ fi
 # ── Download detection model ────────────────────────────────
 # Lives in models/candidates/, not models/, because this is a stopgap:
 # yolov8n is the only variant light enough for tina, so every node
-# gets the tiny model for now. Once "high CPU / low CPU" mode (which
-# will replace the fps choice above) is built and tested, stronger
-# nodes will pick a larger model from this same folder instead.
+# gets the tiny model for now. Once "high CPU / low CPU" mode is
+# built and tested, stronger nodes will pick a larger model from this
+# same folder instead.
 echo ""
 echo -e "${BOLD}Installing CV detection model...${NC}"
 if [ ! -f "$MODEL_PATH" ]; then

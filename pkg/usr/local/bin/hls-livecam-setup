@@ -201,16 +201,13 @@ chown root:root "$MEDIAMTX_CONF"
 chmod 0644 "$MEDIAMTX_CONF"
 
 
-# ── Performance profile ───────────────────────────────────────
+# ── Framerate ─────────────────────────────────────────────────
+# Fixed at 15fps (run-21): the 30fps option was measured (run-20) to
+# deliver 9.7-10.7fps in CV Mode against 14.00 at 15fps requested — it
+# made the flagship feature worse even on the strongest node in the
+# fleet, so there is no longer a real choice to offer here.
+FRAMERATE=15
 echo ""
-echo -e "${BOLD}Performance profile:${NC}"
-echo "  1) High  (30 fps)"
-echo "  2) Low   (15 fps)"
-read -rp "  Choice [1/2, default 1]: " PERF_CHOICE
-case "$PERF_CHOICE" in
-  2) FRAMERATE=15 ;;
-  *) FRAMERATE=15 ;;
-esac
 echo -e "  ${GREEN}Framerate: ${FRAMERATE} fps${NC}"
 
 # ── Write persistent device.env (kept for hls-livecam-repair) ─
