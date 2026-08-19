@@ -13,7 +13,6 @@ MEDIAMTX_SHA256="8143486d886cc2d5c76f98d687cfb2ee6daf947fd45989c9322c0618057dcf5
 
 MEDIAMTX_BIN="/usr/local/bin/mediamtx"
 MEDIAMTX_CONF="/usr/local/etc/mediamtx.yml"
-NGINX_SITE="/etc/nginx/sites-available/hls-livecam"
 WEB_ROOT="/var/www/hls-livecam"
 SHARE_DIR="/usr/share/hls-livecam-server"
 DEVICE_ENV_DIR="/etc/hls-livecam"
@@ -410,11 +409,11 @@ chown root:www-data "$WEB_ROOT/cams/cams.json" 2>/dev/null || \
 chmod 0664 "$WEB_ROOT/cams/cams.json"
 
 # ── Port 80 conflict check ────────────────────────────────────
-PORT80_PID=$(ss -tlnp 'sport = :80' 2>/dev/null | awk 'NR>1 && /LISTEN/ {match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
+PORT80_PID=$(ss -tlnp 'sport = :8080' 2>/dev/null | awk 'NR>1 && /LISTEN/ {match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
 if [ -n "$PORT80_PID" ]; then
   PORT80_PROC=$(ps -p "$PORT80_PID" -o comm= 2>/dev/null || echo "unknown")
   if [ "$PORT80_PROC" != "nginx" ]; then
-    echo -e "  ${YELLOW}WARNING: port 80 is in use by '$PORT80_PROC' (PID $PORT80_PID).${NC}"
+    echo -e "  ${YELLOW}WARNING: port 8080 is in use by '$PORT80_PROC' (PID $PORT80_PID).${NC}"
     echo -e "  nginx will fail to start unless this is resolved."
     echo -n "  Continue anyway? [y/N] "
     read -r REPLY
@@ -425,64 +424,11 @@ if [ -n "$PORT80_PID" ]; then
   fi
 fi
 
-cat > "$NGINX_SITE" <<EOF
-server {
-    listen 80 default_server;
-    root $WEB_ROOT;
-    index index.html;
-
-    location = /broadcast.txt {
-        etag off;
-        if_modified_since off;
-        add_header Last-Modified "" always;
-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
-        add_header Pragma "no-cache" always;
-        add_header Access-Control-Allow-Origin "*" always;
-        default_type text/plain;
-    }
-
-    location = /dark.png {
-        etag off;
-        if_modified_since off;
-        add_header Last-Modified "" always;
-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
-        add_header Pragma "no-cache" always;
-    }
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-
-    location = /cams/cams.json {
-        etag off;
-        if_modified_since off;
-        add_header Last-Modified "" always;
-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
-        add_header Pragma "no-cache" always;
-        add_header Access-Control-Allow-Origin "*" always;
-        default_type application/json;
-    }
-
-    location /cams {
-        index cams.html;
-        try_files \$uri \$uri/ =404;
-    }
-
-    location / {
-        etag off;
-        if_modified_since off;
-        add_header Last-Modified "" always;
-        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
-        add_header Pragma "no-cache" always;
-        try_files \$uri \$uri/ =404;
-    }
-}
-EOF
-
-ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/hls-livecam
-rm -f /etc/nginx/sites-enabled/default
+NGINX_CONF="/etc/nginx/conf.d/hls-livecam.conf"
+if [ ! -f "$NGINX_CONF" ]; then
+  echo "  ERROR: $NGINX_CONF missing. Reinstall the package."
+  exit 1
+fi
 
 nginx -t
 # enable --now: start it if it isn't running, enable on boot either way.
