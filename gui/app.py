@@ -299,6 +299,30 @@ class FeedPanel(Panel):
             b.clicked.connect(lambda _=False, mode=m: self._set_mode(mode))
             strip.addWidget(b)
 
+        # Modifier on CV Mode, not a mode of its own -- same shape as B&W
+        # was on Blur before the CV Mode pivot. Disabled outside CV Mode in
+        # update_from() below, same as B&W's precedent.
+        strip.addSpacing(GUTTER)
+        self.foveal = _compact(QCheckBox("Foveal"))
+        self.foveal.clicked.connect(self._toggle_foveal)
+        strip.addWidget(self.foveal)
+
+        # Scene model three-state (CV Mode Phase 3): registered / stale /
+        # unregistered, plus the re-register action. Read-only label, not a
+        # control -- the button beside it is the only thing that acts.
+        strip.addSpacing(GUTTER)
+        self.scene_state = QLabel("")
+        self.scene_state.setObjectName("Hint")
+        self.scene_state.setFont(_font(T.T_HINT))
+        strip.addWidget(self.scene_state)
+        self.b_reregister = _compact(QPushButton("Re-register"))
+        self.b_reregister.setToolTip(
+            "Re-match the stored reference photo against a fresh camera frame "
+            "and recompute the registration. Rejected if the match is poor -- "
+            "the existing registration is kept.")
+        self.b_reregister.clicked.connect(self._reregister_scene)
+        strip.addWidget(self.b_reregister)
+
         self.sup_status = QLabel("")
         self.sup_status.setObjectName("Hint")
         self.sup_status.setFont(_font(T.T_HINT))
@@ -319,6 +343,40 @@ class FeedPanel(Panel):
 
     def _set_mode(self, mode):
         probes.run_async(probes.set_feed_mode, mode, done=self._refresh)
+
+    def _toggle_foveal(self):
+        probes.run_async(probes.set_foveal_mode, self.foveal.isChecked(),
+                         done=self._refresh)
+
+    def _reregister_scene(self):
+        self.b_reregister.setEnabled(False)
+        # run_async's `done` fires on its worker thread. Every other caller
+        # here only sets a plain attribute from it, which is fine -- this one
+        # opens a dialog and touches widgets, which Qt requires on the GUI
+        # thread. QTimer.singleShot(0, ...) from a non-GUI thread queues the
+        # call onto the receiver's (GUI) event loop, which is the marshalling
+        # this needs.
+        probes.run_async(
+            probes.reregister_scene,
+            done=lambda result: QTimer.singleShot(
+                0, lambda: self._reregister_done(result)))
+
+    def _reregister_done(self, result):
+        self.b_reregister.setEnabled(True)
+        self._refresh()
+        if not isinstance(result, dict):
+            QMessageBox.warning(self, "Re-register",
+                                "No usable response from the node.")
+            return
+        pct = result.get("inlier_ratio", 0.0) * 100
+        if result.get("accepted"):
+            QMessageBox.information(
+                self, "Re-register", f"Re-registered.\nInlier ratio: {pct:.0f}%.")
+        else:
+            QMessageBox.warning(
+                self, "Re-register",
+                f"Rejected (inlier ratio {pct:.0f}%). Existing registration kept.\n\n"
+                f"{result.get('error', '')}")
 
     def _buzz(self):
         QGuiApplication.beep()
@@ -351,6 +409,21 @@ class FeedPanel(Panel):
         for b in (self.b_show, self.b_cv, self.b_hide, self.b_buzz):
             b.setEnabled(svc)
         _toggle_style(self.b_feed, self.win.feed_on)
+
+        # Modifier on CV Mode only -- same greyed-out-elsewhere treatment
+        # as B&W had on Blur before the CV Mode pivot.
+        self.foveal.setEnabled(svc and is_cv)
+        self.foveal.setChecked(snap.get("foveal_mode", "false") == "true")
+
+        # Scene model three-state. Re-register only offered once there is a
+        # registration to re-register -- the endpoint rejects it otherwise.
+        scene = snap.get("scene_state", "unregistered")
+        self.scene_state.setText({
+            "registered": "SCENE OK",
+            "stale": "SCENE STALE",
+            "unregistered": "NO SCENE",
+        }.get(scene, scene.upper()))
+        self.b_reregister.setEnabled(svc and scene != "unregistered")
 
         busy = self.win.action_busy
         self.b_repair.setEnabled(svc and not busy)

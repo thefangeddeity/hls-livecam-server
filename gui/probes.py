@@ -89,6 +89,29 @@ def set_feed_mode(mode):
     return _post("feed-mode", mode.encode())
 
 
+def set_foveal_mode(enabled):
+    return _post("foveal-mode", (b"true" if enabled else b"false"))
+
+
+def reregister_scene():
+    """POST /api/scene-reregister. Returns the parsed JSON body -- the
+    inlier ratio matters to the operator whether or not it was accepted,
+    so this passes the whole response through rather than a bare bool."""
+    return json.loads(_post("scene-reregister"))
+
+
+def _scene_state():
+    """Three-state scene model status: registered / stale / unregistered.
+    Falls back to 'unregistered' on any error, including a node running a
+    build with no /api/scene-status route at all -- the fleet does not
+    upgrade in lockstep, and an older node 404ing here is normal, not an
+    error worth surfacing."""
+    try:
+        return json.loads(cd._api_get("scene-status", '{}')).get('state', 'unregistered')
+    except Exception:
+        return 'unregistered'
+
+
 def toggle_msg_lock():
     return _post("msg-lock")
 
@@ -276,6 +299,8 @@ class SlowWorker(QThread):
                     "v4l2_dev": cd.read_device_env().get("VIDEO_DEVICE", "?"),
                     "dark": os.path.exists(cd.DARK_FLAG),
                     "feed_mode": cd._api_get("feed-mode", "show"),
+                    "foveal_mode": cd._api_get("foveal-mode", "false"),
+                    "scene_state": _scene_state(),
                     "msg_lock": cd._api_get("msg-lock", "false"),
                     "cputemp": cd._cpu_temp(),
                     "smart": smart_lines(),

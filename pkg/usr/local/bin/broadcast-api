@@ -11,6 +11,9 @@ import numpy as np
 import pyfakewebcam
 sys.path.insert(0, '/usr/share/hls-livecam-server')
 import cv_processor as _cvp
+import cv_scene as _cvs
+import cv2 as _cv2
+import json as _json
 
 app = Flask(__name__)
 
@@ -19,6 +22,7 @@ BUZZ_FILE       = "/var/www/hls-livecam/buzz.txt"
 DARK_FLAG       = "/var/lib/hls-livecam/dark"
 LOCK_FILE       = "/var/lib/hls-livecam/msg_lock"
 FEED_MODE_FILE  = "/var/lib/hls-livecam/feed_mode"
+FOVEAL_MODE_FILE = "/var/lib/hls-livecam/foveal_mode"
 
 # The one default in this system where the wrong value has a real-world
 # consequence: this is a privacy control on a camera pointed at a family's
@@ -45,6 +49,11 @@ FRAME_H         = 720
 FRAME_BYTES     = FRAME_W * FRAME_H * 3
 _cam_proc = None
 _pub_proc = None
+# Set once _writer_loop constructs it -- the scene-reregister endpoint
+# (CV Mode Phase 3) needs to reach into the live CVProcessor instance from
+# a Flask request handler, which runs on a different thread than the
+# writer loop that owns it.
+_cv_proc = None
 # Set the instant SIGTERM arrives. Both supervisor loops respawn any child
 # they find dead, so without this they immediately undo _shutdown()'s work:
 # the replacement ffmpeg then outlives the interpreter, the unit's cgroup
@@ -84,6 +93,31 @@ def _write_feed_mode(mode):
             f.write(mode)
     except Exception:
         pass
+
+# Foveal Layer (CV Mode Phase 1). A modifier on CV Mode, not a mode of its
+# own -- same shape as feed mode itself: persisted state file, safe default
+# (off), GET/POST. Unlike every other CV_* knob, this is checked live every
+# writer-loop iteration (see cv_proc.set_foveal() below) rather than only
+# read once at CVProcessor construction -- so the checkbox in each UI
+# actually behaves like feed mode's buttons, not like a device.env key that
+# needs a restart to take effect.
+def _read_foveal_mode():
+    try:
+        with open(FOVEAL_MODE_FILE) as f:
+            return f.read().strip() == 'true'
+    except Exception:
+        return False
+
+def _write_foveal_mode(enabled):
+    try:
+        os.makedirs(os.path.dirname(FOVEAL_MODE_FILE), exist_ok=True)
+        with open(FOVEAL_MODE_FILE, 'w') as f:
+            f.write('true' if enabled else 'false')
+    except Exception:
+        pass
+
+_foveal_enabled = _read_foveal_mode()
+_foveal_lock    = threading.Lock()
 
 _mode      = _read_feed_mode()
 _mode_lock = threading.Lock()
@@ -196,7 +230,9 @@ def _writer_loop():
     _pub_proc = pub_holder[0]
     time.sleep(1.0)
 
+    global _cv_proc
     cv_proc = _cvp.CVProcessor(denv)
+    _cv_proc = cv_proc
     prev_mode = None
     while not _shutting_down.is_set():
         with _mode_lock:
@@ -223,6 +259,8 @@ def _writer_loop():
                 # round trip. That cycle is what the old cloak render did,
                 # and it measured ~190ms/frame here against a 66.7ms budget.
                 raw_arr = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
+                with _foveal_lock:
+                    cv_proc.set_foveal(_foveal_enabled)
                 frame_arr, _cv_meta = cv_proc.process(raw_arr)
             else:  # hide
                 frame_arr = _render_hide_frame(FRAME_W, FRAME_H)
@@ -267,6 +305,99 @@ def feed_mode_post():
     # a crash, or a package upgrade.
     _write_feed_mode(new_mode)
     return new_mode, 200
+
+@app.route('/api/foveal-mode', methods=['GET'])
+def foveal_mode_get():
+    with _foveal_lock:
+        return ('true' if _foveal_enabled else 'false'), 200
+
+@app.route('/api/foveal-mode', methods=['POST'])
+def foveal_mode_post():
+    global _foveal_enabled
+    val = request.get_data(as_text=True).strip().lower()
+    if val not in ('true', 'false'):
+        abort(400)
+    enabled = val == 'true'
+    with _foveal_lock:
+        _foveal_enabled = enabled
+    # Persist immediately, same reasoning as feed mode: a checkbox state the
+    # operator set must survive a restart or crash, not silently reset to
+    # the safe default.
+    _write_foveal_mode(enabled)
+    return ('true' if enabled else 'false'), 200
+
+# Reference-image scene model (CV Mode Phase 3). Three-state surfacing --
+# registered / stale / unregistered -- read directly off the live
+# CVProcessor instance, no separate state to keep in sync.
+@app.route('/api/scene-status', methods=['GET'])
+def scene_status_get():
+    cv_proc = _cv_proc
+    if cv_proc is None or not getattr(cv_proc, '_scene_enabled', False) \
+            or not getattr(cv_proc, '_scene_registered', False):
+        state = 'unregistered'
+    elif getattr(cv_proc, '_scene_stale', False):
+        state = 'stale'
+    else:
+        state = 'registered'
+    return {'state': state, 'regions': len(getattr(cv_proc, '_scene_regions', []) or [])}, 200
+
+@app.route('/api/scene-reregister', methods=['POST'])
+def scene_reregister_post():
+    """Grab a fresh frame from this node's own camera, re-match against the
+    ALREADY-STORED reference photo, recompute the homography. Accept only
+    if the inlier ratio clears CV_SCENE_REREGISTER_MIN_INLIER_RATIO --
+    otherwise the existing registration is kept untouched and the response
+    reports failure with the real ratio, never a bare OK/fail. A
+    confidently wrong registration is worse than none."""
+    cv_proc = _cv_proc
+    if cv_proc is None or not getattr(cv_proc, '_scene_registered', False):
+        return {'accepted': False, 'inlier_ratio': 0.0,
+                'error': 'no existing scene model to re-register against'}, 400
+
+    with _cam_frame_lock:
+        raw = _cam_frame
+    if raw is None:
+        return {'accepted': False, 'inlier_ratio': 0.0,
+                'error': 'no live camera frame available yet'}, 503
+
+    live_frame = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
+    live_gray = _cv2.cvtColor(live_frame, _cv2.COLOR_RGB2GRAY)
+
+    H, inlier_ratio, n_matches = _cvs.compute_homography(
+        cv_proc._scene_reference_gray, live_gray)
+
+    if H is None or inlier_ratio < cv_proc._scene_reregister_min_inlier_ratio:
+        return {
+            'accepted': False,
+            'inlier_ratio': round(inlier_ratio, 3),
+            'n_matches': n_matches,
+            'error': 'inlier ratio below CV_SCENE_REREGISTER_MIN_INLIER_RATIO '
+                     f'({cv_proc._scene_reregister_min_inlier_ratio}) -- '
+                     'existing registration kept',
+        }, 200
+
+    new_regions = _cvs.rewarp_regions(cv_proc._scene_regions, H)
+    cv_proc._scene_homography = H
+    cv_proc._scene_regions = new_regions
+    cv_proc._scene_stale = False
+
+    try:
+        with open(cv_proc._scene_reference_path) as f:
+            model = _json.load(f)
+        model['homography'] = H.tolist()
+        model['regions'] = new_regions
+        model['inlier_ratio'] = round(inlier_ratio, 3)
+        with open(cv_proc._scene_reference_path, 'w') as f:
+            _json.dump(model, f, indent=2)
+    except Exception as exc:
+        print(f"CV SCENE: re-register succeeded in memory but failed to persist "
+              f"to {cv_proc._scene_reference_path}: {type(exc).__name__}: {exc}",
+              flush=True)
+
+    print(f"CV SCENE: re-registered, inlier_ratio={inlier_ratio:.3f} "
+          f"n_matches={n_matches}", flush=True)
+    return {'accepted': True, 'inlier_ratio': round(inlier_ratio, 3),
+            'n_matches': n_matches}, 200
 
 @app.route('/api/broadcast', methods=['POST'])
 def broadcast():

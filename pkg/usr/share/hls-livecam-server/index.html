@@ -287,6 +287,12 @@
     padding: 2px 6px; border-radius: 4px;
     letter-spacing: 0.02em;
   }
+  /* Scene model three-state (CV Mode Phase 3). Same colour-mix idiom the
+     live-pill states already use, so registered/stale/unregistered read at
+     a glance without inventing a new visual language. */
+  .badge.scene-registered { color: var(--success); background: color-mix(in srgb, var(--success) 8%, var(--panel)); border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
+  .badge.scene-stale { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
+  .badge.scene-unregistered { color: var(--text-muted); }
   .sidebar-scroll {
     display: flex;
     flex-direction: column;
@@ -506,6 +512,14 @@
             <input type="checkbox" id="themeCheck" onchange="toggleTheme()"> Light theme
           </label>
           <label class="mute-label">
+            <input type="checkbox" id="fovealCheck" onchange="toggleFoveal()"> Foveal Layer
+          </label>
+          <div class="info-chip" id="sceneChip">
+            <span class="label">Scene model</span>
+            <span class="badge" id="sceneBadge">UNREGISTERED</span>
+          </div>
+          <button class="btn" id="sceneReregisterBtn" onclick="reregisterScene()" hidden>Re-register camera</button>
+          <label class="mute-label">
             <input type="checkbox" id="lockCheck" onchange="toggleLock()"> Lock message
           </label>
           <label class="mute-label">
@@ -549,6 +563,10 @@
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
   var muteCheck    = document.getElementById('muteCheck');
+  var fovealCheck  = document.getElementById('fovealCheck');
+  var sceneChip    = document.getElementById('sceneChip');
+  var sceneBadge   = document.getElementById('sceneBadge');
+  var sceneReregisterBtn = document.getElementById('sceneReregisterBtn');
   var reconnectBtn = document.getElementById('reconnectBtn');
   var saveBtn      = document.getElementById('saveBtn');
   var clearBtn     = document.getElementById('clearBtn');
@@ -804,7 +822,78 @@
     // distinct from the "Signal lost / Retrying..." error overlay, which
     // means something is actually wrong.
     hideOverlay.classList.toggle('visible', feedMode === 'hide');
+    // Foveal Layer is a modifier on CV Mode, not a mode of its own -- same
+    // pattern as B&W was on Blur before the CV Mode pivot. Greyed out
+    // (disabled) anywhere but CV Mode, same as B&W's precedent.
+    fovealCheck.disabled = (feedMode !== 'cv');
   }
+
+  // ── FOVEAL LAYER — server-side, modifier on CV Mode ──
+  var fovealOn = false;
+  function updateFovealCheck() { fovealCheck.checked = fovealOn; }
+  function applyFoveal(enabled) {
+    fovealOn = enabled;
+    updateFovealCheck();
+  }
+  function toggleFoveal() {
+    var newVal = fovealCheck.checked ? 'true' : 'false';
+    fetch('/api/foveal-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: newVal
+    })
+    .then(function(r) { return r.ok ? r.text() : null; })
+    .catch(function() { return null; })
+    .then(function(v) { if (v !== null) applyFoveal(v.trim() === 'true'); });
+  }
+  function pollFoveal() {
+    fetch('/api/foveal-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(v) { if (v !== null) applyFoveal(v.trim() === 'true'); });
+  }
+  pollFoveal();
+  setInterval(pollFoveal, 5000);
+
+  // ── SCENE MODEL — three-state: registered / stale / unregistered ──
+  function applySceneState(state) {
+    sceneBadge.textContent = state.toUpperCase();
+    sceneBadge.className = 'badge scene-' + state;
+    // Re-register only makes sense once something exists to re-register
+    // against -- the endpoint itself rejects the call otherwise.
+    sceneReregisterBtn.hidden = (state === 'unregistered');
+  }
+  function pollSceneStatus() {
+    fetch('/api/scene-status', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; })
+      .then(function(j) { if (j && j.state) applySceneState(j.state); });
+  }
+  function reregisterScene() {
+    sceneReregisterBtn.disabled = true;
+    var prevText = sceneReregisterBtn.textContent;
+    sceneReregisterBtn.textContent = 'Re-registering…';
+    fetch('/api/scene-reregister', { method: 'POST' })
+      .then(function(r) { return r.json().then(function(j) { return {ok: r.ok, body: j}; }); })
+      .catch(function() { return null; })
+      .then(function(result) {
+        sceneReregisterBtn.disabled = false;
+        sceneReregisterBtn.textContent = prevText;
+        if (!result) { alert('Re-register failed: no response from server.'); return; }
+        var j = result.body;
+        var pct = (j.inlier_ratio * 100).toFixed(0);
+        if (j.accepted) {
+          alert('Re-registered. Inlier ratio: ' + pct + '%.');
+        } else {
+          alert('Re-register rejected (inlier ratio ' + pct + '%). ' +
+                'Existing registration kept.\n' + (j.error || ''));
+        }
+        pollSceneStatus();
+      });
+  }
+  pollSceneStatus();
+  setInterval(pollSceneStatus, 10000);
+
   // ── FEED MODE — server-side ──
   function setFeedMode(mode) {
     if (mode === feedMode) return;

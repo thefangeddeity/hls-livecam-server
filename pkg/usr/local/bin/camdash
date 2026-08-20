@@ -758,6 +758,7 @@ def sample_metrics():
         "v4l2_dev": read_device_env().get("VIDEO_DEVICE", "?"),
         "dark":  os.path.exists(DARK_FLAG),
         "feed_mode": _api_get("feed-mode", "show"),
+        "foveal_mode": _api_get("foveal-mode", "false"),
         "msg_lock":  _api_get("msg-lock", "false"),
         "svc":   services_running(),
         "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
@@ -1379,13 +1380,21 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     _cving    = _feed_mode in ('cv', 'cloak')
     _hiding   = _feed_mode == 'hide'
     _msg_locked = snap.get('msg_lock', 'false') == 'true'
+    _foveal_on  = snap.get('foveal_mode', 'false') == 'true'
     y += 1
     show_a   = curses.A_REVERSE if (svc and _showing)  else curses.A_DIM
     cv_a     = curses.A_REVERSE if (svc and _cving)    else curses.A_DIM
     hide_a   = curses.A_REVERSE if (svc and _hiding)   else curses.A_DIM
+    # Modifier on CV Mode, same greyed-out-elsewhere treatment as the mode
+    # buttons themselves -- reverse video only reflects real on/off state
+    # while CV Mode is actually active; dim (same as an inactive mode
+    # button) everywhere else, matching what 'f' actually does in the key
+    # handler above.
+    foveal_a = curses.A_REVERSE if (svc and _cving and _foveal_on) else curses.A_DIM
     repair_a = curses.color_pair(2) | curses.A_BOLD if cur_repair == 'RUNNING' else curses.A_DIM
     safe(scr, y, 2, "[ Show   ]", show_a);   y += 1
     safe(scr, y, 2, "[ CV     ]", cv_a);     y += 1
+    safe(scr, y, 2, "[ Foveal ]", foveal_a); y += 1
     safe(scr, y, 2, "[ Hide   ]", hide_a);   y += 1
     safe(scr, y, 2, "[ Repair ]", repair_a); y += 1
     svc_a = curses.color_pair(1) | curses.A_BOLD if svc else curses.color_pair(3) | curses.A_BOLD
@@ -1515,10 +1524,10 @@ def draw_footer(scr, editing, svc=False):
             footer1 = "[i] cam IPs \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
             footer2 = ""
         elif _footer_locked:
-            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] cv \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] cv \u2022 [v] foveal \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
         else:
-            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] cv \u2022 [h] hide"
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] cv \u2022 [v] foveal \u2022 [h] hide"
             footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
     _fw = w - 4
     _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
@@ -1798,6 +1807,20 @@ def main(scr):
                 except Exception:
                     pass
             threading.Thread(target=_set_hide, daemon=True).start()
+        elif k == ord('v') and snap.get('feed_mode', 'show') in ('cv', 'cloak'):
+            # Modifier on CV Mode only, same shape as feed mode's own keys --
+            # a no-op here in Show/Hide rather than a silently-ignored toggle.
+            # 'f' was already taken (feed preview toggle, see below) --
+            # 'v' for "foVeal".
+            def _toggle_foveal():
+                import urllib.request
+                try:
+                    new_val = b'false' if snap.get('foveal_mode', 'false') == 'true' else b'true'
+                    req = urllib.request.Request('http://127.0.0.1:5000/api/foveal-mode', data=new_val, method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_toggle_foveal, daemon=True).start()
         elif k == ord('m') and snap.get('msg_lock', 'false') != 'true':
             frozen_snap = sample_metrics()
             with repair_lock:

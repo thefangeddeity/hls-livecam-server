@@ -45,6 +45,21 @@ COCO_LABELS = {
     77: 'teddy bear',
 }
 
+# Scene model registration (CV Mode Phase 3): a separate, wider class set
+# used ONLY when detecting on a high-resolution reference photo at setup
+# time. Never used by the live pipeline -- COCO_LABELS above is what the
+# runtime detector still looks for on every frame, unchanged. Furniture
+# classes get their own set specifically so registration can recognise a
+# couch/chair/bed/table/plant without the live HUD ever trying to (and
+# failing to, cheaply and repeatedly) reconfirm furniture on noisy video.
+STATIC_SCENE_LABELS = {
+    56: 'chair',
+    57: 'couch',
+    59: 'bed',
+    60: 'dining table',
+    58: 'potted plant',
+}
+
 LABEL_ALIAS = {
     'motion': 'motion',
 }
@@ -66,13 +81,27 @@ def make_detector(kind, **kw):
 class Detection:
     """Normalised detection, independent of whatever produced it."""
 
-    __slots__ = ('cls', 'confidence', 'x', 'y', 'w', 'h', 'timestamp')
+    __slots__ = ('cls', 'confidence', 'x', 'y', 'w', 'h', 'timestamp',
+                 'fg_consistency', 'scene_consistency')
 
-    def __init__(self, cls, confidence, x, y, w, h, timestamp=None):
+    def __init__(self, cls, confidence, x, y, w, h, timestamp=None,
+                 fg_consistency=1.0, scene_consistency=1.0):
         self.cls = cls
         self.confidence = float(confidence)
         self.x, self.y, self.w, self.h = int(x), int(y), int(w), int(h)
         self.timestamp = timestamp if timestamp is not None else time.time()
+        # Foveal Layer (CV Mode Phase 1): fraction of this box's area that
+        # overlaps the MOG2 foreground mask, 0.0-1.0. 1.0 (neutral) unless
+        # cv_processor explicitly sets it -- a Detector that knows nothing
+        # about the scene model, or the gate being off, must reproduce
+        # today's evidence formula exactly, not a scaled-down version of it.
+        self.fg_consistency = float(fg_consistency)
+        # Reference-image scene model (CV Mode Phase 3): fraction of this
+        # box's area that overlaps a registered STATIC region of a
+        # DIFFERENT class -- "is this a plausible place for a subject,"
+        # independent of fg_consistency's "did this change." 1.0 (neutral)
+        # unless cv_processor sets it from a loaded region dictionary.
+        self.scene_consistency = float(scene_consistency)
 
     @property
     def box(self):
@@ -407,16 +436,40 @@ class Tracker:
     count needed to un-promote is the same order as to promote (no separate
     hysteresis band; kept simple per the brief, revisit if this flickers in
     practice).
+
+    Foveal Layer (CV Mode Phase 1): `evidence_boost` scales each detection's
+    contribution by its `fg_consistency` -- a detection whose box overlaps
+    where the MOG2 scene model believes something is actually present
+    accumulates evidence faster than one placed somewhere the model
+    considers static background. With `evidence_boost=0.0` (the default) or
+    `fg_consistency=1.0` (the value on every Detection until cv_processor
+    sets it), the multiplier is exactly 1.0 and this is byte-identical to
+    the original formula -- additive and backward compatible by
+    construction, not just by intent.
+
+    Reference-image scene model (CV Mode Phase 3): `scene_boost` is a
+    second, independent multiplier on `scene_consistency`, deliberately not
+    folded into `evidence_boost`/`fg_consistency`. MOG2-consistency answers
+    "did this change"; scene-consistency answers "is this a plausible place
+    for a subject to be" -- a cat sitting still on the couch can have LOW
+    fg_consistency (settled, no longer changing) while having HIGH
+    scene_consistency (it's on the couch), which is exactly the case this
+    second term exists to catch. Same backward-compatible construction:
+    `scene_boost=0.0` or `scene_consistency=1.0` reproduces the exact prior
+    formula.
     """
 
     def __init__(self, max_misses=5, max_distance=180,
-                 evidence_decay=0.85, promote_threshold=0.35):
+                 evidence_decay=0.85, promote_threshold=0.35,
+                 evidence_boost=0.0, scene_boost=0.0):
         self.tracks = {}
         self._next_id = 1
         self.max_misses = int(max_misses)
         self.max_distance = int(max_distance)
         self.evidence_decay = float(evidence_decay)
         self.promote_threshold = float(promote_threshold)
+        self.evidence_boost = float(evidence_boost)
+        self.scene_boost = float(scene_boost)
 
     def update(self, detections):
         unmatched = dict(self.tracks)
@@ -437,7 +490,9 @@ class Tracker:
                 tr.last_seen = det.timestamp
                 tr.state = 'present'
                 tr.misses = 0
-                tr.evidence = tr.evidence * self.evidence_decay + det.confidence
+                tr.evidence = tr.evidence * self.evidence_decay + det.confidence * (
+                    1.0 + self.evidence_boost * det.fg_consistency
+                        + self.scene_boost * det.scene_consistency)
                 tr.promoted = tr.evidence >= self.promote_threshold
                 unmatched.pop(best, None)
             else:
@@ -803,6 +858,38 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220)):
     plain_ink = tuple(max(1, int(round(c * 0.35))) for c in ink)
     for (bx1, by1, bx2, by2) in plain_boxes:
         cv2.rectangle(out, (bx1, by1), (bx2, by2), plain_ink, 1, cv2.LINE_AA)
+
+    return out
+
+
+def draw_scene_regions(canvas, regions, ink=(140, 140, 220)):
+    """Static furniture labels from the reference-image scene model (CV
+    Mode Phase 3) -- drawn directly from the region dictionary every frame,
+    never from live inference. Deliberately distinct styling from
+    draw_hud's live-tracked targets (a cooler, dimmer, thin-outline-only
+    look, small caption instead of a confidence-scored tag) so a viewer can
+    tell "known furniture, asserted at setup" from "something the tracker
+    is actively watching right now" at a glance.
+    """
+    out = canvas
+    h, w = out.shape[:2]
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.42
+    thickness = 1
+
+    for r in regions:
+        bx, by, bw, bh = r['box']
+        x1 = max(2, min(w - 3, int(bx)))
+        y1 = max(2, min(h - 3, int(by)))
+        x2 = max(x1 + 2, min(w - 2, int(bx + bw)))
+        y2 = max(y1 + 2, min(h - 2, int(by + bh)))
+
+        cv2.rectangle(out, (x1, y1), (x2, y2), ink, 1, cv2.LINE_AA)
+
+        label = str(r['label']).upper()
+        (tw, th), baseline = cv2.getTextSize(label, font, scale, thickness)
+        ty = y1 - 4 if y1 - 4 - th > 0 else y1 + th + 4
+        cv2.putText(out, label, (x1, ty), font, scale, ink, thickness, cv2.LINE_AA)
 
     return out
 

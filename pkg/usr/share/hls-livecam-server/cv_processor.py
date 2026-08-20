@@ -36,6 +36,9 @@ pre-tuning defaults, so this is a no-op change for any node that hasn't
 added the new keys yet.
 """
 
+import json
+import os
+import threading
 import time
 from collections import deque
 
@@ -52,10 +55,24 @@ try:
 except Exception:      # notification is optional; absence disables it
     _cvn = None
 
+try:
+    import cv_scene as _cvs
+except Exception:      # scene model is optional; absence disables it
+    _cvs = None
+
 # Flow is computed on a downscaled grayscale pair purely to build a coarse
 # motion mask -- a full-resolution dense flow field is not needed to answer
 # "is this pixel neighborhood moving," and it costs several times more.
 _FLOW_SCALE = 0.25
+
+# Detection thread poll interval (CV Mode Phase 2). Deliberately fast and
+# NOT tied to CV_DETECT_HZ: this only decides how quickly a new display
+# frame becomes available to the accumulation window, and costs a lock
+# acquire plus a tuple deref -- effectively free. CV_DETECT_HZ instead
+# throttles how often a completed detect() forward pass is allowed to fire
+# (see CVProcessor._detection_step's _last_detect_end check), which is the
+# actual expensive operation this phase is budgeting.
+_DETECT_POLL_INTERVAL_S = 0.05
 
 _DEFAULTS = {
     'CV_MOTION_THRESHOLD':    1.5,   # flow px/frame (at _FLOW_SCALE res) counted as "moving"
@@ -170,6 +187,133 @@ _DEFAULTS = {
     'CV_ARTIFACT_MAX_AREA':   0.04,  # refuse a mask covering more than this
                                       # fraction of frame -- that is a wrong
                                       # answer, not a very dirty lens
+
+    # Foveal Layer (CV Mode Phase 1). MOG2 per-pixel Gaussian-mixture scene
+    # model: cheap, C++-speed, and its Mahalanobis-distance threshold means
+    # a pixel that is *always* noisy learns high variance and stops being
+    # surprising -- noise gets absorbed into the model instead of firing
+    # the gate every frame, which is why this beats frame-differencing on a
+    # degraded sensor. CV_FOVEAL_ENABLED is only the value the pipeline
+    # starts with; broadcast-api's live checkbox is the actual runtime
+    # control from then on (see CVProcessor.set_foveal()).
+    'CV_FOVEAL_ENABLED':      0,     # off by default; opt in per node
+    'CV_MOG2_HISTORY':        2000,  # frames of memory. OpenCV's own default
+                                      # (500) is ~33s at 15fps -- too short
+                                      # for a cat that settles in for a nap;
+                                      # 2000 is ~2.2min at 15fps.
+    'CV_MOG2_VAR_THRESHOLD':  16.0,  # OpenCV's own default; Mahalanobis-
+                                      # distance-squared cutoff for "moving"
+    'CV_MOG2_DETECT_SHADOWS': 0,     # shadow pixels come back gray (127) in
+                                      # the mask when on; costs extra per-
+                                      # pixel work every frame for a signal
+                                      # this gate does not currently use
+    'CV_MOG2_SCALE':          0.25,  # MOG2 runs on a downscaled frame, same
+                                      # reasoning and same default as optical
+                                      # flow's _FLOW_SCALE: measured on
+                                      # tanzania (i5-10210U), full-res 1280x720
+                                      # MOG2 costs ~30-38ms/frame ALONE -- 45%+
+                                      # of the entire 66.7ms 15fps budget, paid
+                                      # every frame with no amortization,
+                                      # unlike detection. At 0.25x the same
+                                      # model costs ~3.6ms, and a coarse mask
+                                      # is all a padded crop box needs.
+    'CV_FOVEAL_DILATE':       9,     # grow the foreground mask before
+                                      # contour-finding, same rationale as
+                                      # MotionDetector's own dilate: joins a
+                                      # subject broken into scattered patches
+    'CV_FOVEAL_MIN_AREA':     0.004, # ignore contours smaller than this
+                                      # fraction of frame -- mask noise, not
+                                      # a subject
+    'CV_FOVEAL_PAD':          0.25,  # pad the crop box by this fraction of
+                                      # its own size on each side -- a tight
+                                      # crop risks cutting off a part of the
+                                      # subject that was not moving (a
+                                      # cat's tail outside the flagged blob)
+    'CV_FOVEAL_EVIDENCE_BOOST': 0.0, # extra evidence weight for a detection
+                                      # whose box overlaps the MOG2
+                                      # foreground mask, 0 = no boost (today's
+                                      # formula, unchanged); see Tracker in
+                                      # cv_detect.py
+
+    # Foveal Temporal Accumulation (CV Mode Phase 2). Detection now runs on
+    # its own thread (see CVProcessor._detection_loop), decoupled from the
+    # writer loop's display cadence -- a detector forward pass (~200-300ms
+    # on tanzania, worse on tina's i3-2330M) no longer stalls schedule_frame.
+    # That decoupling is what pays for accumulation: several frames of the
+    # gated crop are averaged before the (now off-thread) detect() call,
+    # raising SNR on a noisy sensor at zero cost to display fps.
+    'CV_DETECT_HZ':            1.5,   # target detection-cycle rate, Hz.
+                                      # Independent of display fps entirely.
+    'CV_FOVEAL_ACCUM_FRAMES':  4,     # crop samples averaged before a
+                                      # detect() pass. 1 = today's Phase 1
+                                      # single-frame behaviour.
+    'CV_FOVEAL_ACCUM_DIFF_MAX': 6.0,  # mean abs difference (0-255 scale) on
+                                      # a downsampled crop, between this
+                                      # sample and the last accepted one,
+                                      # below which the sample is "aligned
+                                      # enough" to accumulate. Frame
+                                      # differencing on the crop itself, not
+                                      # the pipeline's full-frame optical
+                                      # flow -- the flow field only exists on
+                                      # the non-sharpie render path, and this
+                                      # gate has to work regardless of edge
+                                      # style (tina runs sharpie today).
+
+    # Reference-image scene model (CV Mode Phase 3). A toggle on every
+    # node, off by default -- CV_SCENE_ENABLED=0 means any node, including
+    # tanzania, is exactly what it is today. Nothing here is tina-specific;
+    # registration takes the target host as an argument (cv_scene_register.py)
+    # and the runtime side only ever reads whatever CV_SCENE_REFERENCE points
+    # to.
+    # Acuity-adaptive detection scale. Measured on this fleet: feeding a
+    # detector more pixels than the optics actually resolve costs accuracy,
+    # because everything above the lens's real cutoff is noise and the
+    # network spends capacity on it. Downscaling first (INTER_AREA, which
+    # averages rather than samples) discards that noise band before
+    # inference.
+    #
+    # The effect is large and it runs in OPPOSITE directions by sensor:
+    #   tina     (acuity ~36):  cat    0.0008 -> 0.026 at scale 0.12-0.18
+    #   tanzania (acuity ~145): person 0.687  -> 0.255 at scale 0.12 (HURT)
+    #                                         -> 0.704 at scale 0.35 (best)
+    # So this cannot be a fixed constant -- a good lens is penalised by the
+    # scale a bad lens needs. The scale is therefore derived from the
+    # frame's own measured acuity (variance-of-Laplacian, the same metric
+    # CV_EDGE_SHARPNESS_* already uses), which is the software equivalent
+    # of an eye matching its sampling to the acuity it actually has.
+    'CV_DETECT_ACUITY_ADAPT':   1,     # 0 = always detect at full frame size
+    'CV_DETECT_ACUITY_DIVISOR': 360.0, # scale = acuity / this, clamped below
+    'CV_DETECT_SCALE_MIN':      0.12,  # tina's measured optimum floor
+    'CV_DETECT_SCALE_MAX':      1.0,   # never upsample past native
+    'CV_DETECT_ACUITY_PERIOD':  30,    # re-measure acuity every N detect cycles
+
+    'CV_SCENE_ENABLED':        0,        # off by default; opt in per node
+    'CV_SCENE_REFERENCE':      '/var/lib/hls-livecam/scene_model.json',
+    'CV_SCENE_EVIDENCE_BOOST': 0.0,      # second, independent evidence
+                                          # multiplier alongside
+                                          # CV_FOVEAL_EVIDENCE_BOOST -- see
+                                          # Tracker in cv_detect.py. 0 = no
+                                          # boost (today's formula, unchanged).
+    'CV_SCENE_STALE_CHECK_INTERVAL_S': 60.0,  # how often the detection
+                                          # thread correlates the MOG2
+                                          # background against the warped
+                                          # reference. Not per-frame --
+                                          # background does not change fast
+                                          # enough to justify the cost.
+    'CV_SCENE_STALE_THRESHOLD': 40.0,    # mean abs difference (0-255,
+                                          # downscaled grayscale) above which
+                                          # the reference is declared stale
+                                          # -- the camera was pivoted and the
+                                          # registered geometry no longer
+                                          # matches what MOG2 has learned.
+    'CV_SCENE_REREGISTER_MIN_INLIER_RATIO': 0.5,  # /api/scene-reregister
+                                          # only replaces the stored
+                                          # homography if the new match
+                                          # clears this bar -- otherwise the
+                                          # existing registration is kept
+                                          # and the request reports failure.
+                                          # A confidently wrong registration
+                                          # is worse than none.
 }
 
 
@@ -280,6 +424,94 @@ class CVProcessor:
         self._detector = None
         self._tracker = None
         self._notifier = None
+
+        # Foveal Layer (CV Mode Phase 1). self._foveal_enabled is the LIVE
+        # flag -- broadcast-api's writer loop calls set_foveal() every
+        # iteration with the current checkbox state, the same way it
+        # re-reads feed mode every iteration. CV_FOVEAL_ENABLED from
+        # device.env is only the value this starts at.
+        self._foveal_enabled = _read_int(denv, 'CV_FOVEAL_ENABLED') != 0
+        self._mog2 = cv2.createBackgroundSubtractorMOG2(
+            history=_read_int(denv, 'CV_MOG2_HISTORY'),
+            varThreshold=_read_float(denv, 'CV_MOG2_VAR_THRESHOLD'),
+            detectShadows=_read_int(denv, 'CV_MOG2_DETECT_SHADOWS') != 0)
+        self._mog2_detect_shadows = _read_int(denv, 'CV_MOG2_DETECT_SHADOWS') != 0
+        self._mog2_scale = _read_float(denv, 'CV_MOG2_SCALE')
+        self._foveal_dilate = max(1, _read_int(denv, 'CV_FOVEAL_DILATE'))
+        self._foveal_min_area = _read_float(denv, 'CV_FOVEAL_MIN_AREA')
+        self._foveal_pad = max(0.0, _read_float(denv, 'CV_FOVEAL_PAD'))
+        self._foveal_evidence_boost = _read_float(denv, 'CV_FOVEAL_EVIDENCE_BOOST')
+        self._fg_mask = None  # HxW uint8, most recent MOG2 foreground mask
+
+        # Foveal Temporal Accumulation (CV Mode Phase 2). process() (the
+        # writer-loop thread) publishes into this single slot every call --
+        # a reference swap, no detector work -- and a dedicated daemon
+        # thread (_detection_loop) consumes it independently. Same
+        # latest-wins idiom as broadcast-api's own _cam_frame/_cam_frame_lock,
+        # not a queue: a live feed has no use for a detection backlog.
+        self._detect_hz = max(0.1, _read_float(denv, 'CV_DETECT_HZ'))
+        self._accum_frames = max(1, _read_int(denv, 'CV_FOVEAL_ACCUM_FRAMES'))
+        self._accum_diff_max = _read_float(denv, 'CV_FOVEAL_ACCUM_DIFF_MAX')
+        self._detect_slot = None  # (frame, crop_box, fg_mask) or None
+        self._detect_slot_lock = threading.Lock()
+        # Tracker is written by the detection thread and read by the render
+        # path (_detect_and_hud, called every display frame) -- both sides
+        # take this lock. Everything else the detection thread touches
+        # (_accum_*) is private to that one thread and needs no lock.
+        self._tracker_lock = threading.Lock()
+        self._accum_box = None          # fixed crop rect for the in-progress
+                                         # accumulation window -- every
+                                         # sample crops to THIS rect, not its
+                                         # own freshly-recomputed box, which
+                                         # is what keeps samples registered
+                                         # without real affine alignment.
+        self._accum_buf = deque(maxlen=self._accum_frames)
+        self._accum_ref_gray = None     # small downsampled gray of the last
+                                         # accepted sample, for the diff gate
+        self._accum_started = None      # perf_counter() when this window
+                                         # opened, for the timeout fallback
+        self._accum_timeout_s = 2.0 / self._detect_hz  # up to ~2 cycles
+                                         # before forcing a partial-N pass,
+                                         # so a subject that never fully
+                                         # settles still eventually gets a
+                                         # detection rather than starving
+        self._last_detect_end = 0.0     # perf_counter() of the last
+                                         # completed detect() pass -- throttles
+                                         # new cycles (gated or fallback) to
+                                         # CV_DETECT_HZ
+
+        # Reference-image scene model (CV Mode Phase 3). CV_SCENE_ENABLED=0
+        # (the default, on every node including tanzania) means everything
+        # below stays at its neutral no-op state -- self._scene_regions
+        # stays empty, self._scene_homography stays None, and every
+        # scene_consistency computation short-circuits to the Detection
+        # default (1.0, neutral) exactly as if this file did not exist.
+        self._acuity_adapt = _read_int(denv, 'CV_DETECT_ACUITY_ADAPT') != 0
+        self._acuity_divisor = max(1.0, _read_float(denv, 'CV_DETECT_ACUITY_DIVISOR'))
+        self._detect_scale_min = _read_float(denv, 'CV_DETECT_SCALE_MIN')
+        self._detect_scale_max = _read_float(denv, 'CV_DETECT_SCALE_MAX')
+        self._acuity_period = max(1, _read_int(denv, 'CV_DETECT_ACUITY_PERIOD'))
+        self._detect_scale = 1.0    # current adapted scale
+        self._acuity_last = None    # last measured variance-of-Laplacian
+        self._acuity_n = 0          # detect cycles since last measurement
+
+        self._scene_enabled = _read_int(denv, 'CV_SCENE_ENABLED') != 0
+        self._scene_evidence_boost = _read_float(denv, 'CV_SCENE_EVIDENCE_BOOST')
+        self._scene_stale_interval = _read_float(denv, 'CV_SCENE_STALE_CHECK_INTERVAL_S')
+        self._scene_stale_threshold = _read_float(denv, 'CV_SCENE_STALE_THRESHOLD')
+        self._scene_reregister_min_inlier_ratio = _read_float(
+            denv, 'CV_SCENE_REREGISTER_MIN_INLIER_RATIO')
+        self._scene_reference_path = str(
+            (denv or {}).get('CV_SCENE_REFERENCE', _DEFAULTS['CV_SCENE_REFERENCE']))
+        self._scene_regions = []        # list of {label, box, source_confidence, static}
+        self._scene_homography = None   # 3x3 np.ndarray or None
+        self._scene_reference_gray = None  # HxW uint8, warped-space source for staleness
+        self._scene_stale = False       # surfaced via GET, three-state UI reads this
+        self._scene_registered = False  # a model loaded successfully at all
+        self._scene_last_stale_check = 0.0  # perf_counter() of the last staleness check
+        if self._scene_enabled:
+            self._load_scene_model()
+
         # Notification is independent of detection succeeding: build it
         # first so a detector init failure still leaves a valid (disabled)
         # notifier rather than an attribute that does not exist.
@@ -315,7 +547,9 @@ class CVProcessor:
                     min_area_frac=_read_float(denv, 'CV_DETECT_MIN_AREA'))
                 self._tracker = _cvd.Tracker(
                     evidence_decay=_read_float(denv, 'CV_TRACK_EVIDENCE_DECAY'),
-                    promote_threshold=_read_float(denv, 'CV_TRACK_PROMOTE_THRESHOLD'))
+                    promote_threshold=_read_float(denv, 'CV_TRACK_PROMOTE_THRESHOLD'),
+                    evidence_boost=self._foveal_evidence_boost,
+                    scene_boost=self._scene_evidence_boost)
             except Exception as exc:
                 print(
                     f"SHAKEY DETECTOR INIT ERROR: "
@@ -344,9 +578,61 @@ class CVProcessor:
             _read_float(denv, 'CV_SHADOW_LIFT'),
             _read_int(denv, 'CV_SHADOW_RANGE'))
 
+        # Detection thread starts last, once everything it can touch
+        # (_tracker, _fg_mask, _accum_*) is fully constructed. Daemon, no
+        # explicit stop: this instance lives for the life of the writer-loop
+        # process, and dies with it -- same convention as broadcast-api's
+        # own _drain_loop/_writer_loop threads.
+        if self._detect_enabled and self._detector is not None:
+            threading.Thread(target=self._detection_loop, daemon=True).start()
+
+    def set_foveal(self, enabled):
+        """Live toggle for the Foveal Layer, called every writer-loop
+        iteration with the checkbox's current state -- same pattern as feed
+        mode itself. A plain attribute flip, not a reinit: MOG2's model
+        keeps accumulating regardless of whether the gate is currently
+        consulted, so toggling off and back on does not throw away the
+        learned background."""
+        self._foveal_enabled = bool(enabled)
+
     def process(self, frame):
         t = {}
         t0 = time.perf_counter()
+
+        if self._foveal_enabled:
+            t_mog = time.perf_counter()
+            sc = self._mog2_scale
+            mog_input = frame if not (0.0 < sc < 1.0) else cv2.resize(
+                frame, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
+            fg = self._mog2.apply(mog_input)
+            if self._mog2_detect_shadows:
+                # Shadow pixels come back gray (127); only genuine
+                # foreground (255) should count for gating.
+                _, fg = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)
+            if fg.shape[:2] != frame.shape[:2]:
+                # Nearest, not linear: this is a binary mask, and a coarse
+                # crop box is all it needs to feed -- same reasoning as the
+                # existing optical-flow motion_mask upscale.
+                fg = cv2.resize(fg, (frame.shape[1], frame.shape[0]),
+                                interpolation=cv2.INTER_NEAREST)
+            self._fg_mask = fg
+            t['mog2'] = time.perf_counter() - t_mog
+        else:
+            self._fg_mask = None
+
+        # Publish to the detection thread. Cheap: crop_box is the same
+        # dilate+contour pass already paid for above; frame/fg_mask are
+        # reference swaps, never copies -- both are freshly allocated every
+        # call (mog2.apply()/resize() never mutate a prior array in place),
+        # so sharing the reference across threads is safe without a copy.
+        # Runs regardless of edge style: the detection thread must not care
+        # whether the display path is about to take the sharpie early return
+        # below.
+        crop_box = (self._foveal_crop_box(frame.shape)
+                    if self._foveal_enabled and self._fg_mask is not None
+                    else None)
+        with self._detect_slot_lock:
+            self._detect_slot = (frame, crop_box, self._fg_mask)
 
         # Sharpie discards the photo, so everything that exists to improve the
         # photo is wasted work: optical flow, the temporal blend and the
@@ -437,17 +723,15 @@ class CVProcessor:
         self._frames.append(frame)
         self._gray_small.append(small_gray)
 
-        # SHAKey HUD: render on the FINAL display frame, immediately before
-        # returning it. This is deliberately after all visual processing so
-        # the HUD cannot be consumed by the enhancement/edge pipeline.
-        if self._hud_enabled:
-            edged = _cvd.draw_hud(edged, hud_tracks)
-            if self._frame_n % self._detect_interval == 0:
-                print(
-                    f"SHAKEY HUD RENDER: frame={self._frame_n} "
-                    f"tracks={len(hud_tracks)} enabled=1",
-                    flush=True,
-                )
+        # SHAKey HUD is already drawn on `edged` inside _detect_and_hud
+        # (deliberately, immediately before it returns, so the HUD cannot be
+        # consumed by the enhancement/edge pipeline). Found while
+        # restructuring this method for Phase 2: this path used to call
+        # _cvd.draw_hud() a SECOND time here, double-rendering every frame
+        # in the non-sharpie path (the sharpie path never had this bug --
+        # it only calls _detect_and_hud). Pre-existing, not introduced by
+        # this phase; removed rather than left in place since it was found
+        # in code this phase already had to touch.
 
         t['total'] = time.perf_counter() - t0
         metadata = {
@@ -550,57 +834,413 @@ class CVProcessor:
         ink = cv2.cvtColor(strokes, cv2.COLOR_GRAY2RGB)
         return cv2.addWeighted(frame, 1.0, ink, -amount, 0), w
 
+    def _foveal_crop_box(self, frame_shape):
+        """Largest MOG2 foreground cluster, dilated/padded, as a crop box
+        the detector should look at instead of the full frame. Returns
+        (x, y, w, h) in full-frame pixels, or None if nothing survives
+        CV_FOVEAL_MIN_AREA -- callers fall back to a full-frame pass.
+        """
+        h, w = frame_shape[:2]
+        k = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self._foveal_dilate | 1, self._foveal_dilate | 1))
+        mask = cv2.dilate(self._fg_mask, k)
+        cont, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cont:
+            return None
+        largest = max(cont, key=cv2.contourArea)
+        if cv2.contourArea(largest) < self._foveal_min_area * (h * w):
+            return None
+
+        bx, by, bw, bh = cv2.boundingRect(largest)
+        pad_x = int(bw * self._foveal_pad)
+        pad_y = int(bh * self._foveal_pad)
+        x1 = max(0, bx - pad_x)
+        y1 = max(0, by - pad_y)
+        x2 = min(w, bx + bw + pad_x)
+        y2 = min(h, by + bh + pad_y)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return (x1, y1, x2 - x1, y2 - y1)
+
+    def _set_fg_consistency(self, dets, fg_mask):
+        """Fraction of each detection's box covered by the MOG2 foreground
+        mask, 0.0-1.0 -- the evidence accumulator's "is this position
+        plausible" signal. Left at the Detection default (1.0, neutral) if
+        the box is degenerate or falls entirely outside the frame.
+
+        Takes fg_mask explicitly rather than reading self._fg_mask: this
+        runs on the detection thread, which may still be finishing a cycle
+        (accumulation can span several display frames) after the display
+        thread has already moved self._fg_mask on to something newer --
+        the mask passed here is the one that was current when this
+        detection cycle's frame was published, which is the honest match.
+        """
+        fh, fw = fg_mask.shape[:2]
+        for d in dets:
+            x1 = max(0, min(fw, d.x))
+            y1 = max(0, min(fh, d.y))
+            x2 = max(0, min(fw, d.x + d.w))
+            y2 = max(0, min(fh, d.y + d.h))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            region = fg_mask[y1:y2, x1:x2]
+            d.fg_consistency = float((region > 0).mean())
+
     def _detect_and_hud(self, source_frame, canvas):
-        """Run detector on cadence; always render SHAKey telemetry."""
+        """Render-only: draws SHAKey telemetry from the tracker's current
+        state. Detection itself runs asynchronously on its own thread (see
+        _detection_loop/_detection_step below) -- this never calls detect()
+        and never blocks the writer loop on it."""
         self._frame_n += 1
         tracks = []
-
-        if self._detector is not None and self._tracker is not None:
-            if self._frame_n % self._detect_interval == 0:
-                try:
-                    dets = self._detector.detect(source_frame)
-
-                    for d in dets:
-                        d.cls = _cvd.classify_coat(source_frame, d)
-
-                    self._tracker.update(dets)
-
-                    # Notify on promotion only. The evidence accumulator has
-                    # already decided this is real; the notifier needs the
-                    # edge, and dedupes per track itself. Enqueue-and-return
-                    # -- the send runs on its own thread, so a slow SMTP
-                    # server cannot reach the frame path from here.
-                    if self._notifier is not None:
-                        for tr in self._tracker.tracks.values():
-                            if getattr(tr, 'promoted', False):
-                                self._notifier.on_promotion(tr, source_frame)
-
-                    print(
-                        "SHAKEY DETECT:"
-                        f" frame={self._frame_n}"
-                        f" detections={len(dets)}"
-                        f" tracks={len(self._tracker.tracks)}"
-                        f" detail={[f"{d.cls}:{d.confidence:.3f}" for d in dets]}",
-                        flush=True,
-                    )
-
-                except Exception as exc:
-                    print(
-                        f"SHAKEY DETECT ERROR:"
-                        f" frame={self._frame_n}"
-                        f" {type(exc).__name__}: {exc}",
-                        flush=True,
-                    )
-
-            tracks = [
-                t for t in self._tracker.tracks.values()
-                if t.state != 'departed'
-            ]
-
+        if self._tracker is not None:
+            with self._tracker_lock:
+                tracks = [
+                    t for t in self._tracker.tracks.values()
+                    if t.state != 'departed'
+                ]
         if self._hud_enabled:
             canvas = _cvd.draw_hud(canvas, tracks)
-
+            # HUD labels for furniture come from the region dictionary, not
+            # live inference (CV Mode Phase 3) -- the live detector never
+            # spends a pass trying to reconfirm a couch. Suppressed while
+            # stale: a mislabelled, out-of-date box is worse than none.
+            if self._scene_enabled and self._scene_regions and not self._scene_stale:
+                canvas = _cvd.draw_scene_regions(canvas, self._scene_regions)
         return canvas, tracks
+
+    # ── reference-image scene model (CV Mode Phase 3) ───────────────────
+    def _load_scene_model(self):
+        """Load the region dictionary + reference photo from
+        CV_SCENE_REFERENCE. Missing, unparseable, or structurally invalid
+        -> stays fully disabled (self._scene_regions empty,
+        self._scene_homography None), same backward-compatible fallback
+        every other signal in this pipeline uses. Logged either way so an
+        operator can tell "off by choice" from "tried and failed" --
+        NOT prefixed SHAKEY, that naming was retired.
+        """
+        path = self._scene_reference_path
+        try:
+            with open(path) as f:
+                model = json.load(f)
+            H = np.array(model['homography'], dtype=np.float64)
+            if H.shape != (3, 3):
+                raise ValueError(f"homography has shape {H.shape}, expected (3, 3)")
+            regions = model.get('regions', [])
+
+            ref_path = os.path.join(os.path.dirname(path), 'scene_reference.jpg')
+            ref_bgr = cv2.imread(ref_path)
+            if ref_bgr is None:
+                raise ValueError(f"could not read reference photo at {ref_path}")
+
+            self._scene_homography = H
+            self._scene_regions = regions
+            self._scene_registered = True
+            self._scene_stale = False
+            # Warped once, at load time -- the staleness check runs
+            # periodically and reuses this rather than re-warping per check.
+            self._scene_reference_gray = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2GRAY)
+            print(
+                f"CV SCENE: loaded {len(regions)} region(s) from {path} "
+                f"(source={model.get('source', '?')}, "
+                f"inlier_ratio={model.get('inlier_ratio', '?')})",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"CV SCENE: no usable model at {path} "
+                f"({type(exc).__name__}: {exc}) -- running un-primed",
+                flush=True,
+            )
+            self._scene_homography = None
+            self._scene_regions = []
+            self._scene_registered = False
+
+    def _set_scene_consistency(self, dets):
+        """Overlap fraction against a registered STATIC region of a
+        DIFFERENT class, 0.0-1.0 -- the "is this a plausible place for a
+        subject" signal. A cat detection overlapping a stored couch region
+        scores high; one with no overlapping region stays at the Detection
+        default (1.0, neutral) -- unlabelled space is NOT penalised, since
+        COCO has no 'wall' class to positively confirm emptiness, and
+        walking across open floor is normal and must not be suppressed.
+        """
+        if not self._scene_regions:
+            return
+        for d in dets:
+            dx1, dy1, dx2, dy2 = d.x, d.y, d.x + d.w, d.y + d.h
+            d_area = max(1, d.w * d.h)
+            best = 0.0
+            for r in self._scene_regions:
+                if r['label'] == d.cls or not r.get('static', True):
+                    continue
+                rx, ry, rw, rh = r['box']
+                ix1, iy1 = max(dx1, rx), max(dy1, ry)
+                ix2, iy2 = min(dx2, rx + rw), min(dy2, ry + rh)
+                if ix2 <= ix1 or iy2 <= iy1:
+                    continue
+                overlap = ((ix2 - ix1) * (iy2 - iy1)) / d_area
+                best = max(best, overlap)
+            if best > 0.0:
+                d.scene_consistency = min(1.0, best)
+
+    def _suppress_static_region_detections(self, dets):
+        """Drop detections whose class matches an overlapping region's
+        label -- the detector re-confirming furniture as itself is not
+        interesting signal; a couch is not a subject. Distinct from
+        _set_scene_consistency (which boosts DIFFERENT-class detections
+        near a region): this is the other of the two consumers the region
+        dictionary exists to serve."""
+        if not self._scene_regions:
+            return dets
+        kept = []
+        for d in dets:
+            dx1, dy1, dx2, dy2 = d.x, d.y, d.x + d.w, d.y + d.h
+            d_area = max(1, d.w * d.h)
+            suppressed = False
+            for r in self._scene_regions:
+                if r['label'] != d.cls or not r.get('static', True):
+                    continue
+                rx, ry, rw, rh = r['box']
+                ix1, iy1 = max(dx1, rx), max(dy1, ry)
+                ix2, iy2 = min(dx2, rx + rw), min(dy2, ry + rh)
+                if ix2 <= ix1 or iy2 <= iy1:
+                    continue
+                if ((ix2 - ix1) * (iy2 - iy1)) / d_area > 0.5:
+                    suppressed = True
+                    break
+            if not suppressed:
+                kept.append(d)
+        return kept
+
+    def _check_scene_staleness(self):
+        """Periodic (CV_SCENE_STALE_CHECK_INTERVAL_S), not per-frame:
+        correlate the current MOG2 background against the registered
+        reference (warped once at load time) via downscaled grayscale mean
+        absolute difference. Divergence past threshold marks the reference
+        stale -- camera pivots are caught here; furniture moving is not
+        (see cv_scene.py's module docstring) and needs a manual re-run.
+        Runs on the detection thread, called from _detection_loop.
+        """
+        if not self._scene_registered or self._mog2 is None:
+            return
+        now = time.perf_counter()
+        if now - self._scene_last_stale_check < self._scene_stale_interval:
+            return
+        self._scene_last_stale_check = now
+
+        bg = self._mog2.getBackgroundImage()
+        if bg is None:
+            return
+        bg_gray = cv2.cvtColor(bg, cv2.COLOR_RGB2GRAY)
+        ref = self._scene_reference_gray
+        if ref.shape != bg_gray.shape:
+            ref = cv2.resize(ref, (bg_gray.shape[1], bg_gray.shape[0]))
+        small_bg = cv2.resize(bg_gray, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+        small_ref = cv2.resize(ref, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+        diff = float(cv2.absdiff(small_bg, small_ref).mean())
+
+        was_stale = self._scene_stale
+        self._scene_stale = diff > self._scene_stale_threshold
+        if self._scene_stale and not was_stale:
+            print(
+                f"CV SCENE: reference now STALE (diff={diff:.1f} > "
+                f"threshold={self._scene_stale_threshold:.1f}) -- "
+                "camera likely pivoted; falling back to un-primed behaviour "
+                "until a re-register succeeds",
+                flush=True,
+            )
+        elif was_stale and not self._scene_stale:
+            print(f"CV SCENE: reference no longer stale (diff={diff:.1f})", flush=True)
+
+    # ── detection thread (CV Mode Phase 2) ──────────────────────────────
+    def _detection_loop(self):
+        """Background daemon thread: consumes the latest published
+        (frame, crop_box, fg_mask) at a fast, cheap poll rate and advances
+        the accumulation state machine. How often an actual detect()
+        forward pass fires is governed inside _detection_step by
+        CV_DETECT_HZ, not by this loop's poll rate."""
+        while True:
+            with self._detect_slot_lock:
+                slot = self._detect_slot
+            if slot is not None:
+                try:
+                    self._detection_step(*slot)
+                except Exception as exc:
+                    print(
+                        f"SHAKEY DETECT THREAD ERROR: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+            if self._scene_enabled:
+                try:
+                    self._check_scene_staleness()
+                except Exception as exc:
+                    print(f"CV SCENE: staleness check error: "
+                          f"{type(exc).__name__}: {exc}", flush=True)
+            time.sleep(_DETECT_POLL_INTERVAL_S)
+
+    def _reset_accum(self):
+        self._accum_box = None
+        self._accum_buf.clear()
+        self._accum_ref_gray = None
+        self._accum_started = None
+
+    def _acuity_scale(self, frame):
+        """Detection input scale for this frame, from its own measured
+        acuity. Re-measured every CV_DETECT_ACUITY_PERIOD cycles rather
+        than per pass: a lens does not change, and the only thing that
+        moves this number is lighting.
+
+        Returns 1.0 (no rescale) when adaptation is off, so this is a
+        no-op for any node that has not opted in.
+        """
+        if not self._acuity_adapt:
+            return 1.0
+        if self._acuity_last is None or self._acuity_n >= self._acuity_period:
+            g = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) if frame.ndim == 3 else frame
+            # Measured on a downscaled copy: variance-of-Laplacian is a
+            # relative metric here, and this keeps the cost negligible.
+            g = cv2.resize(g, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+            self._acuity_last = float(cv2.Laplacian(g, cv2.CV_64F).var())
+            self._acuity_n = 0
+            self._detect_scale = max(
+                self._detect_scale_min,
+                min(self._detect_scale_max,
+                    self._acuity_last / self._acuity_divisor))
+            print(f"CV ACUITY: varLap={self._acuity_last:.1f} "
+                  f"-> detect scale {self._detect_scale:.2f}", flush=True)
+        self._acuity_n += 1
+        return self._detect_scale
+
+    def _detect_input(self, img):
+        """Apply the adapted scale: downscale with INTER_AREA (which
+        averages away the noise band the optics never resolved), then
+        restore the original dimensions so every downstream coordinate --
+        crop offsets, fg_consistency, tracker positions -- keeps working
+        in unchanged full-frame pixels. Returning a smaller image would
+        mean translating boxes back, for no benefit: the detector
+        letterboxes to its own fixed input size regardless.
+        """
+        s = self._acuity_scale(img)
+        if s >= 0.999:
+            return img
+        small = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+        return cv2.resize(small, (img.shape[1], img.shape[0]),
+                          interpolation=cv2.INTER_LINEAR)
+
+    def _detection_step(self, frame, crop_box, fg_mask):
+        """One poll-tick of the detection thread's state machine.
+
+        Ungated (crop_box is None -- Foveal off, or MOG2 found nothing this
+        instant): throttled full-frame fallback pass, same reasoning
+        Phase 1 established for keeping a still-but-present subject
+        eligible for re-verification rather than decaying toward
+        unlabelled purely because it stopped moving. Throttled to
+        CV_DETECT_HZ so a static room does not fire detect() on every
+        50ms poll tick.
+
+        Gated: accumulates crops from a FIXED rectangle (self._accum_box,
+        set once when the window opens, not re-derived per sample) --
+        that fixed-rectangle discipline is the alignment mechanism: every
+        sample in a window is pixel-registered by construction, without
+        needing real affine registration. A sample is only accepted into
+        the average if the region's mean frame-to-frame difference is
+        below CV_FOVEAL_ACCUM_DIFF_MAX (a moving cat would smear).
+        """
+        now = time.perf_counter()
+
+        if crop_box is None:
+            self._reset_accum()
+            if now - self._last_detect_end < 1.0 / self._detect_hz:
+                return
+            dets = self._detector.detect(self._detect_input(frame))
+            self._finish_detect_cycle(frame, dets, None, fg_mask)
+            return
+
+        if self._accum_box is None:
+            if now - self._last_detect_end < 1.0 / self._detect_hz:
+                return
+            self._accum_box = crop_box
+            self._accum_started = now
+
+        cx, cy, cw, ch = self._accum_box
+        crop = frame[cy:cy + ch, cx:cx + cw]
+        if crop.size == 0:
+            self._reset_accum()
+            return
+
+        small = cv2.resize(crop, (32, 32), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        if self._accum_ref_gray is None or float(
+                np.abs(gray - self._accum_ref_gray).mean()) <= self._accum_diff_max:
+            self._accum_buf.append(crop)
+            self._accum_ref_gray = gray
+
+        timed_out = (now - self._accum_started) >= self._accum_timeout_s
+        if len(self._accum_buf) < self._accum_frames and not timed_out:
+            return  # still collecting
+
+        if self._accum_buf:
+            stack = np.stack(list(self._accum_buf), axis=0)
+            averaged = stack[0] if len(self._accum_buf) == 1 else \
+                np.mean(stack, axis=0).astype(np.uint8)
+        else:
+            # Timed out without a single aligned sample (subject never
+            # settled at all within the window) -- detect on the raw
+            # current crop rather than starve indefinitely. Worst case
+            # degrades to Phase 1's single-frame behaviour, not a hang.
+            averaged = crop
+
+        dets = self._detector.detect(self._detect_input(averaged))
+        for d in dets:
+            d.x += cx
+            d.y += cy
+        self._finish_detect_cycle(frame, dets, self._accum_box, fg_mask)
+        self._reset_accum()
+
+    def _finish_detect_cycle(self, source_frame, dets, crop_box, fg_mask):
+        """Common tail for both the gated and ungated-fallback paths:
+        fg_consistency, coat classification, tracker update, promotion
+        notification, logging. Runs on the detection thread; tracker
+        access is locked because the render path reads it every display
+        frame from a different thread."""
+        if self._foveal_enabled and fg_mask is not None:
+            self._set_fg_consistency(dets, fg_mask)
+
+        if self._scene_enabled and self._scene_regions and not self._scene_stale:
+            dets = self._suppress_static_region_detections(dets)
+            self._set_scene_consistency(dets)
+
+        for d in dets:
+            d.cls = _cvd.classify_coat(source_frame, d)
+
+        with self._tracker_lock:
+            self._tracker.update(dets)
+            promoted = [tr for tr in self._tracker.tracks.values()
+                        if getattr(tr, 'promoted', False)]
+            n_tracks = len(self._tracker.tracks)
+
+        # Notify on promotion only. The evidence accumulator has already
+        # decided this is real; the notifier needs the edge, and dedupes
+        # per track itself. Enqueue-and-return -- the send runs on its own
+        # thread, so a slow SMTP server cannot reach the detection thread.
+        if self._notifier is not None:
+            for tr in promoted:
+                self._notifier.on_promotion(tr, source_frame)
+
+        print(
+            "SHAKEY DETECT:"
+            f" detections={len(dets)}"
+            f" tracks={n_tracks}"
+            f" crop={crop_box}"
+            f" accum={len(self._accum_buf)}"
+            f" detail={[f"{d.cls}:{d.confidence:.3f}"
+                        f"/fg={d.fg_consistency:.2f}" for d in dets]}",
+            flush=True,
+        )
+        self._last_detect_end = time.perf_counter()
 
     def _draw_sharpie(self, frame):
         """Line drawing on white: quantise luminance, outline the bands.
