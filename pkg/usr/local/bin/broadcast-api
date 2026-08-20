@@ -11,9 +11,19 @@ import numpy as np
 import pyfakewebcam
 sys.path.insert(0, '/usr/share/hls-livecam-server')
 import cv_processor as _cvp
-import cv_scene as _cvs
 import cv2 as _cv2
 import json as _json
+
+# Guarded, deliberately: cv_scene is only needed by the scene-reregister
+# endpoint, which is inert unless a node has opted into CV_SCENE_ENABLED.
+# An unguarded import here would take the whole studio pipeline down --
+# no camera, no stream -- if the module were ever missing (partial
+# upgrade, or an older package that predates it). A feature nothing on
+# this node uses must not be able to kill the feed.
+try:
+    import cv_scene as _cvs
+except Exception:
+    _cvs = None
 
 app = Flask(__name__)
 
@@ -350,6 +360,9 @@ def scene_reregister_post():
     reports failure with the real ratio, never a bare OK/fail. A
     confidently wrong registration is worse than none."""
     cv_proc = _cv_proc
+    if _cvs is None:
+        return {'accepted': False, 'inlier_ratio': 0.0,
+                'error': 'cv_scene module not installed on this node'}, 501
     if cv_proc is None or not getattr(cv_proc, '_scene_registered', False):
         return {'accepted': False, 'inlier_ratio': 0.0,
                 'error': 'no existing scene model to re-register against'}, 400
