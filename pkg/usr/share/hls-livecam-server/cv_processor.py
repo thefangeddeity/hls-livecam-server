@@ -272,18 +272,33 @@ _DEFAULTS = {
     # averages rather than samples) discards that noise band before
     # inference.
     #
-    # The effect is large and it runs in OPPOSITE directions by sensor:
-    #   tina     (acuity ~36):  cat    0.0008 -> 0.026 at scale 0.12-0.18
-    #   tanzania (acuity ~145): person 0.687  -> 0.255 at scale 0.12 (HURT)
-    #                                         -> 0.704 at scale 0.35 (best)
-    # So this cannot be a fixed constant -- a good lens is penalised by the
-    # scale a bad lens needs. The scale is therefore derived from the
-    # frame's own measured acuity (variance-of-Laplacian, the same metric
-    # CV_EDGE_SHARPNESS_* already uses), which is the software equivalent
-    # of an eye matching its sampling to the acuity it actually has.
+    # Measured through the REAL detect() path -- which applies CLAHE to the
+    # letterboxed canvas before inference. An earlier version of these
+    # numbers was taken from raw network output WITHOUT that CLAHE stage
+    # and materially overstated the benefit; the corrected figures are
+    # below and the floor here was raised because of them.
+    #
+    #   tanzania (acuity ~392): person 0.72 @1.0, 0.77 @0.5, 0.41 @0.12
+    #                           -> downscaling HURTS a healthy lens
+    #   tina     (acuity ~37):  strongest-signal mean 0.143 @0.5,
+    #                           0.107 @0.35, 0.014 @0.18, 0.011 @0.12
+    #                           -- and at 0.12 the detector returns nothing
+    #                           at all on 20% of frames.
+    #
+    # So the direction is real (a good lens wants full resolution, a poor
+    # one wants less) but the aggressive end is harmful on BOTH sensors.
+    # SCALE_MIN is therefore 0.30, not 0.12: measured coefficient of
+    # variation is lowest (~0.51) in the 0.25-0.35 band with a 100% hit
+    # rate, and a persistent estimator needs consistency far more than it
+    # needs one good reading.
+    #
+    # Not fixed by any of this: YOLO cannot see the cat on tina at any
+    # scale (best hit rate 10%, at a scale that wrecks everything else).
+    # That is not a resolution problem and should not be chased with one --
+    # see cv_persist.py / cv_occupancy.py.
     'CV_DETECT_ACUITY_ADAPT':   1,     # 0 = always detect at full frame size
     'CV_DETECT_ACUITY_DIVISOR': 360.0, # scale = acuity / this, clamped below
-    'CV_DETECT_SCALE_MIN':      0.12,  # tina's measured optimum floor
+    'CV_DETECT_SCALE_MIN':      0.30,  # never downscale past the stable band
     'CV_DETECT_SCALE_MAX':      1.0,   # never upsample past native
     'CV_DETECT_ACUITY_PERIOD':  30,    # re-measure acuity every N detect cycles
 

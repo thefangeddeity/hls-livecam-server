@@ -275,21 +275,6 @@ class OnnxDetector(Detector):
         if out.shape[0] < out.shape[1]:
             out = out.T
 
-        try:
-            probe = out[:, 4:]
-            best_by_class = []
-            for cid in (0, 15, 45, 56, 57, 59, 75, 77):
-                if cid < probe.shape[1]:
-                    best_by_class.append(
-                        f"{cid}:{float(probe[:, cid].max()):.4f}"
-                    )
-            with open("/tmp/tanzania-yolo-live.log", "a") as f:
-                f.write(
-                    " ".join(best_by_class) +
-                    f" | shape={out.shape} conf={self.conf:.3f}\n"
-                )
-        except Exception:
-            pass
 
         boxes = []
         confs = []
