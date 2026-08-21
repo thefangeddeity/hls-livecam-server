@@ -65,6 +65,11 @@ try:
 except Exception:      # persistence is optional; absence disables it
     _cvp = None
 
+try:
+    import cv_occupancy as _cvo
+except Exception:      # occupancy/grid tooling is optional
+    _cvo = None
+
 # Flow is computed on a downscaled grayscale pair purely to build a coarse
 # motion mask -- a full-resolution dense flow field is not needed to answer
 # "is this pixel neighborhood moving," and it costs several times more.
@@ -350,10 +355,54 @@ _DEFAULTS = {
     # fed from the TRACKER, not from raw detections: a track has already
     # survived the evidence accumulator, so the persistence layer integrates
     # over something that recurs rather than over every frame's noise.
+    # Codec block-grid correction. A lossy feed leaves a highly structured
+    # artifact: measured on tina, gradient energy peaks at column mod 8 == 7
+    # at 7.2x the median phase, the SAME phase in 120/120 frames, with an
+    # on/off-grid excess of 5.66 at CoV 0.025. That is predictable enough to
+    # model and remove rather than step over.
+    #
+    # Because the phase is known deterministically, the correction only
+    # touches the lines the grid falls on and leaves every other pixel
+    # bit-exact -- unlike a generic deblocker, which has to guess and ends up
+    # smoothing away the little real detail a soft sensor still delivers.
+    #
+    # Off by default so it can be A/B'd against a node's known-good look.
+    # Learned once from the first CV_GRID_LEARN_FRAMES frames and cached:
+    # the artifact is stationary, so re-deriving it per frame would be pure
+    # cost.
+    'CV_GRID_CORRECT_ENABLED': 0,
+    'CV_GRID_CORRECT_STRENGTH': 0.6,  # 1.0 over-corrects: it penalises a
+                                       # pixel once per axis, and since real
+                                       # edges are not grid-aligned roughly
+                                       # 1/8 of any genuine edge is attenuated
+                                       # with the grid. 0.6 measured as the
+                                       # point where blockiness reaches a
+                                       # healthy source's level.
+    'CV_GRID_LEARN_FRAMES':     40,
+
     'CV_PERSIST_ENABLED':      0,
     'CV_PERSIST_PATH':         '/var/lib/hls-livecam/scene_entities.json',
     'CV_PERSIST_MIN_EVIDENCE': 0.35,  # only fold in tracks the accumulator
                                        # has actually promoted
+    'CV_PERSIST_SEMANTIC_FLOOR': 0.25, # class hypotheses below this are
+                                       # DROPPED before the entity store sees
+                                       # them -- the entity may still exist,
+                                       # it just stays unnamed.
+                                       #
+                                       # Deliberately INDEPENDENT of
+                                       # CV_DETECT_CONF. A detection floor is
+                                       # tuned for what is worth drawing on a
+                                       # HUD for one frame; this floor governs
+                                       # what is worth REMEMBERING for weeks.
+                                       # Persistence integrates evidence, so a
+                                       # detector that is wrong in a
+                                       # consistent direction -- which is what
+                                       # an out-of-distribution input produces
+                                       # -- would otherwise be laundered into
+                                       # a confident, long-lived, named
+                                       # entity. A run of HUMAN 0.03 on a
+                                       # scene containing only cats is exactly
+                                       # that failure starting.
 
     'CV_SCENE_ENABLED':        0,        # off by default; opt in per node
     'CV_SCENE_REFERENCE':      '/var/lib/hls-livecam/scene_model.json',
@@ -570,9 +619,18 @@ class CVProcessor:
         self._acuity_last = None    # last measured variance-of-Laplacian
         self._acuity_n = 0          # detect cycles since last measurement
 
+        self._grid_correct = (_read_int(denv, 'CV_GRID_CORRECT_ENABLED') != 0
+                              and _cvo is not None)
+        self._grid_strength = _read_float(denv, 'CV_GRID_CORRECT_STRENGTH')
+        self._grid_learn_frames = max(4, _read_int(denv, 'CV_GRID_LEARN_FRAMES'))
+        self._grid_prior = None        # learned once, then cached
+        self._grid_learn_buf = []      # raw frames held only until learned
+
         self._persist_enabled = (_read_int(denv, 'CV_PERSIST_ENABLED') != 0
                                  and _cvp is not None)
         self._persist_min_evidence = _read_float(denv, 'CV_PERSIST_MIN_EVIDENCE')
+        self._persist_semantic_floor = _read_float(
+            denv, 'CV_PERSIST_SEMANTIC_FLOOR')
         self._persist_store = None
         if self._persist_enabled:
             try:
@@ -695,6 +753,11 @@ class CVProcessor:
     def process(self, frame):
         t = {}
         t0 = time.perf_counter()
+
+        if self._grid_correct:
+            t_grid = time.perf_counter()
+            frame = self._apply_grid_correction(frame)
+            t['grid'] = time.perf_counter() - t_grid
 
         if self._foveal_enabled:
             t_mog = time.perf_counter()
@@ -1044,6 +1107,39 @@ class CVProcessor:
     # config-intent-versus-reality gap this line exists to close.
     _KNOWN_EDGE_STYLES = ('sharpie', 'xdog')
 
+    def _apply_grid_correction(self, frame):
+        """Learn the codec grid once, then correct every frame at its known
+        positions. Runs at the FRONT of the pipeline: this is a transport
+        artifact, not scene content, so everything downstream -- denoise,
+        tone, edges, MOG2, the detector -- should see the corrected frame
+        rather than each having to cope with the grid separately.
+        """
+        if self._grid_prior is None:
+            if len(self._grid_learn_buf) < self._grid_learn_frames:
+                self._grid_learn_buf.append(frame)
+                return frame          # uncorrected while still learning
+            try:
+                self._grid_prior = _cvo.estimate_grid_prior(self._grid_learn_buf)
+            except Exception as exc:
+                print(f"CV GRID: learn failed ({type(exc).__name__}: {exc}) "
+                      "-- correction disabled", flush=True)
+                self._grid_correct = False
+                self._grid_learn_buf = []
+                return frame
+            self._grid_learn_buf = []   # release the frames
+            if self._grid_prior is None:
+                print("CV GRID: no block grid detected on this source -- "
+                      "correction inactive", flush=True)
+                self._grid_correct = False
+                return frame
+            print(f"CV GRID: learned period={self._grid_prior['period']} "
+                  f"col_phase={self._grid_prior['col_phase']} "
+                  f"excess={self._grid_prior['col_excess']} / "
+                  f"row_phase={self._grid_prior['row_phase']} "
+                  f"excess={self._grid_prior['row_excess']} "
+                  f"strength={self._grid_strength}", flush=True)
+        return _cvo.deblock_grid(frame, self._grid_prior, self._grid_strength)
+
     def _capability_line(self):
         """Right-aligned HUD summary of the CV stages actually running.
 
@@ -1055,6 +1151,8 @@ class CVProcessor:
         bits = []
         if self._edge_enabled:
             bits.append(style.upper())
+        if self._grid_correct and self._grid_prior is not None:
+            bits.append('DEBLOCK')
         if self._foveal_enabled:
             bits.append('FOVEAL')
         if getattr(self, '_scene_enabled', False) and self._scene_registered:
@@ -1414,6 +1512,19 @@ class CVProcessor:
             for tr in promoted:
                 self._notifier.on_promotion(tr, source_frame)
 
+        # Raw detector output logged SEPARATELY from tracker state, because
+        # the two answer different questions and were previously conflated.
+        # A HUD showing seven targets can mean the detector fired seven
+        # times, or that the evidence accumulator is holding stale tracks
+        # alive -- and the fix is different in each case. This line reports
+        # what YOLO actually returned this pass, before association,
+        # evidence promotion, or decay touched it.
+        print(
+            "CV RAW DETECT:"
+            f" n={len(dets)}"
+            f" detail={sorted(((d.cls, round(d.confidence, 3)) for d in dets), key=lambda x: -x[1])}",
+            flush=True,
+        )
         print(
             "SHAKEY DETECT:"
             f" detections={len(dets)}"

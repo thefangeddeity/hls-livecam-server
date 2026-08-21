@@ -169,6 +169,66 @@ def apply_grid_prior(gradient_map, prior, strength=0.6):
     return out
 
 
+def deblock_grid(frame, prior, strength=0.6):
+    """Attenuate the codec's block grid IN THE IMAGE, at known positions.
+
+    A generic deblocking filter has to guess where block edges are and
+    ends up smoothing everything, which on a soft sensor removes the little
+    real detail that survived. Because estimate_grid_prior() has already
+    established the phase deterministically (tina: column mod 8 == 7 in
+    120/120 frames), this only touches the lines the grid actually falls on
+    and leaves every other pixel bit-exact.
+
+    On a grid line the value is pulled toward the mean of its two immediate
+    neighbours. A real edge that happens to cross a grid line is only
+    partially affected -- its neighbours carry the same edge, so their mean
+    is close to the true value and the pull is small. A pure block
+    discontinuity has dissimilar neighbours, so the pull is large. The
+    correction is therefore self-limiting on genuine content.
+
+    Per-phase pull is scaled by how anomalous that phase measured, so a
+    phase barely above median is barely touched.
+    """
+    if prior is None or strength <= 0.0:
+        return frame
+    s = float(np.clip(strength, 0.0, 1.0))
+    period = prior['period']
+
+    # Cost discipline: an earlier version converted the whole frame to
+    # float32 and indexed it per phase, which measured 92 ms/frame -- 74%
+    # of tina's entire 125 ms budget at 8fps, for a correction that touches
+    # about an eighth of the pixels. This version converts nothing globally
+    # and only materialises the lines it actually modifies.
+    out = frame.copy()
+
+    def pull(axis, weights):
+        n = out.shape[1] if axis == 1 else out.shape[0]
+        for c in range(period):
+            idx = np.arange(c, n, period)
+            idx = idx[(idx > 0) & (idx < n - 1)]
+            if idx.size == 0:
+                continue
+            w = float(np.clip(1.0 - weights[idx].mean(), 0.0, 1.0)) * s
+            if w <= 0.01:
+                continue          # this phase is not anomalous; leave it alone
+            if axis == 1:
+                a_ = out[:, idx - 1].astype(np.int16)
+                b_ = out[:, idx + 1].astype(np.int16)
+                cur = out[:, idx].astype(np.int16)
+                out[:, idx] = (cur + (((a_ + b_) // 2 - cur) * w)
+                               ).clip(0, 255).astype(np.uint8)
+            else:
+                a_ = out[idx - 1, :].astype(np.int16)
+                b_ = out[idx + 1, :].astype(np.int16)
+                cur = out[idx, :].astype(np.int16)
+                out[idx, :] = (cur + (((a_ + b_) // 2 - cur) * w)
+                               ).clip(0, 255).astype(np.uint8)
+
+    pull(1, prior['col_weight'])
+    pull(0, prior['row_weight'])
+    return out
+
+
 def _grid(mask):
     """Downsample a full-frame bool mask onto the occupancy grid."""
     if mask is None:
