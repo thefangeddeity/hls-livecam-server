@@ -538,7 +538,7 @@ class Tracker:
         return list(self.tracks.values())
 
 
-def draw_hud(canvas, tracks, ink=(220, 220, 220)):
+def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     """SHAKey HUD: confidence-weighted, collision-aware target annotations."""
     out = canvas
     h, w = out.shape[:2]
@@ -571,6 +571,24 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220)):
 
     tx = 18
     ty = h - 42
+
+    # Right-aligned companion to the DETECTING banner: which CV tools are
+    # actually running. Same ink, size and baseline so the two read as one
+    # telemetry strip rather than two unrelated overlays.
+    if capabilities:
+        cap = str(capabilities)
+        cap_w = 0
+        for ch_ in cap:
+            (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, telemetry_scale,
+                                          telemetry_thickness)
+            cap_w += cw_ + telemetry_spacing
+        cx_ = max(18, w - 18 - cap_w)
+        for ch_ in cap:
+            (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, telemetry_scale,
+                                          telemetry_thickness)
+            cv2.putText(out, ch_, (cx_, ty), telemetry_font, telemetry_scale,
+                        telemetry_ink, telemetry_thickness, cv2.LINE_AA)
+            cx_ += cw_ + telemetry_spacing
 
     for char in text:
         (cw, ch), _ = cv2.getTextSize(

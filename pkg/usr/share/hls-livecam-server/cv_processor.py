@@ -120,13 +120,26 @@ _DEFAULTS = {
     # lets a soft sensor still show something like fur texture rather than
     # collapsing it to outline.
     'CV_EDGE_STYLE':          'overlay',
-    'CV_XDOG_SIGMA':          0.8,   # inner Gaussian; larger = coarser strokes
+    'CV_XDOG_SIGMA':          3.0,   # inner Gaussian. NOT a free parameter on a
+                                      # compressed feed: at sigma 0.8 the DoG
+                                      # peaks at 1-2px, which is exactly the
+                                      # MJPEG block-edge scale, and measured
+                                      # blockiness rose to 4.13 against a 3.33
+                                      # source baseline -- the stage inks the
+                                      # compressor's grid rather than the room.
+                                      # At sigma 3 it sits above the 8-16px
+                                      # block size and blockiness returns to
+                                      # baseline (3.35).
     'CV_XDOG_K':              1.6,   # outer/inner sigma ratio (DoG standard)
     'CV_XDOG_TAU':            0.985, # how much of the outer Gaussian is
                                       # subtracted. ->1 sharpens the response
                                       # and thins strokes.
-    'CV_XDOG_EPS':            -0.05, # threshold the soft ramp is centred on
-    'CV_XDOG_PHI':            10.0,  # ramp steepness; low = soft grey
+    'CV_XDOG_EPS':            0.30,  # ramp centre, in units of the
+                                      # normalised DoG response (see
+                                      # CV_XDOG_PERCENTILE) -- so it means
+                                      # the same thing on any sensor
+    'CV_XDOG_PERCENTILE':     99.0,  # normalisation reference for |DoG|
+    'CV_XDOG_PHI':            2.5,   # ramp steepness; low = soft grey
                                       # gradations, high = hard black/white
     'CV_XDOG_TONE':           0.55,  # 0 = pure ink on white, 1 = keep the
                                       # toned photo untouched. In between
@@ -452,6 +465,7 @@ class CVProcessor:
         self._xdog_k = max(1.01, _read_float(denv, 'CV_XDOG_K'))
         self._xdog_tau = _read_float(denv, 'CV_XDOG_TAU')
         self._xdog_eps = _read_float(denv, 'CV_XDOG_EPS')
+        self._xdog_percentile = _read_float(denv, 'CV_XDOG_PERCENTILE')
         self._xdog_phi = _read_float(denv, 'CV_XDOG_PHI')
         self._xdog_tone = min(1.0, max(0.0, _read_float(denv, 'CV_XDOG_TONE')))
         self._sharpie_levels = max(2, _read_int(denv, 'CV_SHARPIE_LEVELS'))
@@ -943,40 +957,72 @@ class CVProcessor:
     def _draw_xdog(self, frame):
         """Extended difference-of-Gaussians (Winnemoller).
 
-        Plain DoG answers "is there an edge here" and throws the rest away.
+        Plain DoG answers "is there an edge here" and discards the rest.
         XDoG keeps a continuous response and pushes it through a soft ramp,
         so a surface with fine low-contrast structure -- fur, fabric weave --
-        comes out as graded tone instead of either flat grey or a hard
-        outline. That is the difference that matters on a soft sensor: the
-        detail is genuinely present but at low contrast, and a hard
-        threshold discards exactly that band.
+        comes out as graded tone rather than either flat grey or a hard
+        outline. On a soft sensor that band is exactly where the remaining
+        detail lives, and a hard threshold throws it away.
 
-        Nothing here invents detail. The ramp is monotonic in the DoG
-        response, so it can only redistribute contrast that the optics
-        actually delivered -- unlike sharpening, which manufactures halos.
+        The response is NORMALISED against a high percentile before the
+        ramp. That is not cosmetic: measured on tina, the raw DoG response
+        spans median 0.0088 to p99 0.0205, so absolute thresholds tuned on
+        any other image ink nothing at all here -- an earlier version of
+        this function used eps=-0.05 and left 0.0% of the frame inked,
+        making the whole stage a silent no-op. Normalising first makes eps
+        and phi mean the same thing on a good sensor and a dying one, which
+        is the same reason the overlay path normalises by percentile.
+
+        Nothing here invents detail: the ramp is monotonic in the DoG
+        response, so it can only redistribute contrast the optics actually
+        delivered -- unlike sharpening, which manufactures halos.
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
         g1 = cv2.GaussianBlur(gray, (0, 0), sigmaX=self._xdog_sigma)
         g2 = cv2.GaussianBlur(gray, (0, 0), sigmaX=self._xdog_sigma * self._xdog_k)
         d = g1 - self._xdog_tau * g2
 
-        # Soft ramp: 1 where the response is above eps, tanh-graded below.
-        # phi controls how abruptly that happens.
-        ink = np.where(d >= self._xdog_eps,
+        ref = float(np.percentile(np.abs(d), self._xdog_percentile))
+        if ref <= 1e-6:
+            return frame
+        dn = d / ref                      # ~[-1, 1] for the bulk of the frame
+
+        # Soft ramp in normalised units: 1 (no ink) above eps, tanh-graded
+        # below it. phi sets how abruptly ink arrives.
+        ink = np.where(dn >= self._xdog_eps,
                        1.0,
-                       1.0 + np.tanh(self._xdog_phi * (d - self._xdog_eps)))
+                       1.0 + np.tanh(self._xdog_phi * (dn - self._xdog_eps)))
         ink = np.clip(ink, 0.0, 1.0).astype(np.float32)
 
         if self._xdog_tone <= 0.0:
-            out = (ink * 255.0).astype(np.uint8)
-            return cv2.cvtColor(out, cv2.COLOR_GRAY2RGB)
+            return cv2.cvtColor((ink * 255.0).astype(np.uint8), cv2.COLOR_GRAY2RGB)
 
-        # Multiply the ink over the photo so colour and shading survive; the
-        # tone knob mixes back toward the untouched frame.
+        # Multiply the ink over the photo so colour and shading survive;
+        # tone mixes back toward the untouched frame.
         ink3 = cv2.cvtColor((ink * 255.0).astype(np.uint8), cv2.COLOR_GRAY2RGB)
         inked = cv2.multiply(frame, ink3, scale=1.0 / 255.0)
         return cv2.addWeighted(inked, 1.0 - self._xdog_tone,
                                frame, self._xdog_tone, 0.0)
+
+    def _capability_line(self):
+        """Short right-aligned summary of which CV tools are actually active.
+
+        Reads live state, not config intent -- if a stage failed to
+        initialise it does not appear here. That is the point: the HUD
+        should say what the pipeline IS doing, not what it was asked to do.
+        """
+        bits = []
+        if self._edge_enabled:
+            bits.append(self._edge_style.upper())
+        if self._foveal_enabled:
+            bits.append('FOVEAL')
+        if getattr(self, '_scene_enabled', False) and self._scene_registered:
+            bits.append('SCENE STALE' if self._scene_stale else 'SCENE 2D')
+        if getattr(self, '_persist_enabled', False):
+            bits.append('PERSISTENT 2D')
+        if self._acuity_adapt and self._acuity_last is not None:
+            bits.append(f'ACUITY {self._detect_scale:.2f}')
+        return ' \u00b7 '.join(bits)
 
     def _detect_and_hud(self, source_frame, canvas):
         """Render-only: draws SHAKey telemetry from the tracker's current
@@ -992,7 +1038,8 @@ class CVProcessor:
                     if t.state != 'departed'
                 ]
         if self._hud_enabled:
-            canvas = _cvd.draw_hud(canvas, tracks)
+            canvas = _cvd.draw_hud(canvas, tracks,
+                                   capabilities=self._capability_line())
             # HUD labels for furniture come from the region dictionary, not
             # live inference (CV Mode Phase 3) -- the live detector never
             # spends a pass trying to reconfirm a couch. Suppressed while
