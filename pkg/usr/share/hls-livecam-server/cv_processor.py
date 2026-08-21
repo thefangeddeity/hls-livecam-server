@@ -114,7 +114,25 @@ _DEFAULTS = {
     # brightness, so the drawing traces region *boundaries* rather than
     # texture. Tracing texture is what makes a blurry frame come out as
     # scattered dashes instead of strokes.
+    # 'overlay' inks strokes over the photo; 'sharpie' discards the photo
+    # for a line drawing; 'xdog' is the extended difference-of-Gaussians
+    # stylisation below -- it keeps TONE as well as edges, which is what
+    # lets a soft sensor still show something like fur texture rather than
+    # collapsing it to outline.
     'CV_EDGE_STYLE':          'overlay',
+    'CV_XDOG_SIGMA':          0.8,   # inner Gaussian; larger = coarser strokes
+    'CV_XDOG_K':              1.6,   # outer/inner sigma ratio (DoG standard)
+    'CV_XDOG_TAU':            0.985, # how much of the outer Gaussian is
+                                      # subtracted. ->1 sharpens the response
+                                      # and thins strokes.
+    'CV_XDOG_EPS':            -0.05, # threshold the soft ramp is centred on
+    'CV_XDOG_PHI':            10.0,  # ramp steepness; low = soft grey
+                                      # gradations, high = hard black/white
+    'CV_XDOG_TONE':           0.55,  # 0 = pure ink on white, 1 = keep the
+                                      # toned photo untouched. In between
+                                      # multiplies the ink over the photo,
+                                      # which is the setting that preserves
+                                      # coat texture.
     'CV_SHARPIE_LEVELS':      4,     # luminance bands; more = concentric clutter
     'CV_SHARPIE_THICK':       3,     # stroke width in px
     'CV_SHARPIE_MIN_LEN':     140,   # discard contours shorter than this
@@ -131,6 +149,12 @@ _DEFAULTS = {
     'CV_DETECT_MODEL':        '/usr/share/hls-livecam-server/models/candidates/yolov8n.onnx',
     'CV_DETECT_CONF':         0.12,
     'CV_DETECT_MIN_AREA':     0.004, # motion backend: ignore blobs smaller than this
+    'CV_DETECT_CLASSES':      '',    # '' = every class in COCO_LABELS.
+                                      # Comma-separated ids or names ("cat",
+                                      # "15,0") narrow what this node looks
+                                      # for -- previously done by editing
+                                      # COCO_LABELS on the live machine,
+                                      # which every upgrade then reverted.
     'CV_HUD_ENABLED':         1,     # draw boxes/labels when detection is on
 
     # Track-level evidence accumulation (run-14). Per-frame confidence
@@ -424,6 +448,12 @@ class CVProcessor:
         self._edge_gamma = _read_float(denv, 'CV_EDGE_GAMMA')
         self._edge_style = str((denv or {}).get('CV_EDGE_STYLE',
                                                 _DEFAULTS['CV_EDGE_STYLE'])).strip().lower()
+        self._xdog_sigma = max(0.1, _read_float(denv, 'CV_XDOG_SIGMA'))
+        self._xdog_k = max(1.01, _read_float(denv, 'CV_XDOG_K'))
+        self._xdog_tau = _read_float(denv, 'CV_XDOG_TAU')
+        self._xdog_eps = _read_float(denv, 'CV_XDOG_EPS')
+        self._xdog_phi = _read_float(denv, 'CV_XDOG_PHI')
+        self._xdog_tone = min(1.0, max(0.0, _read_float(denv, 'CV_XDOG_TONE')))
         self._sharpie_levels = max(2, _read_int(denv, 'CV_SHARPIE_LEVELS'))
         self._sharpie_thick = max(1, _read_int(denv, 'CV_SHARPIE_THICK'))
         self._sharpie_min_len = _read_int(denv, 'CV_SHARPIE_MIN_LEN')
@@ -555,11 +585,17 @@ class CVProcessor:
                     flush=True,
                 )
 
+                _class_filter = _cvd.parse_class_filter(
+                    (denv or {}).get('CV_DETECT_CLASSES', ''))
+                if _class_filter:
+                    print(f"CV DETECT: class filter active -> "
+                          f"{sorted(_class_filter.values())}", flush=True)
                 self._detector = _cvd.make_detector(
                     backend,
                     model_path=_effective_model,
                     conf=_read_float(denv, 'CV_DETECT_CONF'),
-                    min_area_frac=_read_float(denv, 'CV_DETECT_MIN_AREA'))
+                    min_area_frac=_read_float(denv, 'CV_DETECT_MIN_AREA'),
+                    classes=_class_filter)
                 self._tracker = _cvd.Tracker(
                     evidence_decay=_read_float(denv, 'CV_TRACK_EVIDENCE_DECAY'),
                     promote_threshold=_read_float(denv, 'CV_TRACK_PROMOTE_THRESHOLD'),
@@ -819,6 +855,8 @@ class CVProcessor:
 
         if self._edge_style == 'sharpie':
             return self._draw_sharpie(frame), w
+        if self._edge_style == 'xdog':
+            return self._draw_xdog(frame), w
 
         sigma = min(self._edge_sigma * (1.0 + 2.0 * w), self._edge_sigma_max)
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
@@ -901,6 +939,44 @@ class CVProcessor:
                 continue
             region = fg_mask[y1:y2, x1:x2]
             d.fg_consistency = float((region > 0).mean())
+
+    def _draw_xdog(self, frame):
+        """Extended difference-of-Gaussians (Winnemoller).
+
+        Plain DoG answers "is there an edge here" and throws the rest away.
+        XDoG keeps a continuous response and pushes it through a soft ramp,
+        so a surface with fine low-contrast structure -- fur, fabric weave --
+        comes out as graded tone instead of either flat grey or a hard
+        outline. That is the difference that matters on a soft sensor: the
+        detail is genuinely present but at low contrast, and a hard
+        threshold discards exactly that band.
+
+        Nothing here invents detail. The ramp is monotonic in the DoG
+        response, so it can only redistribute contrast that the optics
+        actually delivered -- unlike sharpening, which manufactures halos.
+        """
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+        g1 = cv2.GaussianBlur(gray, (0, 0), sigmaX=self._xdog_sigma)
+        g2 = cv2.GaussianBlur(gray, (0, 0), sigmaX=self._xdog_sigma * self._xdog_k)
+        d = g1 - self._xdog_tau * g2
+
+        # Soft ramp: 1 where the response is above eps, tanh-graded below.
+        # phi controls how abruptly that happens.
+        ink = np.where(d >= self._xdog_eps,
+                       1.0,
+                       1.0 + np.tanh(self._xdog_phi * (d - self._xdog_eps)))
+        ink = np.clip(ink, 0.0, 1.0).astype(np.float32)
+
+        if self._xdog_tone <= 0.0:
+            out = (ink * 255.0).astype(np.uint8)
+            return cv2.cvtColor(out, cv2.COLOR_GRAY2RGB)
+
+        # Multiply the ink over the photo so colour and shading survive; the
+        # tone knob mixes back toward the untouched frame.
+        ink3 = cv2.cvtColor((ink * 255.0).astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        inked = cv2.multiply(frame, ink3, scale=1.0 / 255.0)
+        return cv2.addWeighted(inked, 1.0 - self._xdog_tone,
+                               frame, self._xdog_tone, 0.0)
 
     def _detect_and_hud(self, source_frame, canvas):
         """Render-only: draws SHAKey telemetry from the tracker's current

@@ -60,6 +60,42 @@ STATIC_SCENE_LABELS = {
     58: 'potted plant',
 }
 
+def parse_class_filter(spec):
+    """Turn a device.env CV_DETECT_CLASSES value into a {id: label} dict.
+
+    Accepts COCO indices ("15,16"), names already known to COCO_LABELS
+    ("cat,human"), or a mix. Empty/None means "use COCO_LABELS unchanged",
+    so a node that has not set the key behaves exactly as before.
+
+    This exists because narrowing what a node looks for was previously done
+    by COMMENTING OUT entries in COCO_LABELS on the live machine. tina is
+    configured that way right now -- cat only -- and no released version has
+    ever shipped it, which means every package upgrade silently reverts a
+    deliberate operator decision. Config survives upgrades; a source edit
+    does not.
+    """
+    if not spec:
+        return None
+    by_name = {v.lower(): k for k, v in COCO_LABELS.items()}
+    # names the operator may reasonably use that differ from our relabelling
+    by_name.setdefault('person', 0)
+    out = {}
+    for tok in str(spec).split(','):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.isdigit():
+            cid = int(tok)
+            out[cid] = COCO_LABELS.get(cid, str(cid))
+        elif tok.lower() in by_name:
+            cid = by_name[tok.lower()]
+            out[cid] = COCO_LABELS.get(cid, tok)
+        else:
+            print(f"CV DETECT: ignoring unknown class {tok!r} in "
+                  f"CV_DETECT_CLASSES", flush=True)
+    return out or None
+
+
 LABEL_ALIAS = {
     'motion': 'motion',
 }
@@ -74,7 +110,8 @@ def make_detector(kind, **kw):
                                           'dilate', 'max_boxes')}).load()
     if kind == 'onnx':
         return OnnxDetector(**{k: v for k, v in kw.items()
-                               if k in ('model_path', 'size', 'conf', 'nms')}).load()
+                               if k in ('model_path', 'size', 'conf', 'nms',
+                                        'classes')}).load()
     return NullDetector().load()
 
 
