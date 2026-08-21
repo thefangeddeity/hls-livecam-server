@@ -223,7 +223,14 @@ try:
     with open(path) as f:
         for raw in f:
             line = raw.rstrip("\n")
-            if not line.strip() or line.strip().startswith("#"):
+            # Keep comments. An earlier version dropped every line
+            # starting with '#', which meant any note an operator wrote
+            # next to a hand-tuned CV_* value was silently destroyed on
+            # the next setup run -- including the legend below.
+            if not line.strip():
+                continue
+            if line.strip().startswith("#"):
+                preserved_lines.append(line)
                 continue
             key = line.split("=", 1)[0].strip()
             if key and key not in managed_keys:
@@ -231,7 +238,71 @@ try:
 except FileNotFoundError:
     pass
 
+LEGEND = """
+# ── CV Mode tuning ────────────────────────────────────────────────────
+# Every key below is optional. Omit one and the built-in default applies;
+# defaults live in /usr/share/hls-livecam-server/cv_processor.py (_DEFAULTS),
+# which is the source of truth if this legend ever drifts from it.
+#
+# Cameras on this fleet differ enormously -- a healthy 1280x720 sensor and
+# one with peeled sensor film and dirt inside the lens do not share good
+# values. Tune per node; do not copy a whole block between machines.
+#
+# RENDER
+#   CV_EDGE_STYLE       overlay | sharpie | xdog
+#                       overlay: difference-of-Gaussians inked over the photo.
+#                         The restrained default and the best measured result
+#                         on a degraded sensor.
+#                       sharpie: discards the photo for a line drawing. Cheap,
+#                         but throws away photographic signal.
+#                       xdog:   tone-preserving extended DoG. Comparable to
+#                         overlay, not better -- keep CV_XDOG_SIGMA >= 3 or it
+#                         inks the JPEG block grid instead of the room.
+#                       An unrecognised value silently renders as overlay.
+#   CV_EDGE_STRENGTH    opacity of the darkest strokes (overlay). 0.25 is
+#                       restrained; 1.3 manufactures halos on a soft lens.
+#   CV_EDGE_SIGMA       stroke width. CV_EDGE_PERCENTILE normalises the DoG
+#                       against a high percentile rather than the max, so one
+#                       hot pixel cannot scale every real stroke to nothing.
+#   CV_EDGE_SHARPNESS_MIN / _OFF
+#                       Edges engage below _MIN and are absent at/above _OFF,
+#                       measured as variance-of-Laplacian. Setting _OFF far
+#                       above a node's actual sharpness pins the stage fully
+#                       on at all times.
+#   CV_UNSHARP_AMOUNT   Removing sharpening entirely reads as too soft;
+#                       heavy sharpening amplifies sensor noise. There is an
+#                       optimum in between.
+#
+# DETECTION
+#   CV_DETECT_CONF      Confidence floor. BELOW roughly 0.1 on a degraded
+#                       sensor the class head is noise with labels attached --
+#                       weak scores establish that something is THERE, never
+#                       what it is.
+#   CV_DETECT_CLASSES   Narrow what this node looks for: "cat", or "15,0".
+#                       Empty = every class in COCO_LABELS. Use this instead
+#                       of editing cv_detect.py -- a source edit is reverted
+#                       by every package upgrade.
+#   CV_DETECT_ACUITY_ADAPT
+#                       Scales the detector's input to the frame's measured
+#                       acuity, because feeding a detector more pixels than
+#                       the optics resolve costs accuracy. A healthy lens
+#                       clamps to 1.0 and is untouched. Do not lower
+#                       CV_DETECT_SCALE_MIN below 0.30: at 0.12 the detector
+#                       returned nothing at all on 20% of frames.
+#
+# SCENE / PERSISTENCE  (both off by default)
+#   CV_SCENE_ENABLED    Reference-image scene model. Needs a registration
+#                       artifact; cross-device registration does not work on
+#                       a badly degraded lens.
+#   CV_PERSIST_ENABLED  Long-lived scene entities that survive restarts.
+#                       Identity is an entity, not a bounding box.
+# ──────────────────────────────────────────────────────────────────────
+"""
+
 content = managed_block + "\n"
+has_legend = any("CV Mode tuning" in l for l in preserved_lines)
+if not has_legend:
+    content += LEGEND
 if preserved_lines:
     content += "\n# --- preserved from a previous config; not managed by setup ---\n"
     content += "\n".join(preserved_lines) + "\n"

@@ -60,6 +60,11 @@ try:
 except Exception:      # scene model is optional; absence disables it
     _cvs = None
 
+try:
+    import cv_persist as _cvp
+except Exception:      # persistence is optional; absence disables it
+    _cvp = None
+
 # Flow is computed on a downscaled grayscale pair purely to build a coarse
 # motion mask -- a full-resolution dense flow field is not needed to answer
 # "is this pixel neighborhood moving," and it costs several times more.
@@ -339,6 +344,17 @@ _DEFAULTS = {
     'CV_DETECT_SCALE_MAX':      1.0,   # never upsample past native
     'CV_DETECT_ACUITY_PERIOD':  30,    # re-measure acuity every N detect cycles
 
+    # Persistent scene entities (CV Mode Phase 4). Off by default. When on,
+    # promoted detections are folded into a long-lived entity store whose
+    # identities survive restarts -- see cv_persist.py. This is deliberately
+    # fed from the TRACKER, not from raw detections: a track has already
+    # survived the evidence accumulator, so the persistence layer integrates
+    # over something that recurs rather than over every frame's noise.
+    'CV_PERSIST_ENABLED':      0,
+    'CV_PERSIST_PATH':         '/var/lib/hls-livecam/scene_entities.json',
+    'CV_PERSIST_MIN_EVIDENCE': 0.35,  # only fold in tracks the accumulator
+                                       # has actually promoted
+
     'CV_SCENE_ENABLED':        0,        # off by default; opt in per node
     'CV_SCENE_REFERENCE':      '/var/lib/hls-livecam/scene_model.json',
     'CV_SCENE_EVIDENCE_BOOST': 0.0,      # second, independent evidence
@@ -553,6 +569,22 @@ class CVProcessor:
         self._detect_scale = 1.0    # current adapted scale
         self._acuity_last = None    # last measured variance-of-Laplacian
         self._acuity_n = 0          # detect cycles since last measurement
+
+        self._persist_enabled = (_read_int(denv, 'CV_PERSIST_ENABLED') != 0
+                                 and _cvp is not None)
+        self._persist_min_evidence = _read_float(denv, 'CV_PERSIST_MIN_EVIDENCE')
+        self._persist_store = None
+        if self._persist_enabled:
+            try:
+                self._persist_store = _cvp.EntityStore(
+                    {'CV_PERSIST_PATH': str((denv or {}).get(
+                        'CV_PERSIST_PATH', _DEFAULTS['CV_PERSIST_PATH']))})
+                self._persist_store.load()
+            except Exception as exc:
+                print(f"CV PERSIST: init failed ({type(exc).__name__}: {exc}) "
+                      "-- persistence disabled", flush=True)
+                self._persist_enabled = False
+                self._persist_store = None
 
         self._scene_enabled = _read_int(denv, 'CV_SCENE_ENABLED') != 0
         self._scene_evidence_boost = _read_float(denv, 'CV_SCENE_EVIDENCE_BOOST')
@@ -1004,25 +1036,39 @@ class CVProcessor:
         return cv2.addWeighted(inked, 1.0 - self._xdog_tone,
                                frame, self._xdog_tone, 0.0)
 
-    def _capability_line(self):
-        """Short right-aligned summary of which CV tools are actually active.
+    # Styles this build can actually render. Anything else falls through to
+    # the overlay path, so the HUD must report overlay -- not the string
+    # somebody put in device.env. tina is configured CV_EDGE_STYLE=xdog on a
+    # build with no xdog branch; a HUD that echoed the config would have
+    # claimed XDOG while rendering DoG-overlay, which is exactly the
+    # config-intent-versus-reality gap this line exists to close.
+    _KNOWN_EDGE_STYLES = ('sharpie', 'xdog')
 
-        Reads live state, not config intent -- if a stage failed to
-        initialise it does not appear here. That is the point: the HUD
-        should say what the pipeline IS doing, not what it was asked to do.
+    def _capability_line(self):
+        """Right-aligned HUD summary of the CV stages actually running.
+
+        Reads live state, never configuration intent: a stage that failed to
+        initialise, or that this build does not implement, does not appear.
         """
+        style = (self._edge_style if self._edge_style in self._KNOWN_EDGE_STYLES
+                 else 'overlay')
         bits = []
         if self._edge_enabled:
-            bits.append(self._edge_style.upper())
+            bits.append(style.upper())
         if self._foveal_enabled:
             bits.append('FOVEAL')
         if getattr(self, '_scene_enabled', False) and self._scene_registered:
             bits.append('SCENE STALE' if self._scene_stale else 'SCENE 2D')
-        if getattr(self, '_persist_enabled', False):
-            bits.append('PERSISTENT 2D')
+        if getattr(self, '_persist_enabled', False) and self._persist_store is not None:
+            n = len(self._persist_store.persistent())
+            bits.append(f'PERSISTENT 2D ({n})' if n else 'PERSISTENT 2D')
+        line = ' \u00b7 '.join(bits)
+        # Acuity reads as a qualifier on everything above it rather than
+        # another item in the list, so it joins with "AT".
         if self._acuity_adapt and self._acuity_last is not None:
-            bits.append(f'ACUITY {self._detect_scale:.2f}')
-        return ' \u00b7 '.join(bits)
+            at = f'AT ACUITY {self._detect_scale:.2f}'
+            line = f'{line} {at}' if line else at
+        return line
 
     def _detect_and_hud(self, source_frame, canvas):
         """Render-only: draws SHAKey telemetry from the tracker's current
