@@ -553,8 +553,19 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
         if LABEL_ALIAS.get(tr.cls, tr.cls).upper() != 'MOTION'
     ]
 
-    count = len(visible)
+    # Confirmed and candidate are counted SEPARATELY. Until Phase 5 this
+    # line counted every active track, so "DETECTING 3 TARGETS" was printed
+    # identically whether those were three promoted entities or one entity
+    # plus two sub-threshold coincidences the tracker had not committed to.
+    # The boxes already distinguished the two (candidates draw as a thin
+    # dim outline with no tag, below) -- the banner did not, which made the
+    # one line a viewer actually reads the least honest thing on screen.
+    confirmed = [tr for tr in visible if getattr(tr, 'promoted', True)]
+    candidates = len(visible) - len(confirmed)
+    count = len(confirmed)
     text = f"DETECTING {count} TARGET{'S' if count != 1 else ''}"
+    if candidates:
+        text += f" +{candidates} CANDIDATE{'S' if candidates != 1 else ''}"
 
     # macOS-light-inspired telemetry:
     # smaller, lighter, quieter, and using the same visual weight as the

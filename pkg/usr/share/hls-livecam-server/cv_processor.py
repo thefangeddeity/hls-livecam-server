@@ -128,7 +128,10 @@ _DEFAULTS = {
     # for a line drawing; 'xdog' is the extended difference-of-Gaussians
     # stylisation below -- it keeps TONE as well as edges, which is what
     # lets a soft sensor still show something like fur texture rather than
-    # collapsing it to outline.
+    # collapsing it to outline. 'regions' is the cel-shaded illustration
+    # path (see _draw_regions): flat masses of the scene's OWN colour with
+    # a restrained edge overlay, for a sensor that resolves large-scale
+    # structure and colour but no fine texture at all.
     'CV_EDGE_STYLE':          'overlay',
     'CV_XDOG_SIGMA':          3.0,   # inner Gaussian. NOT a free parameter on a
                                       # compressed feed: at sigma 0.8 the DoG
@@ -156,6 +159,75 @@ _DEFAULTS = {
                                       # multiplies the ink over the photo,
                                       # which is the setting that preserves
                                       # coat texture.
+    # --- 'regions' renderer (CV Mode Phase 5 §1) -------------------------
+    # Cel-shaded illustration of the real scene. Every fill colour is the
+    # MEAN OF ACTUAL PIXELS inside that region, sampled from a denoised
+    # low-frequency copy. No palette, no colour transfer, no synthesis --
+    # same anti-hallucination rule as the standing super-resolution ban,
+    # applied to the renderer. See _draw_regions.
+    'CV_REGION_SCALE':        0.5,   # working scale. The whole stage runs here
+                                      # and is upscaled once at the end: region
+                                      # geometry is large-scale by definition,
+                                      # so full-resolution segmentation buys
+                                      # nothing and costs ~4x.
+    'CV_REGION_SIGMA_COLOR':  40.0,  # bilateral colour sigma. This is what
+                                      # decides whether two adjacent shades
+                                      # become one mass or two.
+    'CV_REGION_SIGMA_SPACE':  9.0,   # bilateral spatial sigma
+    'CV_REGION_BILATERAL_D':  5,     # bilateral window. The dominant cost of
+                                      # the whole stage -- 9 roughly doubles
+                                      # it for no visible gain at this scale.
+    'CV_REGION_SIZE':         28,    # SLIC superpixel size, in working-scale
+                                      # px. Smaller = finer fragments before
+                                      # merging = better boundaries, more cost.
+    'CV_REGION_ITERS':        4,     # SLIC refinement iterations. 10 is the
+                                      # library default and is not worth 2.5x
+                                      # the cost on a feed this soft.
+    'CV_REGION_MERGE_DIST':   20.0,  # merge adjacent superpixels whose mean
+                                      # LAB colours are closer than this. THE
+                                      # knob that decides how illustrated the
+                                      # result looks. Measured on tina's own
+                                      # feed: 9 -> 127 regions (reads as a
+                                      # mosaic, not an illustration), 20 -> ~40,
+                                      # 28 -> 22, and by 36 the frame has
+                                      # collapsed to 11 regions with the whole
+                                      # centre one flat grey -- the merge-into-
+                                      # one-blob failure the brief warned about.
+                                      # 16-22 is the usable band on this sensor.
+    'CV_REGION_BANDS':        10,    # luminance bands, fallback path only
+                                      # (used when cv2.ximgproc is absent)
+
+    # --- illumination-field correction (CV Mode Phase 5 §3) --------------
+    # Corrects the SPATIAL exposure error a global operator structurally
+    # cannot touch. Measured on tanzania's own frame (4x4 tile means):
+    #
+    #   raw                tile spread 142   blown 6.59%   dark 6.27%
+    #   global gamma 0.7   tile spread 123   blown 9.09%   dark 0.00%
+    #   CLAHE clip 2.0     tile spread 117   blown 5.63%   dark 10.86%
+    #   illum field 0.7    tile spread  84   blown 0.10%   dark  0.08%
+    #
+    # Both global operators trade one end of the histogram for the other,
+    # exactly as the brief predicted; the spatial field fixes both at once,
+    # for ~24ms at 1280x720. That is why this is classical and not learned:
+    # the measured result did not justify a network. See _apply_illumination.
+    'CV_ILLUM_ENABLED':       0,     # off by default, per node
+    'CV_ILLUM_STRENGTH':      0.7,   # 0 = no-op, 1 = flatten the field
+                                      # completely (and flat is not the goal --
+                                      # a room legitimately has bright and dark
+                                      # parts, and erasing that reads as fake)
+    'CV_ILLUM_SIGMA_FRAC':    0.12,  # illumination-field smoothness, as a
+                                      # fraction of the long edge. Too small
+                                      # and the "illumination" starts tracking
+                                      # objects, which produces halos.
+    'CV_ILLUM_SCALE':         0.25,  # the field is smooth by construction, so
+                                      # it is estimated small and upsampled
+    'CV_REGION_EDGE_ALPHA':   0.45,  # how darkly the boundary overlay inks.
+                                      # 0 = pure flat fills, no linework
+    'CV_REGION_FG_BOUNDARY':  1,     # add the MOG2 foreground outline to the
+                                      # boundary map, so a moving subject gets
+                                      # its own silhouette even when it is a
+                                      # poor colour match against what it is
+                                      # standing in front of
     'CV_SHARPIE_LEVELS':      4,     # luminance bands; more = concentric clutter
     'CV_SHARPIE_THICK':       3,     # stroke width in px
     'CV_SHARPIE_MIN_LEN':     140,   # discard contours shorter than this
@@ -533,6 +605,21 @@ class CVProcessor:
         self._xdog_percentile = _read_float(denv, 'CV_XDOG_PERCENTILE')
         self._xdog_phi = _read_float(denv, 'CV_XDOG_PHI')
         self._xdog_tone = min(1.0, max(0.0, _read_float(denv, 'CV_XDOG_TONE')))
+        self._region_scale = min(1.0, max(0.1, _read_float(denv, 'CV_REGION_SCALE')))
+        self._region_sigma_color = max(1.0, _read_float(denv, 'CV_REGION_SIGMA_COLOR'))
+        self._region_sigma_space = max(1.0, _read_float(denv, 'CV_REGION_SIGMA_SPACE'))
+        self._region_bilateral_d = max(1, _read_int(denv, 'CV_REGION_BILATERAL_D'))
+        self._region_size = max(4, _read_int(denv, 'CV_REGION_SIZE'))
+        self._region_iters = max(1, _read_int(denv, 'CV_REGION_ITERS'))
+        self._region_merge_dist = max(0.0, _read_float(denv, 'CV_REGION_MERGE_DIST'))
+        self._region_bands = max(2, _read_int(denv, 'CV_REGION_BANDS'))
+        self._region_edge_alpha = min(1.0, max(0.0, _read_float(denv, 'CV_REGION_EDGE_ALPHA')))
+        self._region_fg_boundary = _read_int(denv, 'CV_REGION_FG_BOUNDARY') != 0
+        self._region_warned = False
+        self._illum_enabled = _read_int(denv, 'CV_ILLUM_ENABLED') != 0
+        self._illum_strength = max(0.0, _read_float(denv, 'CV_ILLUM_STRENGTH'))
+        self._illum_sigma_frac = max(0.01, _read_float(denv, 'CV_ILLUM_SIGMA_FRAC'))
+        self._illum_scale = min(1.0, max(0.05, _read_float(denv, 'CV_ILLUM_SCALE')))
         self._sharpie_levels = max(2, _read_int(denv, 'CV_SHARPIE_LEVELS'))
         self._sharpie_thick = max(1, _read_int(denv, 'CV_SHARPIE_THICK'))
         self._sharpie_min_len = _read_int(denv, 'CV_SHARPIE_MIN_LEN')
@@ -759,6 +846,15 @@ class CVProcessor:
             frame = self._apply_grid_correction(frame)
             t['grid'] = time.perf_counter() - t_grid
 
+        # Ahead of the detection handoff below, deliberately: this is an
+        # observation-quality stage, not a display stage, so the detector
+        # and MOG2 must see the corrected frame too. Putting it after the
+        # handoff would improve only what a human sees.
+        if self._illum_enabled:
+            t_illum = time.perf_counter()
+            frame = self._apply_illumination(frame)
+            t['illum'] = time.perf_counter() - t_illum
+
         if self._foveal_enabled:
             t_mog = time.perf_counter()
             sc = self._mog2_scale
@@ -956,6 +1052,16 @@ class CVProcessor:
         """
         if not self._edge_enabled:
             return frame, 0.0
+
+        # 'regions' is a rendering CHOICE, not a softness remedy, so it is
+        # dispatched ahead of the sharpness ramp -- an operator who selects
+        # it wants it on every frame, not only on the frames the ramp
+        # judges soft enough. (Sharpie gets the same treatment via its own
+        # early return in process().) Everything below this line is the
+        # engage-as-the-image-degrades path.
+        if self._edge_style == 'regions':
+            return self._draw_regions(frame, self._fg_mask), 1.0
+
         w = self._edge_weight(sharpness)
         if w <= 0.0:
             # Sharp feed: absent entirely, and costing nothing beyond the
@@ -1099,13 +1205,239 @@ class CVProcessor:
         return cv2.addWeighted(inked, 1.0 - self._xdog_tone,
                                frame, self._xdog_tone, 0.0)
 
+    def _apply_illumination(self, frame):
+        """Correct the spatial illumination field, not the global tone.
+
+        The failure this addresses is photometric and POSITIONAL: on
+        tanzania the centre-right is blown while the left is dark, but the
+        frame mean is a perfectly ordinary 151. Every global operator --
+        gamma, a single CLAHE pass, the existing highlight/shadow chain --
+        sees a correctly exposed image and has no representation for "too
+        bright HERE, too dark THERE". Measured tile spread on that frame is
+        142 luma levels; see the CV_ILLUM_* block for the comparison table.
+
+        L(x,y) is estimated as a heavily low-passed luminance -- the smooth
+        component a global curve cannot express -- and each pixel is scaled
+        toward a flat target by that field.
+
+        This does NOT invent detail, and the distinction matters: 6.6% of
+        that frame is clipped at white, and clipped is gone. Those pixels
+        are rescaled along with everything else, never reconstructed. A
+        model that "recovers" texture inside a blown region is fabricating
+        it, which is the standing no-super-resolution rule -- the reason
+        this stage is a division by a smooth field and nothing more.
+        """
+        if self._illum_strength <= 0.0:
+            return frame
+        lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB)
+        L = lab[:, :, 0].astype(np.float32)
+        sc = self._illum_scale
+        small = cv2.resize(L, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
+        sig = max(1.0, self._illum_sigma_frac * max(small.shape))
+        field = cv2.GaussianBlur(small, (0, 0), sigmaX=sig, sigmaY=sig)
+        field = cv2.resize(field, (L.shape[1], L.shape[0]),
+                           interpolation=cv2.INTER_LINEAR)
+        target = float(field.mean())
+        gain = (target / np.maximum(field, 1.0)) ** self._illum_strength
+        lab[:, :, 0] = np.clip(L * gain, 0, 255).astype(np.uint8)
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+    def _region_labels(self, low):
+        """Segment the low-frequency colour image into coherent masses.
+
+        Returns an int32 label image, labels 0..n-1.
+
+        NOT seeded from the edge map. The first version of this method was
+        (edges -> close -> connected components of the non-edge area ->
+        watershed) and it collapsed the entire frame into ONE region on
+        tina: a soft sensor's contours do not enclose anything, so "the set
+        of pixels that are not an edge" is a single connected mass and the
+        flood has nothing to flood between. That is the same failure the
+        occupancy work hit in Phase 4, where edge-based region proposal
+        produced one whole-frame blob and luminance banding fixed it.
+
+        So regions are grown from COLOUR COHERENCE instead, which is the
+        property this sensor actually still has. SLIC superpixels give
+        compact, colour-uniform fragments with no dependence on closed
+        contours; adjacent fragments are then merged wherever their mean
+        LAB colours are close, which is what turns a few hundred fragments
+        into the handful of large masses the renderer wants. The edge map
+        is still used -- but only to ink boundaries at the end, which is
+        the one job it can do reliably here.
+        """
+        lab = cv2.cvtColor(low, cv2.COLOR_RGB2LAB)
+        sh, sw = lab.shape[:2]
+
+        slic = getattr(getattr(cv2, 'ximgproc', None),
+                       'createSuperpixelSLIC', None)
+        if slic is None:
+            # Fallback with no contrib dependency: band the luminance and
+            # take connected components per band. Cruder -- two touching
+            # surfaces of equal brightness and different colour become one
+            # region -- but it is a real segmentation, not a silent
+            # degradation to "no regions at all".
+            if not self._region_warned:
+                print('CV REGIONS: cv2.ximgproc.createSuperpixelSLIC '
+                      'unavailable; using luminance-band fallback',
+                      flush=True)
+                self._region_warned = True
+            step = max(1, 256 // max(2, self._region_bands))
+            bands = (lab[:, :, 0] // step).astype(np.int32)
+            out = np.zeros((sh, sw), np.int32)
+            nxt = 0
+            for b in np.unique(bands):
+                n, cc = cv2.connectedComponents(
+                    (bands == b).astype(np.uint8))
+                if n <= 1:
+                    continue
+                m = cc > 0
+                out[m] = cc[m] + nxt
+                nxt += n
+            return out
+
+        sp = slic(lab, algorithm=cv2.ximgproc.SLICO,
+                  region_size=self._region_size)
+        sp.iterate(self._region_iters)
+        labels = sp.getLabels().astype(np.int32)
+        n = int(labels.max()) + 1
+        if n <= 1:
+            return labels
+
+        # Mean LAB per superpixel, vectorised.
+        flat = labels.reshape(-1)
+        cnt = np.bincount(flat, minlength=n).astype(np.float32)
+        cnt[cnt == 0] = 1.0
+        labf = lab.reshape(-1, 3).astype(np.float32)
+        mean = np.empty((n, 3), np.float32)
+        for c in range(3):
+            mean[:, c] = np.bincount(flat, weights=labf[:, c],
+                                     minlength=n) / cnt
+
+        # Adjacency: every horizontally or vertically neighbouring pair of
+        # differing labels. Vectorised -- no per-pixel Python.
+        a = np.concatenate([labels[:, :-1].ravel(), labels[:-1, :].ravel()])
+        b = np.concatenate([labels[:, 1:].ravel(), labels[1:, :].ravel()])
+        m = a != b
+        a, b = a[m], b[m]
+        if a.size == 0:
+            return labels
+        pairs = np.unique(np.stack([np.minimum(a, b), np.maximum(a, b)], 1),
+                          axis=0)
+
+        # Merge neighbours whose mean colours are close. Union-find over a
+        # few hundred nodes -- cheap enough to leave in Python.
+        d = np.linalg.norm(mean[pairs[:, 0]] - mean[pairs[:, 1]], axis=1)
+        parent = np.arange(n)
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i, j in pairs[d < self._region_merge_dist]:
+            ri, rj = find(int(i)), find(int(j))
+            if ri != rj:
+                parent[max(ri, rj)] = min(ri, rj)
+
+        root = np.array([find(i) for i in range(n)], dtype=np.int32)
+        _, root = np.unique(root, return_inverse=True)
+        return root[labels].astype(np.int32)
+
+    def _draw_regions(self, frame, fg_mask=None):
+        """Cel-shaded illustration of the real scene.
+
+        The premise this exists for: a lens like tina's still delivers
+        usable low-frequency colour and large-scale structure while
+        resolving no fine texture at all. Sharpie and XDoG both answer that
+        by throwing the colour away and drawing lines. This answers it by
+        keeping the colour and throwing the *texture* away -- a couch
+        becomes one coherent grey mass, the floor one brown mass, a plant
+        one green mass, and a cat keeps its real black/grey/white inside a
+        legible silhouette.
+
+        HARD CONSTRAINT -- never invent colour or content. Every fill is
+        the arithmetic mean of the actual pixels inside that region, taken
+        from a smoothed low-frequency copy so sensor grain is not
+        reproduced as fake detail. There is no palette, no colour transfer
+        and no synthesis anywhere in this method. That is the same rule as
+        the standing no-deblurring/no-super-resolution ban: invented detail
+        becomes invented entities downstream, and they look authoritative.
+
+        This is a DISPLAY stage only. It knows nothing about what a region
+        contains and never reports one -- semantics come from the
+        persistent scene model later, or never.
+        """
+        sc = self._region_scale
+        small = (frame if sc >= 0.999 else
+                 cv2.resize(frame, None, fx=sc, fy=sc,
+                            interpolation=cv2.INTER_AREA))
+        sh, sw = small.shape[:2]
+
+        # 1. Low-frequency colour. Bilateral rather than a plain blur: the
+        #    fills must not bleed across the boundaries between masses, or
+        #    every region ends up tinted by its neighbours.
+        low = cv2.bilateralFilter(small, self._region_bilateral_d,
+                                  self._region_sigma_color,
+                                  self._region_sigma_space)
+
+        # 2. Regions, from colour coherence (see _region_labels).
+        labels = self._region_labels(low)
+        n = int(labels.max()) + 1
+        if n <= 1:
+            # Nothing separable. Returning the smoothed colour is honest:
+            # it is what the sensor gave us.
+            return cv2.resize(low, (frame.shape[1], frame.shape[0]),
+                              interpolation=cv2.INTER_LINEAR)
+
+        # 3. Fill each region with the mean of its OWN pixels.
+        flat = labels.reshape(-1)
+        cnt = np.bincount(flat, minlength=n).astype(np.float32)
+        cnt[cnt == 0] = 1.0
+        lowf = low.reshape(-1, 3).astype(np.float32)
+        mean = np.empty((n, 3), np.float32)
+        for c in range(3):
+            mean[:, c] = np.bincount(flat, weights=lowf[:, c],
+                                     minlength=n) / cnt
+        filled = mean[labels].astype(np.uint8)
+
+        # 4. Restrained boundary overlay. Drawn where the REGION LABEL
+        #    changes, so the linework lands exactly where the fills change
+        #    -- an independent DoG pass would put strokes inside a flat
+        #    mass, which is the texture this renderer just discarded.
+        if self._region_edge_alpha > 0.0:
+            ridge = np.zeros((sh, sw), np.uint8)
+            ridge[:, :-1] |= (labels[:, :-1] != labels[:, 1:]).astype(np.uint8) * 255
+            ridge[:-1, :] |= (labels[:-1, :] != labels[1:, :]).astype(np.uint8) * 255
+
+            # A moving subject is often a poor colour match against
+            # whatever it is standing in front of, so its boundary can be
+            # the weakest one in the frame. MOG2 already knows where it is
+            # -- borrow that outline rather than trying to win it back
+            # from colour alone.
+            if self._region_fg_boundary and fg_mask is not None:
+                fg_small = cv2.resize(fg_mask, (sw, sh),
+                                      interpolation=cv2.INTER_NEAREST)
+                k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                ridge = cv2.max(ridge, cv2.morphologyEx(
+                    fg_small, cv2.MORPH_GRADIENT, k3))
+
+            ink = cv2.cvtColor(ridge, cv2.COLOR_GRAY2RGB)
+            filled = cv2.addWeighted(filled, 1.0, ink,
+                                     -self._region_edge_alpha, 0)
+
+        if filled.shape[:2] != frame.shape[:2]:
+            filled = cv2.resize(filled, (frame.shape[1], frame.shape[0]),
+                                interpolation=cv2.INTER_LINEAR)
+        return filled
+
     # Styles this build can actually render. Anything else falls through to
     # the overlay path, so the HUD must report overlay -- not the string
     # somebody put in device.env. tina is configured CV_EDGE_STYLE=xdog on a
     # build with no xdog branch; a HUD that echoed the config would have
     # claimed XDOG while rendering DoG-overlay, which is exactly the
     # config-intent-versus-reality gap this line exists to close.
-    _KNOWN_EDGE_STYLES = ('sharpie', 'xdog')
+    _KNOWN_EDGE_STYLES = ('sharpie', 'xdog', 'regions')
 
     def _apply_grid_correction(self, frame):
         """Learn the codec grid once, then correct every frame at its known
