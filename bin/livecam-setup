@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+#
+# livecam-setup -- interactive setup for the macOS port.
+# Detects avfoundation cameras, writes config.env, seeds state, and enables.
+
+set -euo pipefail
+
+# run-13: this script ends by enabling and starting the pipeline (see header) --
+# same root-ownership risk as bin/livecam if invoked with sudo. See the guard
+# there for what that caused. Refuse here too, at every entry point, not just
+# the one that happened to be misused this time.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "livecam-setup: refusing to run as root." >&2
+  echo "  This pipeline runs as your normal user by design. Re-run without sudo." >&2
+  exit 1
+fi
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$BIN_DIR")"
+STATE_DIR="$ROOT/state"
+WEB_DIR="$ROOT/web"
+CONFIG="$ROOT/config.env"
+VENV_PY="$ROOT/.venv/bin/python"
+[ -x "$VENV_PY" ] || VENV_PY="$(command -v python3)"
+
+G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; C='\033[0;36m'; B='\033[1m'; N='\033[0m'
+
+mkdir -p "$STATE_DIR" "$WEB_DIR/cams"
+
+echo ""
+echo -e "${C}${B}╔══════════════════════════════════════╗${N}"
+echo -e "${C}${B}║   hls-livecam-server  setup (macOS)  ║${N}"
+echo -e "${C}${B}╚══════════════════════════════════════╝${N}"
+echo ""
+
+command -v ffmpeg >/dev/null || { echo -e "${R}ffmpeg not found. Install: brew install ffmpeg${N}"; exit 1; }
+
+# ── Detect avfoundation cameras ──────────────────────────────────
+echo -e "${B}Detecting cameras (avfoundation)...${N}"
+LIST="$(ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 || true)"
+# Grab the video-devices block only (before the audio-devices header).
+VID_BLOCK="$(echo "$LIST" | sed -n '/AVFoundation video devices/,/AVFoundation audio devices/p')"
+
+INDICES=(); NAMES=()
+while IFS= read -r line; do
+  # Lines: [AVFoundation indev @ 0x..] [0] FaceTime HD Camera (Built-in)
+  if [[ "$line" =~ \][[:space:]]*\[([0-9]+)\][[:space:]](.+)$ ]]; then
+    idx="${BASH_REMATCH[1]}"; name="${BASH_REMATCH[2]}"
+    # Skip screen-capture pseudo-devices.
+    echo "$name" | grep -qi "capture screen" && continue
+    INDICES+=("$idx"); NAMES+=("$name")
+    echo "  Found: [$idx] $name"
+  fi
+done <<< "$VID_BLOCK"
+
+if [ ${#INDICES[@]} -eq 0 ]; then
+  echo -e "${R}No camera found. Check System Settings ▸ Privacy ▸ Camera,${N}"
+  echo -e "${R}and that your terminal is allowed to access the camera.${N}"
+  exit 1
+fi
+
+if [ ${#INDICES[@]} -eq 1 ]; then
+  SEL_IDX="${INDICES[0]}"; SEL_NAME="${NAMES[0]}"
+  echo -e "  ${G}Using: [$SEL_IDX] $SEL_NAME${N}"
+else
+  echo ""; echo "Multiple cameras found. Which one?"
+  PS3="  Choice: "
+  select opt in "${NAMES[@]}"; do
+    if [ -n "${opt:-}" ]; then
+      SEL_IDX="${INDICES[$((REPLY-1))]}"; SEL_NAME="$opt"; break
+    fi
+  done
+fi
+
+# ── Framerate ────────────────────────────────────────────────────
+echo ""
+echo -e "${B}Performance profile:${N}"
+echo "  1) 30 fps"
+echo "  2) 15 fps  (default, lighter)"
+read -rp "  Choice [1/2, default 2]: " PERF
+case "$PERF" in 1) FR=30 ;; *) FR=15 ;; esac
+echo -e "  ${G}Framerate: ${FR} fps${N}"
+
+VIDEO_SIZE="1280x720"
+
+# ── Write config.env ─────────────────────────────────────────────
+WEB_PORT="$(grep -E '^WEB_PORT=' "$CONFIG" 2>/dev/null | cut -d= -f2 || true)"; WEB_PORT="${WEB_PORT:-8080}"
+RTSP_PORT="$(grep -E '^RTSP_PORT=' "$CONFIG" 2>/dev/null | cut -d= -f2 || true)"; RTSP_PORT="${RTSP_PORT:-8554}"
+HLS_PORT="$(grep -E '^HLS_PORT=' "$CONFIG" 2>/dev/null | cut -d= -f2 || true)"; HLS_PORT="${HLS_PORT:-8888}"
+
+echo ""
+echo -e "${B}Writing config.env...${N}"
+cat > "$CONFIG" <<EOF
+# hls-livecam-server (macOS port) — configuration
+# Written by livecam-setup. Consumed by every component.
+AVF_VIDEO_INDEX=${SEL_IDX}
+AVF_DEVICE_NAME=${SEL_NAME}
+VIDEO_SIZE=${VIDEO_SIZE}
+FRAMERATE=${FR}
+
+WEB_PORT=${WEB_PORT}
+RTSP_PORT=${RTSP_PORT}
+HLS_PORT=${HLS_PORT}
+EOF
+echo -e "  ${G}config.env written${N}"
+
+# ── Seed state files ─────────────────────────────────────────────
+echo -e "${B}Seeding state...${N}"
+[ -f "$STATE_DIR/broadcast.txt" ] || : > "$STATE_DIR/broadcast.txt"
+[ -f "$STATE_DIR/buzz.txt" ]      || : > "$STATE_DIR/buzz.txt"
+[ -f "$WEB_DIR/cams/cams.json" ]  || echo '[]' > "$WEB_DIR/cams/cams.json"
+# Black placeholder / backup dark.png (block-art replaces it on hide).
+"$VENV_PY" - "$STATE_DIR" "$VIDEO_SIZE" <<'PY'
+import sys, os, struct, zlib
+state, size = sys.argv[1], sys.argv[2]
+w, h = (int(x) for x in size.split('x'))
+def chunk(t, d):
+    return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t+d) & 0xffffffff)
+raw = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+row = b'\x00' + b'\x00\x00\x00' * w
+raw += chunk(b'IDAT', zlib.compress(row*h)) + chunk(b'IEND', b'')
+for name in ('dark.png', 'dark_orig.png'):
+    with open(os.path.join(state, name), 'wb') as f:
+        f.write(raw)
+PY
+echo -e "  ${G}state seeded${N}"
+
+# ── Render index.html from template (substitute @HLS_PORT@) ───────
+if [ -f "$WEB_DIR/index.template.html" ]; then
+  sed "s|@HLS_PORT@|${HLS_PORT}|g" "$WEB_DIR/index.template.html" > "$WEB_DIR/index.html"
+  echo -e "  ${G}index.html rendered (HLS port ${HLS_PORT})${N}"
+fi
+
+# ── Enable + start ───────────────────────────────────────────────
+echo ""
+echo -e "${B}Enabling and starting services...${N}"
+"$BIN_DIR/livecam" enable
+
+echo ""
+echo -e "${G}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+echo -e "${G}${B}  hls-livecam-server is running!${N}"
+echo -e "${G}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}"
+echo ""
+"$BIN_DIR/livecam" urls
+echo ""
+echo -e "  Reconfigure: ${Y}livecam setup${N}   •   Repair: ${Y}livecam repair${N}"
+echo ""

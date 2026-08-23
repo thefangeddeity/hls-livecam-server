@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# camdash-gui -- launch the PySide6 operator dashboard.
+#
+# Ships alongside `camdash` (the curses TUI), which keeps working headless over
+# SSH. This is a client only: it never supervises the pipeline -- the launchd
+# agent and the `livecam` CLI own lifecycle.
+# run-13: the pipeline this app supervises must never run as root (see
+# bin/livecam for what that caused). Guard here too -- if this GUI were ever
+# launched via sudo, every subprocess it spawns (the preview decoder, `livecam`
+# CLI calls for Repair/Pause/On-off) would inherit root along with it.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "camdash-gui: refusing to run as root. Re-run without sudo." >&2
+  exit 1
+fi
+
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
+exec "$PY" -m gui.app "$@"

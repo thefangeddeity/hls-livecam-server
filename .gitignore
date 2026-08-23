@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime state (generated)
+state/*.pid
+state/logs/
+state/mediamtx.yml
+state/dark.png
+state/dark_orig.png
+state/broadcast.txt
+state/buzz.txt
+state/msg_lock
+state/camdash-feed.state
+state/cell_aspect
+
+# Rendered from template by setup
+web/index.html
+
+# Large vendored binary (re-downloadable)
+vendor/mediamtx
+
+# macOS
+.DS_Store
+
+# Local Claude Code state
+.claude/
+web/cams/cams.json

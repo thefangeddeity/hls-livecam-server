@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# Real launch target for the camdash-gui.app bundle. Hardcoded to this
+# project's fixed location (single-machine dev tool, not meant to be
+# relocated independently of the repo) rather than resolved relative to the
+# bundle -- the venv and gui/ package live in the project dir, not inside
+# the .app, so a relative resolution would break the moment the .app is
+# copied anywhere the project isn't (e.g. dragged to /Applications).
+ROOT="/Users/ron/Projects/mac-hls-livecam"
+PY="$ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
+cd "$ROOT"
+exec "$PY" -m gui.app "$@"

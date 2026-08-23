@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HLS Livecam</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
+<script>
+  // Light theme (run-8/9 §5). Applied ASAP (before DOMContentLoaded) to avoid a
+  // dark->light flash on load; persisted per-browser since there is no server
+  // state for this -- it is a viewer preference, not pipeline state.
+  (function() {
+    var saved = localStorage.getItem('hlsls-theme');
+    if (saved === 'light') document.documentElement.dataset.theme = 'light';
+  })();
+</script>
+<style>
+  :root {
+    --bg: #111113;
+    --panel: #1c1c1e;
+    --panel-2: #242426;
+    --border: #38383a;
+    --border-strong: #48484a;
+    --text: #f5f5f7;
+    --text-dim: #98989d;
+    --text-muted: #6e6e73;
+    --accent: #0a84ff;
+    --accent-hover: #409cff;
+    --danger: #ff453a;
+    --success: #30d158;
+    --warn: #ff9f0a;
+    --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.6);
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  /* Derived light theme (run-8/9 §5) -- not in the ratified design system,
+     which defines dark only. Surfaces lighten, text darkens; every semantic
+     status color (--danger/--success/--warn/--accent) holds hue unchanged,
+     per the PM's explicit instruction. Same values as gui/tokens.py's
+     _LIGHT dict -- kept in sync by hand since the two live in different
+     languages with no shared source of truth. */
+  html[data-theme="light"] {
+    --bg: #f2f2f7;
+    --panel: #ffffff;
+    --panel-2: #e9e9ee;
+    --border: #d1d1d6;
+    --border-strong: #c7c7cc;
+    --text: #1c1c1e;
+    --text-dim: #6e6e73;
+    --text-muted: #8e8e93;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 14px rgba(0,0,0,0.12);
+    /* --accent/--danger/--success/--warn intentionally absent: unchanged */
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { overflow-x: hidden; max-width: 100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; padding: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── BUZZ FLASH ── */
+  @keyframes buzzFlash {
+    0%   { background: var(--bg); }
+    8%   { background: #ff3b30; }
+    16%  { background: var(--bg); }
+    24%  { background: #ff3b30; }
+    32%  { background: var(--bg); }
+    40%  { background: #ff9500; }
+    48%  { background: var(--bg); }
+    56%  { background: #ff9500; }
+    64%  { background: var(--bg); }
+    80%  { background: var(--bg); }
+    100% { background: var(--bg); }
+  }
+  @keyframes buzzShake {
+    0%,100% { transform: translate(0,0) rotate(0deg); }
+    10%  { transform: translate(-8px, -6px) rotate(-1.5deg); }
+    20%  { transform: translate(9px, 5px) rotate(1deg); }
+    30%  { transform: translate(-10px, 7px) rotate(-2deg); }
+    40%  { transform: translate(8px, -8px) rotate(1.5deg); }
+    50%  { transform: translate(-6px, 9px) rotate(-1deg); }
+    60%  { transform: translate(10px, -5px) rotate(2deg); }
+    70%  { transform: translate(-9px, 6px) rotate(-1.5deg); }
+    80%  { transform: translate(7px, -7px) rotate(1deg); }
+    90%  { transform: translate(-5px, 4px) rotate(-0.5deg); }
+  }
+  body.buzzing {
+    animation: buzzFlash 0.9s ease-out, buzzShake 0.9s ease-out;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .brand .sep { color: var(--text-muted); font-weight: 400; }
+  .brand .host { color: var(--text-dim); font-weight: 500; }
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+    transition: all 0.2s;
+  }
+  .live-pill::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .live-pill.live { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
+  .live-pill.live::before { background: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
+  .live-pill.reconnecting { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
+  .live-pill.reconnecting::before { background: var(--warn); }
+  .live-pill.dark-mode { color: var(--text-muted); background: var(--panel-2); border-color: var(--border); }
+  .live-pill.dark-mode::before { background: var(--text-muted); animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+  /* ── DESKTOP LAYOUT ── */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    min-height: 0;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  /* ── VIDEO ── */
+  .video-wrap {
+    flex: 1;
+    position: relative;
+    background: #000;
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    min-width: 0; min-height: 0;
+  }
+  video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+    background: #000;
+  }
+  .dark-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    background: #000;
+  }
+  .dark-overlay.visible { display: flex; }
+  .dark-overlay img { width: 100%; height: 100%; object-fit: cover; opacity: 0.85; }
+  .video-overlay {
+    position: absolute;
+    top: 12px; left: 16px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    opacity: 0.85;
+    pointer-events: none;
+  }
+  .error-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 8px;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(4px);
+    color: #fff;
+  }
+  .error-overlay.visible { display: flex; }
+  .error-overlay .title { font-size: 15px; font-weight: 600; color: var(--danger); }
+  .error-overlay .sub { font-size: 12px; color: rgba(255,255,255,0.7); }
+
+  /* run-10 §1: feed-mode switch cover. Mechanism ported verbatim from the
+     Linux viewer (Dev 30's reloadStream()/buffer-flush fix, with Dev-cover
+     countdown on top). HOLD_MS is NOT Linux's number -- see the JS below. */
+  video { transition: opacity 1s ease; }
+  .switch-overlay {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px;
+    pointer-events: none;
+    z-index: 20;
+  }
+  .switch-overlay.visible { display: flex; }
+  .switch-count {
+    font-size: 48px; font-weight: 700;
+    color: rgba(255,255,255,0.5);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .switch-label {
+    font-size: 13px;
+    color: rgba(255,255,255,0.3);
+    letter-spacing: 0.04em;
+  }
+
+  /* ── DESKTOP SIDEBAR ── */
+  .sidebar {
+    width: 260px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    padding: 18px;
+    gap: 18px;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    flex-shrink: 0;
+    height: 100%;
+  }
+  .section {
+    display: flex; flex-direction: column; gap: 8px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+  }
+  .section-title {
+    font-size: 11px; font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .stat {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 13px; padding: 3px 0;
+  }
+  .stat .k { color: var(--text-dim); }
+  .stat .v { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .info-chip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px; color: var(--text-dim);
+  }
+  .info-chip .label { font-weight: 500; color: var(--text); }
+  .info-chip .badge {
+    margin-left: auto;
+    font-size: 10px; font-weight: 600;
+    color: var(--text-muted);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 2px 6px; border-radius: 4px;
+    letter-spacing: 0.02em;
+  }
+  .sidebar-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding-right: 8px;
+  }
+
+  /* ── BUTTONS ── */
+  .btn {
+    appearance: none;
+    width: 100%;
+    padding: 6px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit; font-size: 12px; font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn:hover { background: var(--bg); border-color: var(--text-muted); }
+  .btn:active { transform: scale(0.98); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.dark-btn { background: #1c1c1e; border-color: #3a3a3c; color: #ebebf5; }
+  .btn.dark-btn:hover { background: #2c2c2e; border-color: #636366; }
+  .btn.dark-btn.is-dark { background: #3a3a3c; border-color: #636366; color: #fff; }
+  .btn.buzz-btn { background: #ff3b30; border-color: #ff3b30; color: #fff; font-weight: 700; font-size: 12px; padding: 7px 10px; }
+  .btn.buzz-btn:hover { background: #e0352b; border-color: #e0352b; }
+  .btn.buzz-btn.muted { background: var(--panel-2); border-color: var(--border-strong); color: var(--text-muted); font-weight: 500; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+  .btn[hidden] { display: none; }
+
+  /* ── CONTROLS STACK ── */
+  .controls-stack { display: flex; flex-direction: column; gap: 6px; }
+  .feed-mode-label { font-size: 10px; color: var(--text-muted); margin-bottom: 1px; }
+  .feed-mode-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+  .mute-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); cursor: pointer; padding: 2px 0; }
+
+  /* ── MESSAGE BOX ── */
+  .message-section { display: flex; flex-direction: column; gap: 8px; }
+  .msg-box-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  textarea.msg-box {
+    height: 120px;
+    overflow-y: auto;
+    flex: none;
+    width: 100%;
+    padding: 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit; font-size: 14px; line-height: 1.5;
+    resize: none; outline: none;
+    transition: border-color 0.15s, background 0.15s;
+    cursor: default;
+  }
+  textarea.msg-box.empty { color: var(--text-muted); font-style: italic; }
+  textarea.msg-box.editing {
+    border-color: var(--accent);
+    background: var(--panel);
+    cursor: text; font-style: normal; color: var(--text);
+  }
+  textarea.msg-box.locked { cursor: default; opacity: 0.7; }
+  .msg-actions { display: grid; gap: 6px; grid-template-columns: 1fr 1fr 1fr; max-width: 100%; }
+  /* `hidden` is a UA-stylesheet rule, so ANY author `display` beats it — the
+     grid above silently defeated msgActions.hidden and the Save/Clear/Cancel row
+     stayed on screen while locked. Same reason .btn[hidden] exists above. */
+  .msg-actions[hidden] { display: none; }
+  .msg-actions .btn { padding: 6px 6px; font-size: 12px; }
+
+  .msg-hint {
+    font-size: 11px; color: var(--text-muted);
+    text-align: center; min-height: 16px;
+    transition: color 0.2s;
+  }
+  .msg-hint.ok { color: var(--success); }
+  .msg-hint.locked { color: var(--warn); }
+  .msg-hint.err { color: var(--danger); }
+
+  /* ── FULLSCREEN OVERLAY BTN ── */
+  .fs-btn {
+    position: absolute;
+    bottom: 20px; right: 20px;
+    width: 36px; height: 36px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: none; border-radius: 8px;
+    color: #fff; font-size: 16px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 10;
+  }
+  .video-wrap:hover .fs-btn { opacity: 1; }
+  @media (max-width: 720px) { .fs-btn { opacity: 0.7; } }
+
+  /* ── MOBILE ── */
+  @media (max-width: 720px) {
+    body { overflow: auto; height: auto; min-height: 100dvh; }
+    header { padding: 10px 16px; }
+    .main { flex-direction: column; padding: 0; gap: 0; flex: none; }
+    .video-wrap { flex: none; width: 100%; aspect-ratio: 16 / 9; border-radius: 0; box-shadow: none; }
+    video { object-fit: contain; }
+    .sidebar {
+      width: 100%; height: auto; border-radius: 0;
+      border-left: none; border-right: none; border-bottom: none;
+      box-shadow: none; padding: 16px; gap: 16px;
+      overflow-y: visible; flex-shrink: unset;
+    }
+    .sidebar-scroll { overflow-y: visible; }
+    .desktop-only { display: none !important; }
+    textarea.msg-box {
+    min-height: 150px; min-height: 80px; flex: none; width: 100%; max-width: 100%; -webkit-appearance: none; transform: translateZ(0); }
+    .msg-box-wrap { flex: none; }
+    .message-section { flex: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span>HLS Livecam</span>
+    <span class="sep">//</span>
+    <span class="host"></span>
+  </div>
+  <div class="status-bar">
+    <span class="live-pill" id="liveIndicator">CONNECTING</span>
+    <span id="clockDisplay" class="desktop-only">--:--:--</span>
+  </div>
+</header>
+
+<div class="main">
+  <div class="video-wrap" id="videoContainer">
+    <video id="video" autoplay muted playsinline webkit-playsinline></video>
+    <div class="switch-overlay" id="switchOverlay">
+      <div class="switch-count" id="switchCount"></div>
+      <div class="switch-label">Switching feed…</div>
+    </div>
+    <div class="dark-overlay" id="darkOverlay">
+      <img src="/dark.png" alt="">
+    </div>
+    <div class="video-overlay" id="tsOverlay">--</div>
+    <button class="fs-btn" onclick="toggleFullscreen()" title="Fullscreen">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="error-overlay" id="errorOverlay">
+      <div class="title">Signal lost</div>
+      <div class="sub">Retrying…</div>
+    </div>
+  </div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-scroll">
+
+      <!-- MESSAGE -->
+      <div class="section message-section">
+        <div class="section-title">Message <span id="msgHint" class="msg-hint"></span></div>
+        <div class="feed-mode-label">Leave a message for viewers</div>
+        <div class="msg-box-wrap">
+          <textarea class="msg-box empty" id="msgBox" readonly>(no message)</textarea>
+        </div>
+        <div class="msg-actions" id="msgActions" hidden>
+          <button class="btn" id="saveBtn" onclick="sendMessage()">Save</button>
+          <button class="btn" id="clearBtn" onclick="clearMessage()">Clear</button>
+          <button class="btn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
+        </div>
+      </div>
+
+      <!-- CONTROLS — always visible -->
+      <div class="section">
+        <div class="section-title">Controls</div>
+        <div class="controls-stack">
+          <div class="feed-mode-label">Show, blur, or hide feed</div>
+          <div class="feed-mode-grid">
+            <button class="btn" id="showBtn" onclick="setFeedMode('show')">Show</button>
+            <button class="btn" id="cloakBtn" onclick="setFeedMode('cloak')">Blur</button>
+            <button class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
+          </div>
+          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
+          <!-- Alphabetized: B&W Blur, Light theme, Lock message, Mute Buzzes -->
+          <label class="mute-label">
+            <input type="checkbox" id="bwCheck" onchange="toggleBw()"> B&amp;W Blur
+          </label>
+          <label class="mute-label">
+            <input type="checkbox" id="themeCheck" onchange="toggleTheme()"> Light theme
+          </label>
+          <label class="mute-label">
+            <input type="checkbox" id="lockCheck" onchange="toggleMsgLock()"> Lock message
+          </label>
+          <label class="mute-label">
+            <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
+          </label>
+          <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
+        </div>
+      </div>
+
+      <!-- STREAM INFO — desktop only -->
+      <div class="section desktop-only">
+        <div class="section-title">Stream</div>
+        <div class="stat"><span class="k">Host</span><span class="v" id="hostVal">--</span></div>
+        <div class="stat"><span class="k">Resolution</span><span class="v">1280 × 720</span></div>
+        <div class="stat"><span class="k">Framerate</span><span class="v" id="fpsVal">--</span></div>
+      </div>
+
+      <!-- AUDIO — desktop only -->
+      <div class="section desktop-only">
+        <div class="section-title">Audio</div>
+        <div class="info-chip">
+          <span class="label">No audio</span>
+          <span class="badge">COMING SOON</span>
+        </div>
+      </div>
+
+
+
+    </div>
+  </aside>
+</div>
+
+<script>
+  var HLS_URL = 'http://' + window.location.hostname + ':@HLS_PORT@/cam/index.m3u8';
+  var video        = document.getElementById('video');
+  var liveInd      = document.getElementById('liveIndicator');
+  var errorOverlay = document.getElementById('errorOverlay');
+  var darkOverlay  = document.getElementById('darkOverlay');
+  var showBtn      = document.getElementById('showBtn');
+  var cloakBtn     = document.getElementById('cloakBtn');
+  var hideBtn      = document.getElementById('hideBtn');
+  var buzzBtn      = document.getElementById('buzzBtn');
+  var muteCheck    = document.getElementById('muteCheck');
+  var reconnectBtn = document.getElementById('reconnectBtn');
+  var saveBtn      = document.getElementById('saveBtn');
+  var clearBtn     = document.getElementById('clearBtn');
+  var cancelBtn    = document.getElementById('cancelBtn');
+  var hls = null;
+  var recovering = false, retryTimer = null;
+  var liveAt = null, uptimeInterval = null;
+  var isDark = false;
+  var feedMode = 'show'; // 'show' | 'cloak' | 'hide' -- mirrors the server's real feed mode
+
+  var hostEl = document.getElementById('hostVal');
+  var protoEl = document.getElementById('protoVal');
+  if (hostEl) hostEl.textContent = window.location.hostname;
+  // Hostname, not window.location.hostname — over loopback that is "127.0.0.1"
+  // and over Tailscale it is the tailnet IP. /api/info reports the node's real
+  // name; the URL only says how you happened to reach it. Matches Linux's
+  // `@tanzania`. Trailing .local trimmed for the same reason.
+  var brandHostEl = document.querySelector('.brand .host');
+  if (brandHostEl) {
+    brandHostEl.textContent = '@' + window.location.hostname;   // fallback until /api/info answers
+    fetch('/api/info', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; })
+      .then(function(j) {
+        if (j && j.hostname) brandHostEl.textContent = '@' + j.hostname.replace(/\.local$/, '');
+      });
+  }
+  document.title = 'HLS Livecam — ' + window.location.hostname;
+  if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
+
+  // ── BUZZ ──
+  var buzzMuted = localStorage.getItem('buzzMuted') === 'true';
+  var lastBuzzTs = null;
+  var audioCtx = null;
+
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return audioCtx;
+  }
+
+  function playBuzzSound() {
+    try {
+      var ctx = getAudioCtx();
+      // Compressor to maximise perceived loudness
+      var comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -6;
+      comp.knee.value = 3;
+      comp.ratio.value = 8;
+      comp.attack.value = 0.001;
+      comp.release.value = 0.1;
+      comp.connect(ctx.destination);
+
+      var tones = [880, 660, 440];
+      tones.forEach(function(freq, i) {
+        // Stack two detuned oscillators per tone for thickness
+        [-4, 0, 4].forEach(function(detune) {
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(comp);
+          osc.type = 'sawtooth';
+          osc.frequency.value = freq;
+          osc.detune.value = detune;
+          var t = ctx.currentTime + i * 0.13;
+          gain.gain.setValueAtTime(0, t);
+          gain.gain.linearRampToValueAtTime(0.9, t + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+          osc.start(t);
+          osc.stop(t + 0.25);
+        });
+      });
+    } catch(e) {}
+  }
+
+  function triggerBuzz() {
+    if (buzzMuted) return;
+    playBuzzSound();
+    // Full-screen shake + flash
+    document.body.classList.remove('buzzing');
+    void document.body.offsetWidth; // force reflow to restart animation
+    document.body.classList.add('buzzing');
+    setTimeout(function() { document.body.classList.remove('buzzing'); }, 900);
+  }
+
+  function updateMuteBtn() {
+    muteCheck.checked = buzzMuted;
+  }
+
+  function toggleMute() {
+    buzzMuted = !buzzMuted;
+    localStorage.setItem('buzzMuted', buzzMuted);
+    updateMuteBtn();
+  }
+
+  function sendBuzz() {
+    buzzBtn.disabled = true;
+    fetch('/api/buzz', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(ts) {
+        if (ts) lastBuzzTs = ts.trim();
+        buzzBtn.disabled = false;
+      });
+  }
+
+  function pollBuzz() {
+    fetch('/buzz.txt', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (!text) return;
+        var ts = text.trim();
+        if (lastBuzzTs === null) { lastBuzzTs = ts; return; } // init
+        if (ts !== lastBuzzTs) { lastBuzzTs = ts; triggerBuzz(); }
+      });
+  }
+
+  updateMuteBtn();
+  setInterval(pollBuzz, 1000);
+
+  // ── DARK MODE ──
+  var darkLiftTimer = null;
+
+  function liftDarkOverlay() {
+    if (isDark) return;
+    if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
+    darkOverlay.classList.remove('visible');
+    if (hls === null && video.readyState === 0) initHLS();
+  }
+
+  function updateFeedButtons() {
+    showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
+    cloakBtn.className = 'btn' + (feedMode === 'cloak' ? '' : ' primary');
+    hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
+  }
+  // Cloak/hide are rendered server-side: broadcast-api burns the block-art
+  // effect directly into the encoded HLS frames, so every viewer (and the
+  // camdash operator) sees the same real cloaked stream -- nothing to fake
+  // client-side. (The old client-only canvas trick was dropped: it drew a
+  // duplicate pixelated overlay on top of an already-cloaked video, and its
+  // getImageData() call threw on Safari because the video element is
+  // cross-origin -- port 8888 vs this page's 8080 -- which taints the canvas.)
+  // run-10 §1: switch-cover countdown, mechanism verbatim from the Linux
+  // viewer. HOLD_SECONDS is NOT Linux's 16 -- that number was calibrated
+  // against Linux's v4l2loopback pipeline and a longer segment duration.
+  // Measured on ariana in a real browser (HLS.js pixel-sampled against the
+  // live video element, POST to visibly-new-mode-content): with
+  // reloadStream() wired in exactly as below, two trials landed at 1.2s and
+  // 1.65s. HOLD_SECONDS=4 keeps a real ~2.3x margin over the worst trial
+  // without blacking out the feed for 13s longer than the switch actually
+  // takes -- a cover that outlasts the thing it's covering is worse than no
+  // cover, which was the PM's original complaint (choppiness, not duration).
+  var HOLD_SECONDS = 7;   // PM's call, over my measured/calibrated 4s
+  var switchOverlay = document.getElementById('switchOverlay');
+  var switchCount = document.getElementById('switchCount');
+  var countInterval = null;
+
+  function fadeOut() {
+    video.style.opacity = '0';
+    if (countInterval) clearInterval(countInterval);
+    var secs = HOLD_SECONDS;
+    switchCount.textContent = secs;
+    switchOverlay.classList.add('visible');
+    countInterval = setInterval(function() {
+      secs--;
+      switchCount.textContent = secs > 0 ? secs : '';
+      if (secs <= 0) { clearInterval(countInterval); countInterval = null; }
+    }, 1000);
+    setTimeout(function() {
+      video.style.opacity = '1';
+      switchOverlay.classList.remove('visible');
+    }, HOLD_SECONDS * 1000);
+  }
+
+  function setFeedMode(mode) {
+    if (mode === feedMode) return;
+    fadeOut();
+    var btn = mode === 'show' ? showBtn : mode === 'cloak' ? cloakBtn : hideBtn;
+    showBtn.disabled = true; cloakBtn.disabled = true; hideBtn.disabled = true;
+    fetch('/api/feed-mode', { method: 'POST', body: mode })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .then(function(text) {
+        if (text) {
+          feedMode = text.trim(); updateFeedButtons();
+          setTimeout(reloadStream, 1000);
+        }
+      })
+      .catch(function() {})
+      .then(function() {
+        showBtn.disabled = false; cloakBtn.disabled = false; hideBtn.disabled = false;
+      });
+  }
+
+  function pollFeedMode() {
+    fetch('/api/feed-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (text === null) return;
+        var mode = text.trim();
+        if (mode !== feedMode) { feedMode = mode; updateFeedButtons(); }
+      });
+  }
+  pollFeedMode();
+  setInterval(pollFeedMode, 3000);
+  // Independent full-cover kill switch (set via `livecam dark`, e.g. from the
+  // CLI outside of camdash) -- orthogonal to feedMode, which the Show/Blur/Hide
+  // buttons control via /api/feed-mode above.
+  function applyDark(dark) {
+    isDark = dark;
+    if (dark) {
+      if (darkLiftTimer) { clearTimeout(darkLiftTimer); darkLiftTimer = null; }
+      darkOverlay.querySelector('img').src = '/dark.png?t=' + Date.now();
+      darkOverlay.classList.add('visible');
+      liveInd.textContent = 'DARK';
+      liveInd.className = 'live-pill dark-mode';
+    } else {
+      if (!darkLiftTimer) darkLiftTimer = setTimeout(liftDarkOverlay, 15000);
+    }
+  }
+
+  function pollDark() {
+    fetch('/api/dark', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (text === null) return;
+        var serverDark = text.trim() === 'true';
+        if (serverDark !== isDark) applyDark(serverDark);
+      });
+  }
+
+
+
+  pollDark();
+  setInterval(pollDark, 5000);
+
+  // ── HLS ──
+  function setStatus(text, mode) {
+    if (isDark && mode !== 'live') return;
+    liveInd.textContent = text;
+    liveInd.className = 'live-pill' + (mode ? ' ' + mode : '');
+    if (mode === 'live' && !isDark) {
+      errorOverlay.classList.remove('visible');
+      liftDarkOverlay();
+      reconnectBtn.hidden = true;
+      if (!liveAt) {
+        liveAt = Date.now();
+        if (uptimeInterval) clearInterval(uptimeInterval);
+        uptimeInterval = setInterval(updateUptime, 1000);
+      }
+    } else {
+      liveAt = null;
+      if (uptimeInterval) { clearInterval(uptimeInterval); uptimeInterval = null; }
+      var uptimeEl = document.getElementById('uptimeVal');
+      if (uptimeEl) uptimeEl.textContent = '--';
+    }
+  }
+
+  function showError() {
+    if (isDark) return;
+    errorOverlay.classList.add('visible');
+    reconnectBtn.hidden = false;
+  }
+
+  function updateUptime() {
+    if (!liveAt) return;
+    var s = Math.floor((Date.now() - liveAt) / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    var uptimeEl = document.getElementById('uptimeVal');
+    if (uptimeEl) uptimeEl.textContent =
+      h > 0 ? h + 'h ' + m + 'm' : m > 0 ? m + 'm ' + sec + 's' : sec + 's';
+  }
+
+  function scheduleRetry(ms) {
+    if (retryTimer) clearTimeout(retryTimer);
+    setStatus('RECONNECTING', 'reconnecting');
+    retryTimer = setTimeout(initHLS, ms);
+  }
+
+  function initHLS() {
+    recovering = false;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (hls) { hls.destroy(); hls = null; }
+    setStatus('CONNECTING');
+
+    if (!Hls.isSupported()) {
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = HLS_URL;
+        video.load();
+        video.play().catch(function() {
+          video.addEventListener('click', function handler() {
+            video.play().catch(function(){});
+            video.removeEventListener('click', handler);
+          });
+        });
+        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); if (!isDark) liftDarkOverlay(); }, { once: true });
+        video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
+      } else { setStatus('UNSUPPORTED'); showError(); }
+      return;
+    }
+
+    hls = new Hls({
+      lowLatencyMode: false, backBufferLength: 4, maxBufferLength: 8,
+      liveSyncDurationCount: 3, enableWorker: true,
+      levelLoadingTimeOut: 12000, fragLoadingTimeOut: 20000,
+      maxFragLookUpTolerance: 0.5, fragLoadingMaxRetry: 8,
+      levelLoadingMaxRetry: 8, fragLoadingRetryDelay: 1000,
+      levelLoadingRetryDelay: 1000, debug: false,
+    });
+    hls.loadSource(HLS_URL);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, function() { setStatus('BUFFERING'); video.play().catch(function(){}); });
+    hls.on(Hls.Events.FRAG_LOADED, function() { if (liveInd.textContent !== 'LIVE') setStatus('LIVE', 'live'); });
+    hls.on(Hls.Events.ERROR, function(e, data) {
+      if (!data.fatal) { scheduleRetry(3000); return; }
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovering) {
+        recovering = true; setStatus('RECONNECTING', 'reconnecting');
+        hls.recoverMediaError(); setTimeout(function() { recovering = false; }, 4000);
+      } else { showError(); scheduleRetry(5000); }
+    });
+  }
+
+  function reloadStream() { initHLS(); }
+
+  function toggleFullscreen() {
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    if (isIOS) { if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); return; }
+    var c = document.getElementById('videoContainer');
+    if (!document.fullscreenElement) c.requestFullscreen().catch(function(){});
+    else document.exitFullscreen();
+  }
+
+  // ── CLOCK ──
+  function updateClock() {
+    var now = new Date();
+    var hh = String(now.getHours()).padStart(2,'0');
+    var mm = String(now.getMinutes()).padStart(2,'0');
+    var ss = String(now.getSeconds()).padStart(2,'0');
+    var clockEl = document.getElementById('clockDisplay');
+    if (clockEl) clockEl.textContent = hh+':'+mm+':'+ss;
+    var date = now.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+    document.getElementById('tsOverlay').textContent = date+'  '+hh+':'+mm+':'+ss;
+  }
+  setInterval(updateClock, 1000); updateClock();
+
+  // ── FPS (desktop only) ──
+  (function setupFpsCounter() {
+    var fpsEl = document.getElementById('fpsVal');
+    if (!fpsEl) return;
+    // Decoded frames, deliberately NOT requestVideoFrameCallback. rVFC counts
+    // frames the compositor PAINTS, so it collapses to ~1 fps whenever the tab
+    // is backgrounded or throttled — this panel then reports the viewer's
+    // window state instead of the stream. Decoded-frame count tracks the feed.
+    var lastCount = null;
+    setInterval(function() {
+      if (document.hidden) return;            // decoding pauses; a delta here is meaningless
+      var count = null;
+      if (typeof video.getVideoPlaybackQuality === 'function') count = video.getVideoPlaybackQuality().totalVideoFrames;
+      else if (video.webkitDecodedFrameCount !== undefined) count = video.webkitDecodedFrameCount;
+      if (count === null) { fpsEl.textContent = '—'; return; }
+      if (lastCount === null) { lastCount = count; return; }   // no delta on the first tick
+      fpsEl.textContent = (count - lastCount) + ' fps'; lastCount = count;
+    }, 1000);
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) lastCount = null;  // resync on return, don't emit a burst
+    });
+  })();
+
+  // ── BROADCAST ──
+  var currentMsg = '';
+  var editing = false;
+  var msgLocked  = false;
+  var msgBox     = document.getElementById('msgBox');
+  var msgActions = document.getElementById('msgActions');
+  var msgHint    = document.getElementById('msgHint');
+
+  function applyMsgLockUI() {
+    if (msgLocked) {
+      if (editing) cancelEdit();
+      msgBox.classList.add('locked');
+      msgActions.hidden = true;
+      // Persistent (not auto-cleared like setHint()'s transient ok/err hints).
+      msgHint.textContent = '🔒 Messages locked';
+      msgHint.className = 'msg-hint locked';
+    } else {
+      msgBox.classList.remove('locked');
+      msgActions.hidden = false;
+      if (msgHint.classList.contains('locked')) { msgHint.textContent = ''; msgHint.className = 'msg-hint'; }
+    }
+  }
+
+
+  function toggleTheme() {
+    var light = document.documentElement.dataset.theme === 'light';
+    light = !light;
+    document.documentElement.dataset.theme = light ? 'light' : 'dark';
+    localStorage.setItem('hlsls-theme', light ? 'light' : 'dark');
+    var cb = document.getElementById('themeCheck');
+    if (cb) cb.checked = light;
+  }
+  (function() {
+    var cb = document.getElementById('themeCheck');
+    if (cb) cb.checked = document.documentElement.dataset.theme === 'light';
+  })();
+
+  // B&W is a modifier on Blur (design system §6b) and only bites while the feed
+  // mode is `cloak`; the control stays live regardless so state is visible.
+  var bwCheck = document.getElementById('bwCheck');
+  function toggleBw() {
+    fetch('/api/bw-mode', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .then(function(t) { if (t !== null && bwCheck) bwCheck.checked = t.trim() === 'true'; })
+      .catch(function() {});
+  }
+  function pollBw() {
+    fetch('/api/bw-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(t) { if (t !== null && bwCheck) bwCheck.checked = t.trim() === 'true'; });
+  }
+  pollBw();
+  setInterval(pollBw, 3000);
+
+  var lockCheck = document.getElementById('lockCheck');
+  function toggleMsgLock() {
+    fetch('/api/msg-lock', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .then(function(t) { if (t !== null) pollMsgLock(); })
+      .catch(function() {});
+  }
+
+  function pollMsgLock() {
+    fetch('/api/msg-lock', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (text === null) return;
+        var locked = text.trim() === 'true';
+        if (lockCheck) lockCheck.checked = locked;
+        if (locked !== msgLocked) { msgLocked = locked; applyMsgLockUI(); }
+      });
+  }
+  pollMsgLock();
+  setInterval(pollMsgLock, 3000);
+
+  function updateClearBtn() {
+    var val = msgBox.value.trim();
+    var changed = val !== currentMsg;
+    saveBtn.className   = 'btn' + (editing && changed ? ' primary' : '');
+    cancelBtn.className = 'btn' + (editing ? ' primary' : '');
+    clearBtn.className  = 'btn' + (currentMsg !== '' ? ' primary' : '');
+  }
+
+  function setHint(text, cls) {
+    msgHint.textContent = text;
+    msgHint.className = 'msg-hint' + (cls ? ' ' + cls : '');
+    if (cls) setTimeout(function() { msgHint.textContent = ''; msgHint.className = 'msg-hint'; }, 3000);
+  }
+
+  function showDisplay(msg) {
+    currentMsg = msg;
+    if (!editing) {
+      msgBox.value = msg || '(no message)';
+      msgBox.classList.toggle('empty', !msg);
+    }
+    updateClearBtn();
+  }
+
+  function enterEdit() {
+    if (msgLocked) return;
+    editing = true;
+    msgBox.value = currentMsg;
+    msgBox.classList.remove('empty');
+    msgBox.classList.add('editing');
+    msgBox.removeAttribute('readonly');
+    msgBox.focus();
+    setHint('Esc = cancel');
+    updateClearBtn();
+  }
+
+  function cancelEdit() {
+    editing = false;
+    msgBox.setAttribute('readonly', '');
+    msgBox.classList.remove('editing');
+    showDisplay(currentMsg);
+    setHint('');
+    updateClearBtn();
+  }
+
+  function pollBroadcast() {
+    fetch('/broadcast.txt', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : ''; })
+      .catch(function() { return ''; })
+      .then(function(text) {
+        var msg = (text || '').trim();
+        if (msg !== currentMsg) showDisplay(msg);
+      });
+  }
+  pollBroadcast();
+  setInterval(pollBroadcast, 1000);
+
+  function doPost(body, onOk) {
+    fetch('/api/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: body
+    })
+    .then(function(r) {
+      if (r.ok) { onOk(); }
+      else { setHint('Server error', 'err'); }
+    })
+    .catch(function() { setHint('Not available yet', 'err'); });
+  }
+
+  function sendMessage() {
+    var text = msgBox.value.trim();
+    doPost(text, function() { cancelEdit(); showDisplay(text); setHint('Saved', 'ok'); });
+  }
+
+  function clearMessage() {
+    if (!confirm('Clear the current message?')) return;
+    doPost('', function() { cancelEdit(); showDisplay(''); setHint('Cleared', 'ok'); });
+  }
+
+  msgBox.addEventListener('input', function() { if (editing) updateClearBtn(); });
+  msgBox.addEventListener('click', function() { if (!editing) enterEdit(); });
+  msgBox.addEventListener('touchend', function(e) {
+    if (!editing) { e.preventDefault(); enterEdit(); }
+  });
+  msgBox.addEventListener('keydown', function(e) {
+    if (!editing) return;
+    if (e.key === 'Escape') { cancelEdit(); }
+  });
+
+  initHLS();
+</script>
+</body>
+</html>

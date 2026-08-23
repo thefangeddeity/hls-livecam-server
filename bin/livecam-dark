@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""
+livecam-dark -- toggle dark mode (macOS port of hls-livecam-dark).
+
+On hide: grabs one RTSP frame and renders it as block-art dark.png, then
+sets the dark flag. On un-hide: restores the plain black dark.png and clears
+the flag. The viewer polls /dark.png + /api/dark and cloaks accordingly.
+
+No root required; all state lives under the repo's state/ dir.
+"""
+import os, subprocess, sys
+
+BIN_DIR   = os.path.dirname(os.path.abspath(__file__))
+ROOT      = os.path.dirname(BIN_DIR)
+STATE_DIR = os.path.join(ROOT, "state")
+CONFIG    = os.path.join(ROOT, "config.env")
+os.makedirs(STATE_DIR, exist_ok=True)
+
+DARK_FLAG     = os.path.join(STATE_DIR, "dark")
+DARK_PNG      = os.path.join(STATE_DIR, "dark.png")
+DARK_PNG_ORIG = os.path.join(STATE_DIR, "dark_orig.png")
+SNAP          = "/tmp/livecam-snap.jpg"
+BLOCK_ART_PY  = os.path.join(BIN_DIR, "block_art.py")
+
+
+def _cfg(key, default):
+    try:
+        with open(CONFIG) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and line.startswith(key + '='):
+                    return line.split('=', 1)[1].strip()
+    except Exception:
+        pass
+    return default
+
+
+def _ensure_black_png():
+    """Create the plain black placeholder / backup if missing."""
+    if os.path.exists(DARK_PNG_ORIG):
+        return
+    import struct, zlib
+    w, h = (int(x) for x in _cfg('VIDEO_SIZE', '1280x720').split('x'))
+
+    def chunk(t, d):
+        return (struct.pack('>I', len(d)) + t + d +
+                struct.pack('>I', zlib.crc32(t + d) & 0xffffffff))
+
+    raw = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+    row = b'\x00' + b'\x00\x00\x00' * w
+    raw += chunk(b'IDAT', zlib.compress(row * h)) + chunk(b'IEND', b'')
+    with open(DARK_PNG_ORIG, 'wb') as f:
+        f.write(raw)
+
+
+def main():
+    _ensure_black_png()
+    rtsp_port = _cfg('RTSP_PORT', '8554')
+    rtsp_url  = f"rtsp://127.0.0.1:{rtsp_port}/cam"
+
+    if os.path.exists(DARK_FLAG):
+        # Un-hide
+        os.remove(DARK_FLAG)
+        if os.path.exists(DARK_PNG_ORIG):
+            import shutil
+            shutil.copy(DARK_PNG_ORIG, DARK_PNG)
+        print("false")
+    else:
+        # Hide: grab a frame, render block-art PNG
+        subprocess.run([
+            'ffmpeg', '-y', '-loglevel', 'error',
+            '-rtsp_transport', 'tcp', '-i', rtsp_url,
+            '-frames:v', '1', SNAP
+        ], timeout=15)
+        if os.path.exists(SNAP):
+            subprocess.run([sys.executable, BLOCK_ART_PY, SNAP, DARK_PNG], timeout=20)
+            os.remove(SNAP)
+        else:
+            # No frame — fall back to the plain black cloak.
+            if os.path.exists(DARK_PNG_ORIG):
+                import shutil
+                shutil.copy(DARK_PNG_ORIG, DARK_PNG)
+        open(DARK_FLAG, 'w').close()
+        print("true")
+
+
+if __name__ == "__main__":
+    main()

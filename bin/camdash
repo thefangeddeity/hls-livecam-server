@@ -1,0 +1,1786 @@
+#!/usr/bin/env python3
+"""
+camdash — hls-livecam-server monitor
+Version: 3.0.0
+Launch with: camdash
+"""
+import curses, psutil, time, os, threading, subprocess, urllib.request, collections, re, textwrap, socket, sys, termios
+from PIL import Image
+
+# ---------- PATHS / CONFIG (macOS port: repo-relative, no FHS) ----------
+BIN_DIR   = os.path.dirname(os.path.abspath(__file__))
+ROOT      = os.path.dirname(BIN_DIR)
+WEB_DIR   = os.path.join(ROOT, "web")
+STATE_DIR = os.path.join(ROOT, "state")
+CONFIG    = os.path.join(ROOT, "config.env")
+LIVECAM   = os.path.join(BIN_DIR, "livecam")
+
+def _read_config():
+    env = {}
+    try:
+        with open(CONFIG) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    if '#' in v and k.strip() != 'AVF_DEVICE_NAME':
+                        v = v.split('#', 1)[0]
+                    env[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return env
+
+_CFG      = _read_config()
+HLS_PORT  = _CFG.get('HLS_PORT', '8888')
+RTSP_PORT = _CFG.get('RTSP_PORT', '8554')
+API_PORT  = _CFG.get('WEB_PORT', '8080')   # Flask serves /api here (was nginx:5000)
+API_BASE  = f"http://127.0.0.1:{API_PORT}"
+
+# ---------- STATE ----------
+repair_status = "IDLE"
+repair_lock = threading.Lock()
+last_repair_time = 0
+
+last_disk = psutil.disk_io_counters()
+last_disk_time = time.time()
+
+smart_info = ["SMART: loading..."]
+smart_lock = threading.Lock()
+
+hls_state = "UNKNOWN"
+hls_lock = threading.Lock()
+
+cpu_samples = collections.deque(maxlen=5)
+
+# Broadcast state
+BROADCAST_FILE = os.path.join(STATE_DIR, "broadcast.txt")
+DARK_FLAG      = os.path.join(STATE_DIR, "dark")
+broadcast_mode = False
+broadcast_buffer = ""
+broadcast_current = ""
+broadcast_error = ""
+widget_gray_frame   = None   # (raster_pairnums, x_off, y_off, box_dims)
+widget_color_frame  = None   # (gen, palette, raster_pairnums, x_off, y_off, box_dims)
+widget_box_dims     = [None]
+widget_expand       = False
+_color_capable      = False  # set in main() from curses.COLORS
+_applied_color_gen  = -1     # last color palette generation pushed to curses (main thread)
+
+FEED_STATE_FILE = os.path.join(STATE_DIR, "camdash-feed.state")
+
+# --expanded: kiosk boot into expanded feed view (tina headless launch). Overrides
+# a persisted 'off' feed state for this session; never written to FEED_STATE_FILE.
+EXPANDED_FLAG = "--expanded" in sys.argv[1:]
+
+def _read_feed_state():
+    try:
+        with open(FEED_STATE_FILE) as f:
+            return f.read().strip() == "on"
+    except:
+        return True   # fresh install (no state file) -> feed ON (v5.2.x default)
+
+def _write_feed_state(val):
+    try:
+        with open(FEED_STATE_FILE, "w") as f:
+            f.write("on" if val else "off")
+    except:
+        pass
+
+feed_preview_on = _read_feed_state()
+confirm_repair  = False
+confirm_service = False
+confirm_onoff   = False
+confirm_clear   = False
+_footer_locked  = False
+_intentional_off = False
+
+camhub_mode       = False
+camhub_cursor     = 0
+camhub_editing    = False
+camhub_edit_field = 0
+camhub_edit_buf   = ""
+camhub_slots      = []
+camhub_confirm_clear = False
+
+import shutil as _shutil
+SMARTCTL = _shutil.which("smartctl") or "/usr/local/sbin/smartctl"
+
+psutil.cpu_percent(interval=None)
+
+# ---------- METRICS ----------
+def cpu():
+    val = psutil.cpu_percent(interval=None)
+    cpu_samples.append(val)
+    return sum(cpu_samples) / len(cpu_samples)
+
+def mem(): return psutil.virtual_memory().percent
+def load(): return os.getloadavg()[0]
+def uptime(): return int(time.time() - psutil.boot_time())
+
+def disk_write_mbs():
+    global last_disk, last_disk_time
+    now_counters = psutil.disk_io_counters()
+    now_time = time.time()
+    elapsed = now_time - last_disk_time
+    if elapsed <= 0:
+        return 0.0
+    delta_bytes = now_counters.write_bytes - last_disk.write_bytes
+    last_disk = now_counters
+    last_disk_time = now_time
+    return (delta_bytes / elapsed) / (1024 * 1024)
+
+def proc(name):
+    for p in psutil.process_iter(['name', 'cmdline']):
+        try:
+            cmdline = p.info['cmdline'] or []
+            pname = p.info['name'] or ""
+            if name == "ffmpeg":
+                if "ffmpeg" in pname or any("ffmpeg" in x for x in cmdline):
+                    if any("8554" in x for x in cmdline):
+                        return True
+                continue
+            if name in pname:
+                return True
+            if any(name in x for x in cmdline):
+                return True
+        except:
+            pass
+    return False
+
+# ---------- SYSTEM STATUS ----------
+def system_status(hls, ff, mm):
+    if hls == "LIVE":    return "LIVE"
+    if hls == "ERROR":   return "ERROR"
+    if ff or mm:         return "DEGRADED"
+    return "DOWN"
+
+# ---------- SWAP ----------
+def swap_type():
+    # macOS uses dynamic swap files under /var/vm; there is no /proc/swaps.
+    try:
+        if psutil.swap_memory().total > 0:
+            return "DYNAMIC"
+        return "NONE"
+    except Exception:
+        return "UNKNOWN"
+
+# ---------- HLS WORKER ----------
+def hls_worker():
+    global hls_state
+    while True:
+        state = "DOWN"
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{HLS_PORT}/cam/index.m3u8", timeout=2
+            ) as r:
+                state = "LIVE" if r.status == 200 else "ERROR"
+        except urllib.error.URLError:
+            state = "DOWN"
+        except Exception:
+            state = "ERROR"
+        with hls_lock:
+            hls_state = state
+        time.sleep(5)
+
+def get_hls():
+    with hls_lock:
+        return hls_state
+
+# ---------- SMART WORKER ----------
+def get_main_disk():
+    # macOS: resolve the root filesystem's whole-disk device via diskutil.
+    try:
+        src = subprocess.check_output(
+            ["df", "/"], text=True
+        ).splitlines()[1].split()[0]                 # e.g. /dev/disk1s1s1
+        info = subprocess.check_output(
+            ["diskutil", "info", src], text=True
+        )
+        for line in info.splitlines():
+            if "Part of Whole" in line:
+                whole = line.split(":")[-1].strip()  # e.g. disk1
+                if whole:
+                    return f"/dev/{whole}"
+        # Fall back to stripping the slice suffix (disk1s1s1 -> disk1).
+        m = re.match(r"(/dev/disk\d+)", src)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "/dev/disk0"
+
+def read_smart():
+    disk = get_main_disk()
+    cmds = [
+        [SMARTCTL, "-a", disk],
+        [SMARTCTL, "-a", "-d", "nvme", disk],
+        ["sudo", "-n", SMARTCTL, "-a", disk],
+        ["sudo", "-n", SMARTCTL, "-a", "-d", "nvme", disk],
+        ["sudo", "-n", SMARTCTL, "-a", "-d", "sat", disk],
+    ]
+    for cmd in cmds:
+        try:
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=5
+            )
+            out = result.stdout.decode(errors="ignore")
+            if not out or len(out.splitlines()) < 5:
+                continue
+            if ("SMART support is:  Unavailable" in out or
+                    "SMART support is: Unknown" in out or
+                    "Device does not support SMART" in out or
+                    "Unavailable - device lacks SMART capability" in out):
+                with smart_lock:
+                    smart_info[:] = [
+                        f"DISK:   {disk}",
+                        "SMART:  N/A",
+                        "REALLOC: N/A",
+                        "PENDING: N/A",
+                        "UNCORR:  N/A",
+                        "DISK TEMP: N/A",
+                    ]
+                return
+
+            health = realloc = temp = pending = uncorr = "?"
+            for line in out.splitlines():
+                if "SMART overall-health" in line:
+                    health = line.split(":")[-1].strip()
+                cols = line.split()
+                if len(cols) >= 10:
+                    aid = cols[0]
+                    if aid == "5": realloc = cols[-1]
+                    elif aid == "194" and "Temperature_Celsius" in line: temp = cols[9]
+                    elif aid == "197": pending = cols[-1]
+                    elif aid == "198": uncorr = cols[-1]
+                if "Temperature:" in line and temp == "?":
+                    try: temp = line.split(":")[-1].strip().split()[0]
+                    except: pass
+
+            data = [f"DISK:   {disk}", f"HEALTH: {health}"]
+            if result.returncode != 0:
+                data.append("SMART:  WARN (partial)")
+            data.append(f"REALLOC: {realloc}")
+            data.append(f"PENDING: {pending}")
+            data.append(f"UNCORR:  {uncorr}")
+            data.append(f"DISK TEMP: {temp}C" if temp != "?" else "DISK TEMP: UNKNOWN")
+
+            with smart_lock:
+                smart_info[:] = data
+            return
+        except:
+            continue
+
+    with smart_lock:
+        smart_info[:] = [
+            f"DISK:   {disk}",
+            "SMART:  NO ACCESS",
+            "HINT:   run as root or",
+            "        add smartctl to sudoers",
+        ]
+
+def smart_worker():
+    while True:
+        read_smart()
+        time.sleep(30)
+
+# ---------- DEVICE ENV ----------
+DEVICE_ENV = CONFIG   # macOS: camera config lives in config.env
+
+def read_device_env():
+    return _read_config()
+
+def camera_present():
+    """True if the configured avfoundation camera index is enumerated by ffmpeg."""
+    try:
+        idx = _read_config().get("AVF_VIDEO_INDEX", "")
+        if idx == "":
+            return False
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-f", "avfoundation",
+             "-list_devices", "true", "-i", ""],
+            capture_output=True, text=True, timeout=5).stderr
+        # Lines look like: [AVFoundation ...] [0] FaceTime HD Camera (Built-in)
+        vid = out.split("AVFoundation audio devices")[0]
+        return bool(re.search(rf"\[{re.escape(idx)}\]\s", vid))
+    except Exception:
+        return False
+
+_cam_present_cache = [False, 0.0]
+_CAM_ENUM_TTL = 300   # seconds; only used when the pipeline is down
+
+def camera_present_cached():
+    """Camera presence, without re-enumerating devices every 10 seconds.
+
+    A live capture ffmpeg is already proof the camera is there: it could not have
+    opened the avfoundation device otherwise, and it exits when the device goes
+    away. That check is a process-table scan we are doing anyway.
+
+    Enumeration is the expensive path -- it spawns a whole ffmpeg and each run
+    trips a TCC check, measured at ~16% CPU while it runs plus visible tccd churn.
+    It is now the fallback for when the pipeline is DOWN and presence is genuinely
+    unknown, on a 5-minute TTL rather than a 10-second one.
+    """
+    now = time.time()
+    if proc("avfoundation"):
+        _cam_present_cache[0] = True
+        _cam_present_cache[1] = now
+        return True
+    if now - _cam_present_cache[1] > _CAM_ENUM_TTL:
+        _cam_present_cache[0] = camera_present()
+        _cam_present_cache[1] = now
+    return _cam_present_cache[0]
+
+# ---------- PORT PROBE ----------
+def port_open(host, port, timeout=1):
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+# ---------- BROADCAST ----------
+def read_broadcast():
+    try:
+        with open(BROADCAST_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return ""
+
+def write_broadcast(msg):
+    try:
+        with open(BROADCAST_FILE, "w") as f:
+            f.write(msg)
+        return ""
+    except PermissionError:
+        return "permission denied"
+    except Exception as e:
+        return str(e)[:40]
+
+# ---------- CAMHUB ----------
+CAMS_JSON = os.path.join(WEB_DIR, "cams", "cams.json")
+
+def read_cams():
+    import json
+    try:
+        with open(CAMS_JSON) as f:
+            return json.load(f)
+    except Exception:
+        return [{"label":"","ip":"","stream_path":"","pinned":False} for _ in range(4)]
+
+def write_cams(slots):
+    import json
+    try:
+        with open(CAMS_JSON, "w") as f:
+            json.dump(slots, f, indent=2)
+        return ""
+    except Exception as e:
+        return str(e)[:40]
+
+def draw_camhub_pane(scr, y, x, h, w, base):
+    global camhub_slots, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_confirm_clear
+    box(scr, y, x, h, w, "CAMS", base)
+    inner_w = w - 4
+    col_w = [12, 15]
+    for i in range(4):
+        slot = camhub_slots[i] if i < len(camhub_slots) else {"label":"","ip":"","stream_path":"","pinned":False}
+        row_y = y + 2 + i
+        pin = "*" if slot.get("pinned") else " "
+        if camhub_editing and i == camhub_cursor:
+            parts = [slot.get("label",""), slot.get("ip","")]
+            parts[camhub_edit_field] = camhub_edit_buf
+            col = x + 2
+            safe(scr, row_y, col, f"[{pin}] ", curses.color_pair(2) | curses.A_BOLD)
+            col += 4
+            for fi, (val, cw_) in enumerate(zip(parts, col_w)):
+                if fi == camhub_edit_field:
+                    display = f"{(val + chr(0x258c)):<{cw_}}"[:cw_]
+                    safe(scr, row_y, col, display, curses.A_REVERSE)
+                else:
+                    safe(scr, row_y, col, f"{val:<{cw_}}"[:cw_], curses.color_pair(2) | curses.A_BOLD)
+                col += cw_ + 1
+        else:
+            label = slot.get("label","") or "(empty)"
+            ip    = slot.get("ip","") or ""
+            line  = "[{}] {:<12} {}".format(pin, label[:12], ip[:15])
+            attr  = (curses.color_pair(2) | curses.A_BOLD) if i == camhub_cursor else base
+            safe(scr, row_y, x + 2, line[:inner_w], attr)
+    if camhub_confirm_clear:
+        hint = "clear this slot?  \u2022  [y] yes  \u2022  [any other key] cancel"
+        hint_attr = curses.color_pair(3) | curses.A_BOLD
+    elif camhub_editing:
+        fnames = ["label", "ip"]
+        hint = "editing {}  \u2022  [Tab] next  \u2022  [Enter] save  \u2022  [Esc] cancel".format(fnames[camhub_edit_field])
+        hint_attr = curses.color_pair(4) | curses.A_BOLD
+    else:
+        hint = "[e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder  \u2022  [i/Esc] close"
+        hint_attr = curses.A_DIM
+    _items = hint.split("  \u2022  ")
+    _all = []
+    _cur = ""
+    for _item in _items:
+        _add = (_cur + "  \u2022  " + _item) if _cur else _item
+        if len(_add) <= inner_w:
+            _cur = _add
+        else:
+            if _cur:
+                _all.append(_cur)
+            _cur = _item
+    if _cur:
+        _all.append(_cur)
+    for _i, _line in enumerate(_all):
+        _hy = y + h - 1 - len(_all) + _i
+        safe(scr, _hy, x + 2, _line[:inner_w], hint_attr)
+
+# ---------- REPAIR ----------
+def _livecam(*args, timeout=60):
+    """Invoke the livecam control CLI (launchd wrapper)."""
+    return subprocess.run([LIVECAM, *args],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          timeout=timeout)
+
+def run_repair():
+    global repair_status, last_repair_time
+    with repair_lock:
+        if repair_status == "RUNNING":
+            return
+        repair_status = "RUNNING"
+    try:
+        _livecam("repair", timeout=90)
+        with repair_lock:
+            repair_status = "OK"
+    except Exception:
+        with repair_lock:
+            repair_status = "FAIL"
+    last_repair_time = time.time()
+
+# ---------- DARK TOGGLE ----------
+def run_dark_toggle():
+    try:
+        _livecam("dark", timeout=20)
+    except Exception:
+        pass
+
+# ---------- SERVICE TOGGLE ----------
+# macOS: services are mediamtx + broadcast-api, supervised by launchd via
+# the `livecam` CLI. There is no nginx and no separate ffmpeg-cam unit —
+# broadcast-api owns the camera pipeline.
+SERVICES = ["mediamtx", "broadcast-api"]
+
+def services_running():
+    return proc("mediamtx") or proc("broadcast-api")
+
+def run_service_toggle():
+    # [p] pause: stop/start the running processes (launchd keepalive left intact).
+    try:
+        _livecam("stop" if services_running() else "start", timeout=20)
+    except Exception:
+        pass
+
+def services_enabled():
+    # "enabled" == launchd agents are loaded (survive logout/reboot).
+    try:
+        result = subprocess.run([LIVECAM, "enabled"],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        return result.stdout.decode().strip() == "enabled"
+    except Exception:
+        return False
+
+def run_service_onoff():
+    # [o] on/off: load/unload the launchd agents (persistent enable/disable).
+    global _intentional_off
+    if services_enabled():
+        _intentional_off = True
+        try:
+            _livecam("disable", timeout=20)
+        except Exception:
+            pass
+    else:
+        _intentional_off = False
+        try:
+            _livecam("enable", timeout=20)
+        except Exception:
+            pass
+
+# ---------- UI HELPERS ----------
+def safe(scr, y, x, s, a=0):
+    try:
+        scr.addstr(y, x, s[:max(0, scr.getmaxyx()[1] - x)], a)
+    except:
+        pass
+
+def box(scr, y, x, h, w, title, a=0):
+    safe(scr, y, x, "┌" + "─" * (w - 2) + "┐", a)
+    safe(scr, y, x + 2, f" {title} ", a)
+    for i in range(1, h - 1):
+        safe(scr, y + i, x, "│", a)
+        safe(scr, y + i, x + w - 1, "│", a)
+    safe(scr, y + h - 1, x, "└" + "─" * (w - 2) + "┘", a)
+
+def _apply_color_palette(gen, palette):
+    """Push a color-palette generation into curses pairs — main thread only, and
+    only between frames (called before blitting). init_pair SELECTS fixed colors;
+    it never redefines them, so nothing global is mutated and nothing can leak."""
+    global _applied_color_gen
+    if gen == _applied_color_gen or not palette:
+        return
+    for i, (f_idx, b_idx) in enumerate(palette):
+        try:
+            curses.init_pair(COLOR_BASE + i, f_idx, b_idx)
+        except curses.error:
+            pass
+    _applied_color_gen = gen
+
+def _blit_feed(scr, y0, x0, box_cols, box_rows, use_color):
+    """Draw the contain-fit halfblock preview at (y0,x0) into a box. The raster
+    already carries pre-resolved curses pair numbers; palette swaps land here,
+    between frames. Clips defensively if the box shrank since the frame was fit.
+
+    Centering is recomputed HERE against the display box, not read from the frame's
+    fit-time offsets — so it can't drift when the display box differs from the box
+    the frame was fit to (expand toggle, terminal resize, boxed<->expand switch).
+    Floor division sends any single odd leftover column to the RIGHT margin, every
+    time; left and right margins therefore differ by at most 1. Same rule vertically."""
+    if use_color:
+        fr = widget_color_frame
+        if not fr:
+            return
+        gen, palette, raster, _fx, _fy, _dims = fr
+        _apply_color_palette(gen, palette)
+    else:
+        fr = widget_gray_frame
+        if not fr:
+            return
+        raster, _fx, _fy, _dims = fr
+    if not raster or not raster[0]:
+        return
+    x_off = (box_cols - len(raster[0])) // 2   # display-box centered; odd column -> right
+    y_off = (box_rows - len(raster)) // 2
+    for ri, prow in enumerate(raster):
+        ey = y_off + ri
+        if ey < 0:
+            continue
+        if ey >= box_rows:
+            break
+        for ci, pn in enumerate(prow):
+            ex = x_off + ci
+            if ex < 0:
+                continue
+            if ex >= box_cols:
+                break
+            safe(scr, y0 + ey, x0 + ex, "▀", curses.color_pair(pn))
+
+def bar(val, w):
+    filled = int((val / 100.0) * w)
+    return "\u2588" * filled + "\u2591" * (w - filled)
+
+def led(val, dim=False):
+    if dim:
+        return curses.A_DIM
+    if val < 50:   return curses.color_pair(1)
+    if val < 80:   return curses.color_pair(2) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+def _is_nginx_shared():
+    # macOS port has no nginx; the Flask app is dedicated. Never "shared".
+    return False
+
+def status_attr(status, dim=False):
+    if dim:
+        return curses.A_DIM
+    if status in ("LIVE", "OK"):
+        return curses.color_pair(1) | curses.A_BOLD
+    if status in ("DEGRADED", "RUNNING", "SHARED"):
+        return curses.color_pair(2) | curses.A_BOLD
+    if status in ("ERROR", "DOWN", "FAIL"):
+        return curses.color_pair(3) | curses.A_BOLD
+    return curses.color_pair(1)
+
+def header_attr(sys_status, svc, dark, dim=False):
+    if dim:
+        return curses.A_DIM
+    if not svc:
+        if dark:
+            return curses.color_pair(2) | curses.A_BOLD
+        return curses.color_pair(1) | curses.A_BOLD
+    if sys_status == "LIVE":
+        if dark:
+            return curses.color_pair(2) | curses.A_BOLD
+        return curses.color_pair(3) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+def load_attr(l, cores, dim=False):
+    if dim:
+        return curses.A_DIM
+    if l < cores * 0.7:  return curses.color_pair(1)
+    if l <= cores:        return curses.color_pair(2) | curses.A_BOLD
+    return curses.color_pair(3) | curses.A_BOLD
+
+# ---------- DASHBOARD SNAPSHOT ----------
+def _api_get(endpoint, default):
+    import urllib.request
+    try:
+        return urllib.request.urlopen(
+            f"{API_BASE}/api/{endpoint}", timeout=1
+        ).read().decode().strip()
+    except Exception:
+        return default
+
+def _cpu_temp():
+    # macOS has no psutil.sensors_temperatures(). Reading die temp needs
+    # sudo powermetrics / extra tooling, so report unknown by default.
+    fn = getattr(psutil, "sensors_temperatures", None)
+    if fn is None:
+        return "?"
+    try:
+        temps = fn()
+        for key in ("coretemp", "cpu_thermal"):
+            if temps.get(key):
+                return round(temps[key][0].current)
+    except Exception:
+        pass
+    return "?"
+
+def sample_metrics():
+    return {
+        "c":    cpu(),
+        "m":    mem(),
+        "l":    load(),
+        "up":   uptime(),
+        "ff":   proc("ffmpeg"),
+        "mm":   proc("mediamtx"),
+        "hls":  get_hls(),
+        "disk": disk_write_mbs(),
+        "cores": psutil.cpu_count(logical=True),
+        "swap": psutil.swap_memory(),
+        "stype": swap_type(),
+        "avail": psutil.virtual_memory().available // (1024 * 1024),
+        "nginx": proc("broadcast-api"),   # macOS: Flask web server (was nginx)
+        "rtsp":  port_open("127.0.0.1", int(RTSP_PORT)),
+        "api":   port_open("127.0.0.1", int(API_PORT)),
+        "v4l2":  camera_present_cached(),
+        "v4l2_dev": read_device_env().get("AVF_DEVICE_NAME", "?"),
+        "dark":  os.path.exists(DARK_FLAG),
+        "feed_mode": _api_get("feed-mode", "show"),
+        "msg_lock":  _api_get("msg-lock", "false"),
+        "bw_mode":   _api_get("bw-mode", "false"),
+        "svc":   services_running(),
+        "cputemp": _cpu_temp(),
+    }
+
+WIDGET_SNAP = "/tmp/camsnap_widget.jpg"
+WIDGET_RTSP = f"rtsp://127.0.0.1:{RTSP_PORT}/cam"
+WIDGET_COLS = 110
+WIDGET_ROWS = 32
+GRAY_STEPS    = [232, 238, 244, 250, 254, 255]   # dark-mode / no-truecolor luminance ramp
+
+# ── Preview geometry ──────────────────────────────────────────────────────────
+# Terminal cell aspect (width:height) of the *rendered font*, not a universal
+# constant — it varies by font/terminal and MUST be calibrated per box or the
+# preview stretches uniformly. On-screen aspect = source * (A_true / CELL_ASPECT),
+# so if CELL_ASPECT is too small the image renders too wide (0.45 rendered ~7.5%
+# wide on tanzania's font: true cell aspect there is ~0.483).
+#
+# CALIBRATION PROCEDURE (per terminal/font; result goes in CELL_ASPECT_FILE):
+#   1. Render a synthetic square through the live pipeline on the target terminal.
+#   2. Screenshot it; measure rendered width W and height H in pixels.
+#   3. new = CELL_ASPECT_now * (W / H)   (rendered-wide -> W>H -> increases it).
+#   4. Write `new` to state/cell_aspect; re-check until square<2%.
+# NOTE: the (raster_w/raster_h)*(2*CELL_ASPECT) self-check CANNOT catch a bad
+# value — CELL_ASPECT cancels in it. Only a ruler on a real screenshot can.
+CELL_ASPECT      = 0.45   # code default; per-terminal calibrated value lives in the file
+CELL_ASPECT_FILE = os.path.join(STATE_DIR, "cell_aspect")
+
+def _get_cell_aspect():
+    try:
+        v = float(open(CELL_ASPECT_FILE).read().strip())
+        if 0.2 <= v <= 1.0:
+            return v
+    except Exception:
+        pass
+    return CELL_ASPECT
+
+# ── Fixed xterm-240 palette (Architecture B: SELECTION only, never init_color) ──
+# 6x6x6 color cube (indices 16-231) + 24-step gray ramp (232-255). The low 16 are
+# theme-dependent across terminals and deliberately excluded. Nothing here mutates
+# terminal-global state, so a crash can corrupt nothing and there is nothing to
+# restore. Preserving that can't-corrupt property is why B was chosen.
+# NOTE (future Architecture A): higher fidelity would layer on top of this
+# fallback path by redefining the clustered centroids into palette slots via
+# init_color, guarded by a capability probe + OSC-104 startup heal. Out of scope.
+CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+_GRAY_RAMP  = tuple(8 + 10 * k for k in range(24))   # xterm 232..255 gray values
+
+COLOR_BASE   = 64    # curses pair numbers 64.. hold the adaptive color palette
+COLOR_BUDGET = 96    # resolved from curses.COLOR_PAIRS in main(); 96 is the floor
+TONE_ALPHA    = 0.3  # temporal smoothing of stretch anchors (exposure de-pump)
+HIST_ALPHA    = 0.3  # temporal smoothing of the color histogram
+REBUILD_EVERY = 5    # rebuild the palette every N snapshots (separate slow clock)
+
+# ---------- COLOR ENGINE (Architecture B) ----------
+def _contain_fit(img_w, img_h, box_cols, box_rows, cell_aspect=None):
+    """Contain-fit an image into a character box, halfblock vertical packing.
+    Returns (raster_w, raster_h, rows_used, x_off, y_off). Everything fits inside
+    the box centered (pillarbox + letterbox); nothing overflows, nothing pans.
+
+    On-screen aspect is (raster_w/raster_h)*(2*cell_aspect); we want that to equal
+    the source aspect, so the target pixel ratio is R = src / (2*cell_aspect).
+    Halfblock forces raster_h even (2 px/char row), so we can't hit R exactly at
+    small sizes. Rather than truncate (which stretched awkward boxes by ~8%), we
+    search even heights, derive width from R, and keep the LARGEST raster whose
+    ratio error stays tight — falling back to the least-distorted option when the
+    pixel budget is too small to hit tolerance (e.g. a 10-wide box). Never stretches;
+    only letterboxes/pillarboxes."""
+    if cell_aspect is None:
+        cell_aspect = CELL_ASPECT
+    avail_w = box_cols
+    avail_h = box_rows * 2
+    src = img_w / img_h
+    R = src / (2.0 * cell_aspect)                      # desired raster_w / raster_h
+    TOL = 0.015                                        # margin under the 2% acceptance
+    best_ok = None      # (area, rw, rh) among options within TOL — maximize size
+    best_any = None     # (err, rw, rh) overall — minimize distortion (tiny boxes)
+    for rh in range(2, avail_h + 1, 2):
+        rw = max(1, round(rh * R))
+        if rw > avail_w:
+            break                                      # taller only overflows further
+        err = abs((rw / rh) * (2.0 * cell_aspect) - src) / src
+        if best_any is None or err < best_any[0]:
+            best_any = (err, rw, rh)
+        if err <= TOL and (best_ok is None or rw * rh > best_ok[0]):
+            best_ok = (rw * rh, rw, rh)
+    if best_ok is not None:
+        _, raster_w, raster_h = best_ok
+    elif best_any is not None:
+        _, raster_w, raster_h = best_any
+    else:                                              # box too small for any fit
+        raster_w, raster_h = max(1, min(avail_w, round(2 * R))), 2
+    rows_used = raster_h // 2
+    x_off = (box_cols - raster_w) // 2
+    y_off = (box_rows - rows_used) // 2
+    return raster_w, raster_h, rows_used, x_off, y_off
+
+def _srgb_to_lab(r, g, b):
+    """sRGB (0-255) -> CIE L*a*b* (D65, 2° observer). Textbook linearize -> XYZ -> Lab."""
+    def _lin(c):
+        c /= 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    rl, gl, bl = _lin(r), _lin(g), _lin(b)
+    x = (rl * 0.4124564 + gl * 0.3575761 + bl * 0.1804375) / 0.95047
+    y = (rl * 0.2126729 + gl * 0.7151522 + bl * 0.0721750)
+    z = (rl * 0.0193339 + gl * 0.1191920 + bl * 0.9503041) / 1.08883
+    def _f(t):
+        return t ** (1.0 / 3.0) if t > 0.008856 else 7.787 * t + 16.0 / 116.0
+    fx, fy, fz = _f(x), _f(y), _f(z)
+    return (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
+
+_PALETTE_LAB = None   # [(xterm_idx, rep_rgb, (L,a,b)), ...] for all 240 entries; built once
+def _ensure_palette_lab():
+    global _PALETTE_LAB
+    if _PALETTE_LAB is None:
+        _PALETTE_LAB = [(i, _rep_rgb(i), _srgb_to_lab(*_rep_rgb(i))) for i in range(16, 256)]
+
+def _redmean_sq(c1, c2):
+    """Redmean color distance, squared. Used only for pair-space clustering/assignment,
+    where the points are already Lab-matched 240 colors (so no tone bias to reintroduce)."""
+    r1, g1, b1 = c1; r2, g2, b2 = c2
+    rbar = (r1 + r2) * 0.5
+    dr = r1 - r2; dg = g1 - g2; db = b1 - b2
+    return (2 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2 + (255 - rbar) / 256.0) * db * db
+
+_match_memo = {}
+def _match_240(rgb):
+    """Nearest of ALL 240 fixed palette colors in CIE L*a*b* (ΔE76 Euclidean). Lab is
+    perceptually uniform in darkness, so desaturated warm/dark midtones (wood, shadowed
+    teal) land on the neutral ramp instead of a saturated cube corner — the earlier
+    redmean two-candidate shortcut biased them onto 'lava'. The ramp wins neutrals with
+    no saturation threshold. Returns (xterm_idx, rep_rgb). Memoized per input RGB."""
+    hit = _match_memo.get(rgb)
+    if hit is not None:
+        return hit
+    _ensure_palette_lab()
+    L, a, b = _srgb_to_lab(*rgb)
+    best_idx = 16; best_rep = (0, 0, 0); best_d = 1e30
+    for idx, rep, (pL, pa, pb) in _PALETTE_LAB:
+        dL = L - pL; da = a - pa; db = b - pb
+        d = dL * dL + da * da + db * db
+        if d < best_d:
+            best_d = d; best_idx = idx; best_rep = rep
+    res = (best_idx, best_rep)
+    if len(_match_memo) < 200000:
+        _match_memo[rgb] = res
+    return res
+
+def _rep_rgb(idx):
+    """RGB of a fixed-240 xterm index (16-255)."""
+    if idx >= 232:
+        v = _GRAY_RAMP[idx - 232]
+        return (v, v, v)
+    i = idx - 16
+    return (CUBE_LEVELS[i // 36], CUBE_LEVELS[(i // 6) % 6], CUBE_LEVELS[i % 6])
+
+def _pair_dist(p, q):
+    """Distance between two 6-D (fg_rgb, bg_rgb) points."""
+    return (_redmean_sq((p[0], p[1], p[2]), (q[0], q[1], q[2])) +
+            _redmean_sq((p[3], p[4], p[5]), (q[3], q[4], q[5])))
+
+def _snap_pair(point):
+    """Snap a 6-D centroid to a fixed-240 (fg_idx, bg_idx) pair."""
+    return _match_240((point[0], point[1], point[2]))[0], _match_240((point[3], point[4], point[5]))[0]
+
+def _kmeans_pairs(items, k, iters=6):
+    """Weighted k-means in PAIR space. Clustering *pairs* (not colors) is load-
+    bearing: shared colors explode into far more distinct (fg,bg) pairs than the
+    256-pair ceiling allows. items: list of (point6, weight). Returns centroids.
+
+    Cold-select each rebuild (seed = k heaviest cells): deterministic, robust to
+    scene cuts (no stale-seed lock-in), and simpler. Temporal continuity comes
+    from the EMA-smoothed histogram feeding this, not from warm-starting the seed;
+    palette-swap flicker is governed by real color change, not cluster labeling."""
+    pts = [it[0] for it in items]
+    wts = [it[1] for it in items]
+    if len(pts) <= k:
+        return list(pts)
+    order = sorted(range(len(pts)), key=lambda i: wts[i], reverse=True)
+    cents = [pts[i] for i in order[:k]]
+    for _ in range(iters):
+        sums = [[0.0] * 6 for _ in range(k)]
+        wsum = [0.0] * k
+        for p, w in zip(pts, wts):
+            bi = 0; bd = 1e30
+            for ci, c in enumerate(cents):
+                d = _pair_dist(p, c)
+                if d < bd:
+                    bd = d; bi = ci
+            for j in range(6):
+                sums[bi][j] += p[j] * w
+            wsum[bi] += w
+        moved = False
+        newc = []
+        for ci in range(k):
+            if wsum[ci] > 0:
+                nc = tuple(sums[ci][j] / wsum[ci] for j in range(6))
+            else:
+                nc = cents[ci]
+            if nc != cents[ci]:
+                moved = True
+            newc.append(nc)
+        cents = newc
+        if not moved:
+            break
+    return cents
+
+# --- color engine persistent state (owned by snap_worker thread) ---
+_tone_lo = None
+_tone_hi = None
+_hist_ema = {}          # (fg_idx, bg_idx) -> EMA weight
+_color_palette = None   # list of (fg_idx, bg_idx), <= COLOR_BUDGET entries
+_palette_pts = None     # 6-D display point per palette entry (for assign + warm seed)
+_color_gen = 0
+_snap_count = 0
+_assign_cache = {}      # (fg_idx, bg_idx) -> curses pair number; cleared each rebuild
+
+def _stretch_params(rdata, npx):
+    """5/95 luminance-percentile contrast stretch with temporally-smoothed anchors.
+    Returns (lo, gain); apply the SAME scalar gain to R,G,B alike (per-channel
+    stretch hue-shifts)."""
+    global _tone_lo, _tone_hi
+    lums = [int(rdata[i * 3] * 0.299 + rdata[i * 3 + 1] * 0.587 + rdata[i * 3 + 2] * 0.114)
+            for i in range(npx)]
+    lums.sort()
+    lo_new = lums[int(npx * 0.05)]
+    hi_new = lums[int(npx * 0.95)]
+    if _tone_lo is None:
+        _tone_lo, _tone_hi = lo_new, hi_new
+    else:
+        _tone_lo = TONE_ALPHA * lo_new + (1 - TONE_ALPHA) * _tone_lo
+        _tone_hi = TONE_ALPHA * hi_new + (1 - TONE_ALPHA) * _tone_hi
+    return _tone_lo, 255.0 / ((_tone_hi - _tone_lo) or 1)
+
+def _rebuild_palette():
+    """Re-cluster the EMA histogram into <= COLOR_BUDGET pairs. Runs on the slow
+    palette clock; bumps the generation so the main thread swaps between frames."""
+    global _color_palette, _palette_pts, _color_gen, _assign_cache
+    items = [((*_rep_rgb(f), *_rep_rgb(b)), w) for (f, b), w in _hist_ema.items()]
+    if not items:
+        return
+    if len(items) > 800:                    # cap k-means input cost by weight
+        items.sort(key=lambda iw: iw[1], reverse=True)
+        items = items[:800]
+    cents = _kmeans_pairs(items, min(COLOR_BUDGET, len(items)))
+    seen = {}
+    palette = []
+    for c in cents:                          # snap to 240 and dedupe collisions
+        pr = _snap_pair(c)
+        if pr not in seen:
+            seen[pr] = True
+            palette.append(pr)
+    _color_palette = palette
+    _palette_pts = [(*_rep_rgb(f), *_rep_rgb(b)) for (f, b) in palette]
+    _color_gen += 1
+    _assign_cache = {}
+
+def _nearest_pair_num(key):
+    """Pair number of the palette entry nearest to cell (fg_idx, bg_idx)."""
+    p = (*_rep_rgb(key[0]), *_rep_rgb(key[1]))
+    bi = 0; bd = 1e30
+    for i, c in enumerate(_palette_pts):
+        d = _pair_dist(p, c)
+        if d < bd:
+            bd = d; bi = i
+    return COLOR_BASE + bi
+
+def _build_color_frame(rdata, raster_w, rows_used, x_off, y_off, box_cols, box_rows, lo, gain):
+    """Match pixels to the fixed-240 palette, EMA the histogram, (re)build the pair
+    palette on the slow clock, then emit a per-cell raster of curses pair numbers."""
+    global _hist_ema, _snap_count, _assign_cache, widget_color_frame
+
+    def _st(v):
+        v = (v - lo) * gain
+        return 0 if v < 0 else (255 if v > 255 else int(v))
+
+    cells = []
+    counts = {}
+    for r in range(rows_used):
+        top = (2 * r) * raster_w * 3
+        bot = (2 * r + 1) * raster_w * 3
+        rowcells = []
+        for c in range(raster_w):
+            ti = top + c * 3; bi = bot + c * 3
+            f_idx = _match_240((_st(rdata[ti]),   _st(rdata[ti + 1]), _st(rdata[ti + 2])))[0]
+            b_idx = _match_240((_st(rdata[bi]),   _st(rdata[bi + 1]), _st(rdata[bi + 2])))[0]
+            key = (f_idx, b_idx)
+            rowcells.append(key)
+            counts[key] = counts.get(key, 0) + 1
+        cells.append(rowcells)
+
+    # EMA the HISTOGRAM (not the palette): smoothing before clustering makes
+    # cluster stability free and avoids brittle cross-rebuild centroid matching.
+    total = sum(counts.values()) or 1
+    for k in list(_hist_ema.keys()):
+        _hist_ema[k] *= (1 - HIST_ALPHA)
+    for k, cnt in counts.items():
+        _hist_ema[k] = _hist_ema.get(k, 0.0) + HIST_ALPHA * (cnt / total)
+    if len(_hist_ema) > 4096:
+        _hist_ema = dict(sorted(_hist_ema.items(), key=lambda kv: kv[1], reverse=True)[:2048])
+
+    _snap_count += 1
+    # Rebuild on snapshots 1, 1+N, 1+2N, ... -> exactly ceil(K/N) rebuilds over K
+    # snapshots, with frame 1 bootstrapping the first palette.
+    if _color_palette is None or (_snap_count - 1) % REBUILD_EVERY == 0:
+        _rebuild_palette()
+
+    raster = []
+    for rowcells in cells:
+        prow = []
+        for key in rowcells:
+            pn = _assign_cache.get(key)
+            if pn is None:
+                pn = _nearest_pair_num(key)
+                _assign_cache[key] = pn
+            prow.append(pn)
+        raster.append(prow)
+
+    widget_color_frame = (_color_gen, _color_palette, raster, x_off, y_off, (box_cols, box_rows))
+
+def _build_gray_frame(rdata, raster_w, rows_used, x_off, y_off, box_cols, box_rows, lo, gain):
+    """Fallback luminance ramp — symmetric (no per-half gain, so no venetian-blind
+    row banding). Emits a raster of static gray pair numbers (10 + fg*6 + bg)."""
+    global widget_gray_frame
+
+    def _sti(lum):
+        v = (lum - lo) * gain
+        v = 0 if v < 0 else (255 if v > 255 else v)
+        return int(v / 255 * 5.999)
+
+    raster = []
+    for r in range(rows_used):
+        top = (2 * r) * raster_w * 3
+        bot = (2 * r + 1) * raster_w * 3
+        prow = []
+        for c in range(raster_w):
+            ti = top + c * 3; bi = bot + c * 3
+            fg_i = _sti(rdata[ti] * 0.299 + rdata[ti + 1] * 0.587 + rdata[ti + 2] * 0.114)
+            bg_i = _sti(rdata[bi] * 0.299 + rdata[bi + 1] * 0.587 + rdata[bi + 2] * 0.114)
+            prow.append(10 + fg_i * 6 + bg_i)
+        raster.append(prow)
+    widget_gray_frame = (raster, x_off, y_off, (box_cols, box_rows))
+def snap_worker():
+    global widget_gray_frame, widget_color_frame
+    while True:
+        try:
+            if not feed_preview_on:
+                time.sleep(0.5)
+                continue
+            dims = widget_box_dims[0]
+            if dims is None:
+                time.sleep(0.5)
+                continue
+            box_cols, box_rows = dims
+            _res = subprocess.run([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-rtsp_transport", "tcp",
+                "-i", WIDGET_RTSP,
+                "-frames:v", "1", WIDGET_SNAP
+            ], timeout=6, capture_output=True)
+            # ffmpeg leaves a STALE WIDGET_SNAP on failure (exits non-zero but the
+            # previous file remains), so gate on the return code, not file existence.
+            if _res.returncode == 0 and os.path.exists(WIDGET_SNAP):
+                src = Image.open(WIDGET_SNAP)
+                iw, ih = src.size
+                raster_w, raster_h, rows_used, x_off, y_off = _contain_fit(
+                    iw, ih, box_cols, box_rows, _get_cell_aspect())
+                rgb = src.convert("RGB").resize((raster_w, raster_h), Image.LANCZOS)
+                rdata = rgb.tobytes()
+                lo, gain = _stretch_params(rdata, raster_w * raster_h)
+                if _color_capable:
+                    _build_color_frame(rdata, raster_w, rows_used, x_off, y_off,
+                                       box_cols, box_rows, lo, gain)
+                _build_gray_frame(rdata, raster_w, rows_used, x_off, y_off,
+                                  box_cols, box_rows, lo, gain)
+            else:
+                # capture failed / no fresh snapshot — never paint a stale frame
+                widget_gray_frame  = None
+                widget_color_frame = None
+        except Exception:
+            # timeout, decode error, etc. — same rule: blank, not stale
+            widget_gray_frame  = None
+            widget_color_frame = None
+        _interval = 2
+        try:
+            with open(os.path.join(STATE_DIR, "snap_interval")) as _f:
+                _interval = int(_f.read().strip())
+        except Exception:
+            pass
+        time.sleep(_interval)
+
+
+# ---------- LAYOUT HELPERS ----------
+def layout(h, w):
+    """Return layout constants for the given terminal size."""
+    left_w   = max(22, w // 5)
+    center_w = max(10, (w - left_w - 3) // 2)
+    right_w  = center_w
+    center_x = left_w + 1
+    right_x  = center_x + center_w + 1
+    top_y    = 2
+    top_h    = (h - 4) // 2
+    bot_y    = top_y + top_h
+    bot_h    = max(5, h - bot_y - 2)
+    return dict(
+        left_w=left_w, center_w=center_w, right_w=right_w,
+        center_x=center_x, right_x=right_x,
+        top_y=top_y, top_h=top_h,
+        bot_y=bot_y, bot_h=bot_h,
+    )
+
+
+def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
+    h, w = scr.getmaxyx()
+    base = curses.A_DIM if dim else 0
+    L = layout(h, w)
+
+    c = snap["c"]; m = snap["m"]; l = snap["l"]
+    up = snap["up"]; ff = snap["ff"]; mm = snap["mm"]
+    hls = snap["hls"]; disk = snap["disk"]
+    cores = snap["cores"]; swap = snap["swap"]; stype = snap["stype"]
+    avail = snap["avail"]
+    nginx = snap["nginx"]; rtsp = snap["rtsp"]
+    api   = snap["api"];   v4l2 = snap["v4l2"]
+    dark  = snap["dark"];  svc  = snap["svc"];  cputemp = snap["cputemp"]
+
+    base_status = system_status(hls, ff, mm)
+    sys_status = base_status if cur_repair in ("IDLE", "OK") else cur_repair
+
+    # -- HEADER --
+    safe(scr, 0, 2,
+         f"Webcam Server Stack  \u2022  uptime {up // 3600}h {(up % 3600) // 60}m",
+         base)
+    qualifiers = []
+    if not svc:
+        qualifiers.append("services stopped")
+    elif base_status in ("DEGRADED", "ERROR", "DOWN"):
+        qualifiers.append("suggest repair")
+    if dark:
+        qualifiers.append("feed hidden")
+    mid = "\u2022 " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else "")
+    _mid_x = w // 2 - len(mid) // 2
+    _hattr = header_attr(sys_status, svc, dark, dim)
+    if sys_status == "LIVE" and not dim:
+        safe(scr, 0, _mid_x, "\u2022", _hattr | curses.A_BLINK)
+        safe(scr, 0, _mid_x + 1,
+             " " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else ""),
+             _hattr)
+    else:
+        safe(scr, 0, _mid_x, mid, _hattr)
+    _hostname = socket.gethostname()
+    _ts = time.strftime("%H:%M %d-%b-%y")
+    _hdr_right = f'"{_hostname}" {_ts}'
+    safe(scr, 0, w - len(_hdr_right) - 2, _hdr_right,
+         curses.A_DIM if dim else curses.color_pair(4))
+
+    top_y = L["top_y"]; top_h = L["top_h"]
+    bot_y = L["bot_y"]; bot_h = L["bot_h"]
+    lw    = L["left_w"]; cx = L["center_x"]; cw = L["center_w"]
+    rx    = L["right_x"]; rw = L["right_w"]
+
+    # ============================================================
+    # TOP ROW: DISK/SMART | FEED | SYSTEM
+    # ============================================================
+    _use_color = (not dark) and _color_capable and widget_color_frame is not None
+    _use_gray  = (not _use_color) and widget_gray_frame is not None
+    has_feed   = (_use_color or _use_gray) and not dim and not camhub_mode and feed_preview_on
+    if widget_expand and (has_feed or EXPANDED_FLAG):
+        # EXPANDED_FLAG also takes the full-screen branch with no frame yet (server
+        # off at kiosk boot) -> blank expanded screen, not a fallback to boxed layout.
+        _avail_h = h - 3
+        widget_box_dims[0] = (w, _avail_h)
+        if has_feed:
+            _blit_feed(scr, 0, 0, w, _avail_h, _use_color)
+        safe(scr, h - 2, 0, "[x] collapse \u2022 [q] quit")
+        return
+    box(scr, top_y, 0,  top_h, lw, "DISK / SMART", base)
+    if has_feed:
+        box(scr, top_y, cx, top_h, cw, "FEED",      base)
+    box(scr, top_y, rx, top_h, rw, "SYSTEM",         base)
+    if camhub_mode:
+        draw_camhub_pane(scr, top_y, cx, top_h, cw, base)
+
+    # -- DISK/SMART content --
+    with smart_lock:
+        si_raw = list(smart_info)
+    si = {}
+    warn_partial = False
+    for entry in si_raw:
+        if "WARN (partial)" in entry:
+            warn_partial = True
+        if ":" in entry:
+            k, _, v = entry.partition(":")
+            si[k.strip()] = v.strip()
+
+    def sint(key):
+        try: return int(si.get(key, "x"))
+        except: return None
+
+    def sattr(key):
+        if dim: return curses.A_DIM
+        n = sint(key)
+        if n is None: return 0
+        return curses.color_pair(3 if n > 0 else 1) | curses.A_BOLD
+
+    realloc_n = sint("REALLOC") or 0
+    pending_n = sint("PENDING") or 0
+    uncorr_n  = sint("UNCORR")  or 0
+    if realloc_n > 100 or pending_n > 0 or uncorr_n > 0:
+        risk, risk_attr = "HIGH", curses.color_pair(3) | curses.A_BOLD
+    elif realloc_n > 0:
+        risk, risk_attr = "WARN", curses.color_pair(2) | curses.A_BOLD
+    else:
+        risk, risk_attr = "OK",   curses.color_pair(1) | curses.A_BOLD
+    if dim:
+        risk_attr = curses.A_DIM
+
+    write_attr = curses.A_DIM if dim else (
+        curses.color_pair(1) | curses.A_BOLD if disk > 0.01 else curses.color_pair(1))
+    assess_val  = si.get("HEALTH", "?")
+    assess_attr = curses.A_DIM if dim else (
+        curses.color_pair(1) | curses.A_BOLD if assess_val == "PASSED"
+        else curses.color_pair(3) | curses.A_BOLD)
+    _smart_na = si.get("SMART", "") == "N/A"
+
+    _clip = lw - 3
+    dy = top_y + 1
+    safe(scr, dy, 2, f"DISK: {si.get('DISK','?')}"[:_clip],
+         curses.A_DIM if dim else curses.color_pair(1));                         dy += 1
+    if _smart_na:
+        safe(scr, dy, 2, "SMART: N/A"[:_clip], curses.A_DIM);                  dy += 1
+    else:
+        safe(scr, dy, 2, f"ASSESS: {assess_val}"[:_clip],    assess_attr);      dy += 1
+        safe(scr, dy, 2, f"RISK: {risk}"[:_clip],            risk_attr);        dy += 1
+        if warn_partial:
+            safe(scr, dy, 2, "SMART: WARN"[:_clip],
+                 curses.A_DIM if dim else curses.color_pair(2) | curses.A_BOLD); dy += 1
+        safe(scr, dy, 2, f"REALLOC: {si.get('REALLOC','N/A')}"[:_clip], sattr("REALLOC")); dy += 1
+        safe(scr, dy, 2, f"PENDING: {si.get('PENDING','N/A')}"[:_clip], sattr("PENDING")); dy += 1
+        safe(scr, dy, 2, f"UNCORR: {si.get('UNCORR','N/A')}"[:_clip],   sattr("UNCORR"));  dy += 1
+    temp_val = si.get("DISK TEMP", "?")
+    temp_clean = temp_val.rstrip("C") if temp_val != "?" else "?"
+    tstr = f"TEMP: {temp_clean}°C" if temp_clean != "?" else "TEMP: ?"
+    safe(scr, dy, 2, tstr[:_clip], base);                                       dy += 1
+    safe(scr, dy, 2, f"WRITE: {disk:.2f} MB/s"[:_clip], write_attr)
+
+    # -- FEED content (contain-fit halfblock, centered, no pan) --
+    feed_inner_w = cw - 2
+    feed_inner_h = top_h - 2
+    widget_box_dims[0] = (feed_inner_w, feed_inner_h)
+    if has_feed:
+        _blit_feed(scr, top_y + 1, cx + 1, feed_inner_w, feed_inner_h, _use_color)
+
+    # -- SYSTEM content --
+    sys_inner_w = rw - 4
+    y = top_y + 1
+    safe(scr, y, rx + 2, f"CPU   {c:5.1f}%", base);                             y += 1
+    safe(scr, y, rx + 2, bar(c, sys_inner_w), led(c, dim));                      y += 2
+    safe(scr, y, rx + 2, f"MEM   {m:5.1f}%", base);                             y += 1
+    safe(scr, y, rx + 2, bar(m, sys_inner_w), led(m, dim));                      y += 2
+    safe(scr, y, rx + 2, f"SWAP  {swap.percent:5.1f}% [{stype}]", base);        y += 1
+    safe(scr, y, rx + 2, bar(swap.percent, sys_inner_w), led(swap.percent, dim)); y += 2
+    safe(scr, y, rx + 2, f"LOAD  {l:.2f}/{cores}", base);                        y += 1
+    safe(scr, y, rx + 2, bar(min(l / cores * 100, 100), sys_inner_w),
+         load_attr(l, cores, dim));                                                y += 2
+    _col2 = sys_inner_w // 2
+    _sysline = (f"RAM: {avail} MB".ljust(_col2)[:_col2] +
+                f"CPU TEMP: {cputemp}\u00b0C")
+    safe(scr, y, rx + 2, _sysline[:sys_inner_w], base)
+
+    # ============================================================
+    # BOTTOM ROW: STACK | PROCESSES | MESSAGE
+    # ============================================================
+    editing_msg = editing_buffer is not None
+    msg_border  = curses.color_pair(2) if editing_msg else base
+
+    # STACK shares left column width; PROCESSES shares center; MESSAGE shares right
+    box(scr, bot_y, 0,  bot_h, lw, "VIDEO", base)
+    _proc_y = bot_y if (has_feed or camhub_mode) else top_y
+    _proc_h = bot_h if (has_feed or camhub_mode) else top_h + bot_h
+    box(scr, _proc_y, cx, _proc_h, cw, "PROCESSES", base)
+    box(scr, bot_y, rx, bot_h, rw, "MESSAGE",   msg_border)
+
+    # -- STACK content --
+    y = bot_y + 1
+    safe(scr, y, 2, f"CAM:      {'LIVE' if (v4l2 and svc) else 'FOUND' if v4l2 else 'NONE'}",
+         status_attr('LIVE' if v4l2 else 'DOWN', dim)); y += 1
+    fps_val = read_device_env().get("FRAMERATE", "?")
+    safe(scr, y, 2, f"ffmpeg:   {'LIVE' if ff else 'DOWN'}",
+         status_attr('LIVE' if ff else 'DOWN', dim));   y += 1
+    safe(scr, y, 2, f"RTSP:     {'LIVE' if rtsp else 'DOWN'}",
+         status_attr('LIVE' if rtsp else 'DOWN', dim)); y += 1
+    safe(scr, y, 2, f"mediamtx: {'LIVE' if mm else 'DOWN'}",
+         status_attr('LIVE' if mm else 'DOWN', dim));   y += 1
+    safe(scr, y, 2, f"HLS:      {hls}", status_attr(hls, dim));                  y += 1
+    _web_label = "LIVE" if nginx else "DOWN"       # 'nginx' metric = Flask web server
+    safe(scr, y, 2, f"web:      {_web_label}", status_attr(_web_label, dim)); y += 1
+    _feed_mode = snap.get('feed_mode', 'show')
+    _showing  = _feed_mode == 'show'
+    _cloaking = _feed_mode == 'cloak'
+    _hiding   = _feed_mode == 'hide'
+    _msg_locked = snap.get('msg_lock', 'false') == 'true'
+    _bw_mode  = snap.get('bw_mode', 'false') == 'true'
+    y += 1
+    show_a   = curses.A_REVERSE if (svc and _showing)  else curses.A_DIM
+    blur_a   = curses.A_REVERSE if (svc and _cloaking) else curses.A_DIM
+    hide_a   = curses.A_REVERSE if (svc and _hiding)   else curses.A_DIM
+    repair_a = curses.color_pair(2) | curses.A_BOLD if cur_repair == 'RUNNING' else curses.A_DIM
+    safe(scr, y, 2, "[ Show   ]", show_a);   y += 1
+    bw_cb = "[*]" if _bw_mode else "[ ]"
+    bw_a  = curses.color_pair(2) | curses.A_BOLD if (svc and _bw_mode) else curses.A_DIM
+    if _cloaking:
+        safe(scr, y, 2, "[ Blur   ]", blur_a)
+        safe(scr, y, 13, f"{bw_cb} B&W", bw_a); y += 1
+    else:
+        safe(scr, y, 2, "[ Blur   ]", blur_a);   y += 1
+    safe(scr, y, 2, "[ Hide   ]", hide_a);   y += 1
+    safe(scr, y, 2, "[ Repair ]", repair_a); y += 1
+    svc_a = curses.color_pair(1) | curses.A_BOLD if svc else curses.color_pair(3) | curses.A_BOLD
+    safe(scr, bot_y + bot_h - 3, 2, f"FPS:    {fps_val}" if svc else "FPS:    N/A", curses.color_pair(4) | curses.A_BOLD)
+    safe(scr, bot_y + bot_h - 2, 2, f"SERVER: {'ON' if svc else 'OFF'}", svc_a)
+
+    # -- PROCESSES content --
+    px         = cx + 2
+    right_edge = cx + cw - 2
+    cpu_w      = 6
+    pname_w    = max(4, right_edge - px - cpu_w - 1)
+    top8 = sorted(
+        psutil.process_iter(['name', 'cpu_percent']),
+        key=lambda p: p.info['cpu_percent'] or 0,
+        reverse=True
+    )[:_proc_h - 2]
+    for i, p in enumerate(top8):
+        try:
+            name = (p.info['name'] or "")[:pname_w]
+            cpuv = p.info['cpu_percent'] or 0.0
+            proc_attr = curses.A_DIM if dim else (
+                curses.color_pair(3) | curses.A_BOLD if cpuv > 30 else
+                curses.color_pair(2) | curses.A_BOLD if cpuv > 10 else
+                curses.color_pair(4) | curses.A_BOLD if cpuv > 2 else
+                curses.A_DIM)
+            safe(scr, _proc_y + 1 + i, px,               f"{name:<{pname_w}}", proc_attr)
+            safe(scr, _proc_y + 1 + i, right_edge - cpu_w, f"{cpuv:5.1f}%",   proc_attr)
+        except:
+            pass
+
+    # -- MESSAGE content --
+    TA_W = rw - 4
+    TA_H = 4
+    ta_x = rx + 1
+    ta_y = bot_y + 3
+    display_text = editing_buffer if editing_msg else broadcast_current
+    # label + char count on same row
+    if editing_msg:
+        remaining = 120 - len(editing_buffer)
+        ctr = f"{len(editing_buffer)}/120"
+        ctr_attr = (curses.color_pair(1) if remaining > 20 else
+                    curses.color_pair(2) | curses.A_BOLD if remaining > 0 else
+                    curses.color_pair(3) | curses.A_BOLD)
+        safe(scr, bot_y + 1, ta_x + 1, "Leave a note for viewers", curses.A_DIM)
+        safe(scr, bot_y + 1, rx + rw - len(ctr) - 2, ctr, ctr_attr)
+    else:
+        safe(scr, bot_y + 1, ta_x + 1, "Leave a note for viewers", curses.A_DIM)
+    # textarea border
+    safe(scr, ta_y - 1, ta_x, "\u250c" + "\u2500" * TA_W + "\u2510", curses.A_DIM)
+    for i in range(TA_H):
+        safe(scr, ta_y + i, ta_x, "\u2502", curses.A_DIM)
+        safe(scr, ta_y + i, ta_x + TA_W + 1, "\u2502", curses.A_DIM)
+    safe(scr, ta_y + TA_H, ta_x, "\u2514" + "\u2500" * TA_W + "\u2518", curses.A_DIM)
+    # textarea content
+    ta_lines = []
+    if display_text:
+        for _para in display_text.split('\n'):
+            ta_lines.extend(textwrap.wrap(_para, TA_W - 2) or [''])
+    ta_attr = curses.color_pair(2) | curses.A_BOLD if editing_msg else curses.color_pair(4) | curses.A_BOLD
+    for i in range(TA_H):
+        line = ta_lines[i] if i < len(ta_lines) else ""
+        safe(scr, ta_y + i, ta_x + 2, line, ta_attr if display_text or editing_msg else curses.A_DIM)
+    if not display_text and not editing_msg:
+        safe(scr, ta_y, ta_x + 2, "(no message)", curses.A_DIM)
+    # message buttons - three states
+    btn_y = ta_y + TA_H + 1
+    if editing_msg:
+        _save_a   = curses.A_REVERSE if (api and editing_buffer != broadcast_current) else curses.A_DIM
+        _clear_a  = curses.A_REVERSE if editing_buffer else curses.A_DIM
+        _cancel_a = curses.A_REVERSE
+        _save_g   = curses.color_pair(4) | curses.A_BOLD if (api and editing_buffer != broadcast_current) else curses.A_DIM
+        _clear_g  = curses.color_pair(4) | curses.A_BOLD if editing_buffer else curses.A_DIM
+        _cancel_g = curses.color_pair(4) | curses.A_BOLD
+        safe(scr, btn_y,     ta_x + 1,  "[Ctrl+S]",  _save_a)
+        safe(scr, btn_y,     ta_x + 11, "[Ctrl+U]",  _clear_a)
+        safe(scr, btn_y,     ta_x + 21, "[Esc]",     _cancel_a)
+        safe(scr, btn_y,     ta_x + 28, "[Enter]",   curses.A_DIM)
+        safe(scr, btn_y + 1, ta_x + 2,  "Save",    _save_g)
+        safe(scr, btn_y + 1, ta_x + 12, "Clear",   _clear_g)
+        safe(scr, btn_y + 1, ta_x + 21, "Cancel",  _cancel_g)
+        safe(scr, btn_y + 1, ta_x + 29, "Newline", curses.A_DIM)
+    elif not _msg_locked:
+        clear_a = curses.A_REVERSE if broadcast_current else curses.A_DIM
+        safe(scr, btn_y, ta_x + 1,  "[ Save   ]", curses.A_DIM)
+        safe(scr, btn_y, ta_x + 12, "[ Clear  ]", clear_a)
+        safe(scr, btn_y, ta_x + 23, "[ Cancel ]", curses.A_DIM)
+    # footer: lock + MESSAGE API pinned to bottom
+    lock_cb = "[*]" if _msg_locked else "[ ]"
+    lock_attr = curses.color_pair(2) | curses.A_BOLD if _msg_locked else curses.color_pair(4) | curses.A_BOLD
+    safe(scr, bot_y + bot_h - 3, ta_x + 1, f"{lock_cb} Lock message", lock_attr)
+    api_footer_a = curses.color_pair(1) | curses.A_BOLD if api else curses.color_pair(3) | curses.A_BOLD
+    safe(scr, bot_y + bot_h - 2, ta_x + 1, f"MESSAGE API: {'UP' if api else 'DOWN'}", api_footer_a)
+    safe(scr, bot_y + bot_h - 2, rx + rw - 9, "GPL 3.0", curses.A_DIM)
+
+
+def draw_footer(scr, editing, svc=False):
+    global confirm_repair, confirm_service, confirm_clear, _footer_locked
+    h, w = scr.getmaxyx()
+    if confirm_clear:
+        safe(scr, h - 1, 2,
+             "CLEAR MESSAGE: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if confirm_repair:
+        safe(scr, h - 1, 2,
+             "REPAIR: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if confirm_service:
+        safe(scr, h - 1, 2,
+             "PAUSE: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if confirm_onoff:
+        safe(scr, h - 1, 2,
+             "SERVER ON/OFF: are you sure?  [y] yes  [any other key] cancel",
+             curses.color_pair(1) | curses.A_BOLD)
+        return
+    if camhub_mode and not editing:
+        footer1 = "[\u2191\u2193] navigate  \u2022  [e] edit  \u2022  [p] pin  \u2022  [Del] clear  \u2022  [U/D] reorder"
+        footer2 = "[i/Esc] close"
+    elif editing:
+        footer1 = "• Leave viewers a message or describe what they are seeing •"
+        footer2 = ""
+    else:
+        if not svc:
+            footer1 = "[i] cam IPs \u2022 [c] mssg clear \u2022 [o] on/off \u2022 [q] quit"
+            footer2 = ""
+        elif _footer_locked:
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
+        else:
+            footer1 = "[i] cam IPs \u2022 [f] feed" + (" \u2022 [x] expand" if feed_preview_on else "") + " \u2022 [l] mssg lock \u2022 [m] mssg edit \u2022 [c] mssg clear \u2022 [s] show \u2022 [b] blur \u2022 [h] hide"
+            footer2 = "[z] buzz \u2022 [p] pause \u2022 [o] on/off \u2022 [r] repair \u2022 [q] quit"
+    _fw = w - 4
+    _items = (footer1 + (" \u2022 " + footer2 if footer2 else "")).split(" \u2022 ")
+    _all = []
+    _cur = ""
+    for _item in _items:
+        _add = (_cur + " \u2022 " + _item) if _cur else _item
+        if len(_add) <= _fw:
+            _cur = _add
+        else:
+            if _cur:
+                _all.append(_cur)
+            _cur = _item
+    if _cur:
+        _all.append(_cur)
+    for _i, _line in enumerate(_all[-(h - 2):]):
+        safe(scr, h - len(_all) + _i, 2, _line, curses.color_pair(6))
+
+
+# ---------- MAIN ----------
+def main(scr):
+    global repair_status, broadcast_mode, broadcast_buffer
+    global broadcast_current, broadcast_error, confirm_repair, confirm_service, confirm_onoff, confirm_clear, _footer_locked
+    global camhub_mode, camhub_cursor, camhub_editing, camhub_edit_field, camhub_edit_buf, camhub_slots, camhub_confirm_clear
+    global widget_expand, feed_preview_on
+    global widget_gray_frame, widget_color_frame, _color_capable, COLOR_BUDGET
+
+    threading.Thread(target=smart_worker, daemon=True).start()
+    threading.Thread(target=hls_worker,   daemon=True).start()
+    threading.Thread(target=snap_worker,  daemon=True).start()
+
+    curses.curs_set(0)
+    try:
+        _tfd = sys.stdin.fileno()
+        _tattr = termios.tcgetattr(_tfd)
+        _tattr[0] &= ~termios.IXON
+        termios.tcsetattr(_tfd, termios.TCSANOW, _tattr)
+    except Exception:
+        pass
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_GREEN,  -1)
+    curses.init_pair(2, curses.COLOR_YELLOW, -1)
+    curses.init_pair(3, curses.COLOR_RED,    -1)
+    curses.init_pair(4, curses.COLOR_WHITE,  -1)
+    curses.init_pair(5, curses.COLOR_CYAN,   -1)
+    curses.init_pair(6, 244,                -1)
+    _gp = 10
+    for _fg in GRAY_STEPS:
+        for _bg in GRAY_STEPS:
+            curses.init_pair(_gp, _fg, _bg)
+            _gp += 1
+    # Color ladder: 256-color terminal -> adaptive fixed-palette color; else the
+    # gray ramp above is the floor. The color palette (pairs COLOR_BASE..) is
+    # allocated per-scene by the snap worker and pushed in _apply_color_palette.
+    _color_capable = curses.COLORS >= 256
+    COLOR_BUDGET = max(16, min(min(curses.COLOR_PAIRS, 256) - COLOR_BASE, 190))
+
+    if EXPANDED_FLAG:
+        widget_expand   = True
+        feed_preview_on = True   # kiosk intent; local-only, FEED_STATE_FILE untouched
+
+    frozen_snap   = None
+    frozen_repair = "IDLE"
+    broadcast_cursor = 0
+    last_buzz_ts = None
+    snap = sample_metrics()   # defined before first key handling (svc gate reads it)
+
+    while True:
+        if not EXPANDED_FLAG:
+            # Converge with other camdash instances each tick. Read happens before
+            # any local [f] handling below, so a same-tick local toggle is never
+            # clobbered by this — it always writes after this read, and the next
+            # tick's read picks up what was just written.
+            feed_preview_on = _read_feed_state()
+
+        if broadcast_mode:
+            scr.timeout(-1)
+            curses.curs_set(1)
+
+            scr.erase()
+            draw_dashboard(scr, frozen_snap, frozen_repair,
+                           dim=True, editing_buffer=broadcast_buffer)
+            draw_footer(scr, editing=True, svc=snap.get("svc", False))
+            scr.refresh()
+
+            _h, _w = scr.getmaxyx()
+            L = layout(_h, _w)
+            _rx          = L["right_x"]
+            _rw          = L["right_w"]
+            _bot_y       = L["bot_y"]
+            _bot_h       = L["bot_h"]
+            _msg_inner_w = _rw - 4
+            _msg_inner_h = _bot_h - 2
+            _buf_before  = broadcast_buffer[:broadcast_cursor]
+            _wrap_w      = _rw - 6
+            _cur_lines   = []
+            for _para in _buf_before.split('\n'):
+                _cur_lines.extend(textwrap.wrap(_para, _wrap_w) or [''])
+            _cur_row = min(len(_cur_lines) - 1, _msg_inner_h - 1) if _cur_lines else 0
+            _last_para = _buf_before.split('\n')[-1]
+            _trailing  = len(_last_para) - len(_last_para.rstrip(' '))
+            _cur_col = (len(_cur_lines[-1]) if _cur_lines else 0) + _trailing
+            if _cur_col >= _wrap_w:
+                _cur_row += 1
+                _cur_col  = 0
+            try:
+                scr.move(_bot_y + 3 + _cur_row,
+                         min(_rx + 3 + _cur_col, _w - 1))
+            except curses.error:
+                pass
+
+            k = scr.getch()
+
+            if k in (10, 13):
+                broadcast_buffer = broadcast_buffer[:broadcast_cursor] + '\n' + broadcast_buffer[broadcast_cursor:]
+                broadcast_cursor += 1
+            elif k == 19:
+                err = write_broadcast(broadcast_buffer)
+                if err:
+                    broadcast_error = "ERR: " + err
+                else:
+                    broadcast_current = broadcast_buffer
+                    broadcast_error = ""
+                broadcast_mode = False
+                broadcast_buffer = ""
+                broadcast_cursor = 0
+                curses.curs_set(0)
+            elif k == 27:
+                broadcast_mode = False
+                broadcast_buffer = ""
+                broadcast_cursor = 0
+                curses.curs_set(0)
+            elif k in (curses.KEY_BACKSPACE, 127, 8):
+                if broadcast_cursor > 0:
+                    broadcast_buffer = broadcast_buffer[:broadcast_cursor-1] + broadcast_buffer[broadcast_cursor:]
+                    broadcast_cursor -= 1
+            elif k == 21:
+                broadcast_buffer = ""
+                broadcast_cursor = 0
+            elif k == curses.KEY_LEFT:
+                broadcast_cursor = max(0, broadcast_cursor - 1)
+            elif k == curses.KEY_RIGHT:
+                broadcast_cursor = min(len(broadcast_buffer), broadcast_cursor + 1)
+            elif 32 <= k <= 126:
+                if len(broadcast_buffer) < 120:
+                    broadcast_buffer = broadcast_buffer[:broadcast_cursor] + chr(k) + broadcast_buffer[broadcast_cursor:]
+                    broadcast_cursor += 1
+            continue
+
+        if camhub_mode:
+            snap = sample_metrics()
+            with repair_lock:
+                cur_repair = repair_status
+            broadcast_current = read_broadcast()
+            scr.erase()
+            draw_dashboard(scr, snap, cur_repair, dim=False)
+            if not widget_expand:
+                draw_footer(scr, editing=False, svc=snap.get("svc", False))
+            scr.refresh()
+            scr.timeout(-1 if camhub_confirm_clear else 500)
+            k = scr.getch()
+            if camhub_editing:
+                if k == 9:
+                    camhub_slots[camhub_cursor][["label","ip","stream_path"][camhub_edit_field]] = camhub_edit_buf
+                    camhub_edit_field = (camhub_edit_field + 1) % 2
+                    camhub_edit_buf = camhub_slots[camhub_cursor].get(["label","ip","stream_path"][camhub_edit_field], "")
+                elif k in (10, 13):
+                    camhub_slots[camhub_cursor][["label","ip","stream_path"][camhub_edit_field]] = camhub_edit_buf
+                    write_cams(camhub_slots)
+                    camhub_editing = False
+                    camhub_edit_buf = ""
+                elif k == 27:
+                    camhub_editing = False
+                    camhub_edit_buf = ""
+                elif k in (curses.KEY_BACKSPACE, 127, 8):
+                    camhub_edit_buf = camhub_edit_buf[:-1]
+                elif 32 <= k <= 126:
+                    _cap = 12 if camhub_edit_field == 0 else 15
+                    if len(camhub_edit_buf) < _cap:
+                        camhub_edit_buf += chr(k)
+            else:
+                if k in (ord('i'), 27):
+                    camhub_mode = False
+                elif k == curses.KEY_UP:
+                    camhub_cursor = max(0, camhub_cursor - 1)
+                elif k == curses.KEY_DOWN:
+                    camhub_cursor = min(3, camhub_cursor + 1)
+                elif k == ord('e'):
+                    camhub_editing = True
+                    camhub_edit_field = 0
+                    camhub_edit_buf = camhub_slots[camhub_cursor].get("label", "")
+                elif k == ord('p'):
+                    camhub_slots[camhub_cursor]["pinned"] = not camhub_slots[camhub_cursor].get("pinned", False)
+                    write_cams(camhub_slots)
+                elif k == curses.KEY_DC:
+                    camhub_confirm_clear = True
+                elif camhub_confirm_clear:
+                    if k == ord('y'):
+                        camhub_slots[camhub_cursor] = {"label":"","ip":"","stream_path":"","pinned":False}
+                        write_cams(camhub_slots)
+                    camhub_confirm_clear = False
+                elif k == ord('U'):
+                    if camhub_cursor > 0:
+                        camhub_slots[camhub_cursor-1], camhub_slots[camhub_cursor] = camhub_slots[camhub_cursor], camhub_slots[camhub_cursor-1]
+                        camhub_cursor -= 1
+                        write_cams(camhub_slots)
+                elif k == ord('D'):
+                    if camhub_cursor < 3:
+                        camhub_slots[camhub_cursor+1], camhub_slots[camhub_cursor] = camhub_slots[camhub_cursor], camhub_slots[camhub_cursor+1]
+                        camhub_cursor += 1
+                        write_cams(camhub_slots)
+            continue
+
+        # -- LIVE DASHBOARD MODE --
+        if confirm_repair or confirm_service or confirm_onoff or confirm_clear:
+            scr.timeout(-1)
+        else:
+            scr.timeout(500)
+
+        k = scr.getch()
+        if k in (ord('q'), 3):
+            break
+        if confirm_repair:
+            if k == ord('y'):
+                with repair_lock:
+                    can_manual = repair_status != "RUNNING"
+                if can_manual:
+                    threading.Thread(target=run_repair, daemon=True).start()
+                confirm_repair = False
+            elif k != -1:
+                confirm_repair = False
+        elif confirm_service:
+            if k == ord('y'):
+                threading.Thread(target=run_service_toggle, daemon=True).start()
+            confirm_service = False
+        elif confirm_onoff:
+            if k == ord('y'):
+                threading.Thread(target=run_service_onoff, daemon=True).start()
+            confirm_onoff = False
+        elif confirm_clear:
+            if k == ord('y'):
+                err = write_broadcast('')
+                if not err:
+                    broadcast_current = ''
+            confirm_clear = False
+        elif k == ord('r'):
+            confirm_repair = True
+        elif k == ord('p'):
+            confirm_service = True
+        elif k == ord('o'):
+            confirm_onoff = True
+        elif k == ord('s'):
+            def _set_show():
+                import urllib.request
+                try:
+                    req = urllib.request.Request(f'{API_BASE}/api/feed-mode', data=b'show', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_set_show, daemon=True).start()
+        elif k == ord('b'):
+            def _set_blur():
+                import urllib.request
+                try:
+                    req = urllib.request.Request(f'{API_BASE}/api/feed-mode', data=b'cloak', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_set_blur, daemon=True).start()
+        elif k == ord('h'):
+            def _set_hide():
+                import urllib.request
+                try:
+                    req = urllib.request.Request(f'{API_BASE}/api/feed-mode', data=b'hide', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_set_hide, daemon=True).start()
+        elif k == ord('m') and snap.get('msg_lock', 'false') != 'true':
+            frozen_snap = sample_metrics()
+            with repair_lock:
+                frozen_repair = repair_status
+            broadcast_mode = True
+            broadcast_buffer = broadcast_current
+            broadcast_cursor = len(broadcast_current)
+            broadcast_error = ""
+            continue
+        elif k == ord('l'):
+            def _toggle_lock():
+                import urllib.request
+                try:
+                    req = urllib.request.Request(f'{API_BASE}/api/msg-lock', data=b'', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_toggle_lock, daemon=True).start()
+        elif k == ord('w'):
+            def _toggle_bw():
+                import urllib.request
+                try:
+                    req = urllib.request.Request(f'{API_BASE}/api/bw-mode', data=b'', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_toggle_bw, daemon=True).start()
+        elif k == ord('z'):
+            curses.flash()
+            curses.beep()
+            def _buzz():
+                import urllib.request
+                try:
+                    req = urllib.request.Request(f'{API_BASE}/api/buzz', data=b'', method='POST')
+                    urllib.request.urlopen(req, timeout=1)
+                except Exception:
+                    pass
+            threading.Thread(target=_buzz, daemon=True).start()
+        elif k == ord('c'):
+            if broadcast_current and snap.get('msg_lock', 'false') != 'true':
+                confirm_clear = True
+        elif k == ord('i'):
+            camhub_slots = read_cams()
+            while len(camhub_slots) < 4: camhub_slots.append({"label":"","ip":"","stream_path":"","pinned":False})
+            camhub_cursor = 0
+            camhub_editing = False
+            camhub_edit_buf = ""
+            camhub_mode = True
+            continue
+        elif k == ord('x') and feed_preview_on and snap.get("svc", False):
+            widget_expand = not widget_expand
+        elif k == ord('f') and snap.get("svc", False):
+            feed_preview_on = not feed_preview_on
+            _write_feed_state(feed_preview_on)
+            if not feed_preview_on:
+                widget_gray_frame  = None
+                widget_color_frame = None
+
+        snap = sample_metrics()
+        # Server off -> feed has no live source; force the display empty this frame
+        # so a returning server can't flash the pre-shutdown frame. DISPLAY-ONLY:
+        # never touches the persisted feed state file.
+        if not snap.get("svc", False):
+            widget_gray_frame  = None
+            widget_color_frame = None
+        with repair_lock:
+            cur_repair = repair_status
+        broadcast_current = read_broadcast()
+        try:
+            with open(os.path.join(STATE_DIR, 'buzz.txt')) as _bf:
+                _bts = _bf.read().strip()
+            if last_buzz_ts is None:
+                last_buzz_ts = _bts
+            elif _bts != last_buzz_ts:
+                last_buzz_ts = _bts
+                curses.flash()
+                curses.beep()
+        except Exception:
+            pass
+        _footer_locked = snap.get('msg_lock', 'false') == 'true'
+
+        scr.erase()
+        draw_dashboard(scr, snap, cur_repair, dim=False)
+        if not widget_expand:
+            draw_footer(scr, editing=False, svc=snap.get("svc", False))
+        scr.refresh()
+
+
+if __name__ == "__main__":
+    curses.wrapper(main)
