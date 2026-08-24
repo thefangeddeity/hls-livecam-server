@@ -109,7 +109,7 @@ hls: yes
 hlsAddress: :${HLS_PORT}
 hlsAllowOrigin: '*'
 hlsAlwaysRemux: yes
-hlsVariant: mpegts
+hlsVariant: fmp4
 hlsSegmentCount: 7
 hlsSegmentDuration: 1s
 
