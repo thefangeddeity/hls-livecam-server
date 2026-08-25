@@ -108,6 +108,40 @@
   }
   .brand .sep { color: var(--text-muted); font-weight: 400; }
   .brand .host { color: var(--text-dim); font-weight: 500; }
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    background: none;
+    border: 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--phos);
+    text-shadow: 0 0 1px var(--phos), 0 0 7px color-mix(in srgb,var(--phos) 52%,transparent);
+  }
+  .live-pill::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .live-pill.live { color: var(--danger); text-shadow: 0 0 1px var(--danger), 0 0 7px color-mix(in srgb, var(--danger) 52%, transparent); }
+  .live-pill.live::before { background: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
+  .live-pill.reconnecting { color: var(--warn); text-shadow: 0 0 1px var(--warn), 0 0 7px color-mix(in srgb, var(--warn) 52%, transparent); }
+  .live-pill.reconnecting::before { background: var(--warn); }
+  .live-pill.dark-mode { color: var(--phos-label); text-shadow: none; }
+  .live-pill.dark-mode::before { background: var(--text-muted); animation: none; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
   /* ── DESKTOP LAYOUT ── */
@@ -529,6 +563,30 @@
       overflow-y: visible; flex-shrink: unset;
     }
     .sidebar-scroll { overflow-y: visible; }
+    /* WHY THE PILL IS DESKTOP-ONLY, before anyone tidies this away.
+       On a desktop the header is a status bar: the feed and the whole panel
+       are on screen at once, so a pill tracking the player belongs at the
+       top where the eye returns between glances -- and it is the only
+       element that reports the STREAM rather than a stage of the pipeline.
+       Camera, MediaMTX, RTSP and HLS each report a link in the chain; the
+       pill reports whether you are actually watching something. The header
+       has width to spare, so it costs nothing.
+
+       On a phone that same header has to carry the brand, the version strip
+       and the pill inside about 390px, and it could not -- the product name
+       wrapped onto two lines to make room. Something had to go, and the pill
+       is the only one of the three with a duplicate already on the same
+       screen: the VIDEO tube carries a LIVE segment and an HLS lamp, both
+       above the fold. The version strip has no duplicate; nothing else on
+       the page says which build you are looking at.
+
+       This hides the CONTAINER, not the element. The pill keeps its text,
+       which paintLamps() reads and setStatus() writes, so the tube's LIVE
+       segment and the HLS lamp go on tracking the player on mobile exactly
+       as on desktop. Removing the element instead silently stops both, and
+       the symptom -- a dark HLS lamp on phones only -- reads as a pipeline
+       fault rather than a layout change. */
+    header .status-bar { display: none; }
     .desktop-only { display: none !important; }
     textarea.msg-box {
     min-height: 150px; min-height: 80px; flex: none; width: 100%; max-width: 100%; -webkit-appearance: none; transform: translateZ(0); }
@@ -590,6 +648,9 @@
     <img src="/brand.png" alt="" class="brand-mark">
     <span class="eng brand-name" id="brandName">HLS Livecam</span>
     <span class="hdr-vfd"><span class="vlit" id="buildLabel"></span></span>
+  </div>
+  <div class="status-bar">
+    <span class="hdr-vfd"><span class="live-pill" id="liveIndicator">CONNECTING</span></span>
   </div>
 </header>
 
@@ -742,12 +803,7 @@
 <script>
   var HLS_URL = 'http://' + window.location.hostname + ':8888/cam/index.m3u8';
   var video        = document.getElementById('video');
-  // Was a pill in the header. Removed as redundant once VIDEO and AUDIO
-  // grew their own telemetry -- but the value it held is still the only
-  // browser-side measurement we have, and paintLamps() reads it to decide
-  // the HLS lamps. Kept as a plain holder so setStatus() and its callers
-  // are unchanged and nothing silently loses its meaning.
-  var liveInd      = { textContent: '', className: '' };
+  var liveInd      = document.getElementById('liveIndicator');
   var darkOverlay  = document.getElementById('darkOverlay');
   var showBtn      = document.getElementById('showBtn');
   var cvBtn        = document.getElementById('cvBtn');
