@@ -582,7 +582,6 @@
   </div>
   <div class="status-bar">
     <span class="live-pill" id="liveIndicator">CONNECTING</span>
-    <span id="hdrClock" style="font-variant-numeric:tabular-nums;color:var(--text-dim);font-size:12px">--</span>
   </div>
 </header>
 
@@ -1483,8 +1482,6 @@
     if (clockEl) clockEl.textContent = hh+':'+mm+':'+ss;
     var date = now.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
     document.getElementById('tsOverlay').textContent = date+'  '+hh+':'+mm+':'+ss;
-    var hc = document.getElementById('hdrClock');
-    if (hc) hc.textContent = hh+':'+mm+':'+ss;
   }
   setInterval(updateClock, 1000); updateClock();
 
