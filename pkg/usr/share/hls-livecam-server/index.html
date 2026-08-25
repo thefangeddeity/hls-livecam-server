@@ -198,9 +198,15 @@
   .switch-overlay.visible { display: flex; }
   /* The static fills the frame; image-rendering keeps the upscale crisp
      rather than smoothing the snow into grey mush. */
+  /* The snow has to be exactly the size of the picture it is standing in
+     for. The video is object-fit: contain, so it letterboxes inside this
+     box -- a canvas stretched to the full wrap covered the bars too and was
+     visibly a different shape from the feed. The noise field is 224x126,
+     which is 16:9, so contain letterboxes it to the identical rectangle. */
   .switch-static {
     position: absolute; inset: 0;
     width: 100%; height: 100%;
+    object-fit: contain;
     image-rendering: pixelated;
   }
   .switch-label {

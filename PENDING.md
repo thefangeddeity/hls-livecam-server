@@ -128,6 +128,20 @@ and rebuilds the hls.js session. A fatal error in that window reached
 **Any viewer that reloads its player on a mode change has this, not just one
 that restarts capture.** Check for the reload, not for the restart.
 
+### The cover must be the same size as the picture
+
+Ours was not. The video is `object-fit: contain`, so it letterboxes inside
+its wrap, but the static canvas was stretched to the full wrap with
+`width/height: 100%` — it covered the bars as well and was visibly a
+different rectangle from the feed it was standing in for.
+
+The noise field is 224x126, which is exactly 16:9, so giving the canvas
+`object-fit: contain` letterboxes it to the identical box. **If you letterbox
+the picture, letterbox everything that replaces it** — the hide notice, the
+snow, any future cover. A stand-in that does not occupy the same rectangle as
+the thing it hides announces itself as an overlay, which is the opposite of
+what it is for.
+
 ### The switch cover timer is per-node. Do not clone ours.
 
 `TRANSITION_MAX_MS` is the bounded fallback that clears the switch static if
