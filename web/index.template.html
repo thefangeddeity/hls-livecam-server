@@ -1236,8 +1236,11 @@
     .catch(function() { return null; })
     .then(function(j) {
       if (!j) return;
-      if (j.hostname && brandHostEl) {
-        brandHostEl.textContent = '@' + j.hostname.replace(/\.local$/, '');
+      if (j.hostname) {
+        if (brandHostEl) {
+          brandHostEl.textContent = '@' + j.hostname.replace(/\.local$/, '');
+        }
+        setTabTitle(j.hostname);   // the real node name, not how we reached it
       }
       /* The tube shows the tailscale address, not the name -- the name is in
          the header now, and repeating it wasted the widest field the panel
@@ -1247,7 +1250,21 @@
       if (hostEl) hostEl.textContent = j.tailscale || '';
       if (j.msg_max_len) applyMsgLimit(j.msg_max_len);
     });
-  document.title = 'HLS Livecam — ' + window.location.hostname;
+  /* Tab title carries node, product, version and host, matching the fleet
+     format tina uses: "Tina | HLSLCVS linux-v5.9.4 @tina". With several
+     nodes open at once the tab strip is where you tell them apart, and a
+     truncated tab shows the beginning -- so the node name leads.
+     window.location.hostname is only a fallback: over loopback it is
+     127.0.0.1 and over tailscale it is an address, neither of which is the
+     node's name. /api/info corrects it below. */
+  var BUILD_VERSION = '@VERSION@';
+
+  function setTabTitle(host) {
+    var node = (host || '').replace(/\.local$/, '');
+    var pretty = node ? node.charAt(0).toUpperCase() + node.slice(1) : 'HLS Livecam';
+    document.title = pretty + ' | HLSLS ' + BUILD_VERSION + ' @' + node;
+  }
+  setTabTitle(window.location.hostname);
   if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
 
   // ── BUZZ ──
