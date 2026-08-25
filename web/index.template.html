@@ -801,7 +801,7 @@
     display: flex; align-items: center; justify-content: space-between;
     gap: 10px; margin-top: 9px;
   }
-  .peer-row .chk { margin-top: 0; min-width: 0; }
+  .peer-row .chk { margin-top: 0; min-width: 0; flex: 0 0 auto; }
 
   .btn-tiny {
     flex: 0 0 auto;
@@ -1080,12 +1080,12 @@
              control that fixes a stuck player only appeared once the player
              had already given up. -->
         <div class="peer-row">
+          <button type="button" class="btn-tiny eng" id="reconnectBtn"
+                  onclick="reloadStream()" title="Reload the video stream">Reload</button>
           <label class="chk pending" id="fovealRow" title="Modifier on CV mode — not yet available">
             <input type="checkbox" id="fovealCheck" disabled>
             <span class="box"></span><span class="eng">Foveal layer</span>
           </label>
-          <button type="button" class="btn-tiny eng" id="reconnectBtn"
-                  onclick="reloadStream()" title="Reload the video stream">Reload</button>
         </div>
       </div>
 
@@ -1236,12 +1236,20 @@
     .catch(function() { return null; })
     .then(function(j) {
       if (!j) return;
+      /* The node says which product it is. amira is a Mac running LightCV,
+         so neither the platform nor a constant in this page can stand in
+         for it. Applied before the title so both agree. */
+      if (j.product_short) PRODUCT_SHORT = j.product_short;
+      if (j.product) {
+        var nameEl = document.querySelector('.brand-name');
+        if (nameEl) nameEl.textContent = j.product;
+      }
       if (j.hostname) {
         if (brandHostEl) {
           brandHostEl.textContent = '@' + j.hostname.replace(/\.local$/, '');
         }
-        setTabTitle(j.hostname);   // the real node name, not how we reached it
       }
+      setTabTitle(j.hostname || window.location.hostname);
       /* The tube shows the tailscale address, not the name -- the name is in
          the header now, and repeating it wasted the widest field the panel
          has. The address is what you need when a feed misbehaves. Left blank
@@ -1257,12 +1265,15 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION = '@VERSION@';
+  var BUILD_VERSION  = '@VERSION@';
+  var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
     var node = (host || '').replace(/\.local$/, '');
-    var pretty = node ? node.charAt(0).toUpperCase() + node.slice(1) : 'HLS Livecam';
-    document.title = pretty + ' | HLSLS ' + BUILD_VERSION + ' @' + node;
+    var pretty = node ? node.charAt(0).toUpperCase() + node.slice(1) : '';
+    document.title = (pretty ? pretty + ' | ' : '')
+                   + PRODUCT_SHORT + ' ' + BUILD_VERSION
+                   + (node ? ' @' + node : '');
   }
   setTabTitle(window.location.hostname);
   if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';

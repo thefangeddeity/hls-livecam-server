@@ -909,7 +909,18 @@ def info():
     # it. Serving the limit rather than duplicating 120 in the page keeps one
     # definition: the box cannot end up sized for a length the server will
     # then truncate.
-    return {'hostname': hostname, 'tailscale': tailscale, 'msg_max_len': MAX_LEN}
+    # Product identity is served, not spelled out in the viewer. The fleet is
+    # two products now -- HLS Livecam and HLS LightCV -- and which one a node
+    # runs is a property of the node, not of the page. amira is a Mac running
+    # LightCV, so platform cannot stand in for it either. Same reasoning as
+    # the version: a constant in the viewer is a second place to forget.
+    return {
+        'hostname':      hostname,
+        'tailscale':     tailscale,
+        'msg_max_len':   MAX_LEN,
+        'product':       _cfg.get('PRODUCT_NAME',   'HLS Livecam'),
+        'product_short': _cfg.get('PRODUCT_SHORT',  'HLSLS'),
+    }
 
 
 # ── Static web serving (replaces nginx) ──────────────────────────
