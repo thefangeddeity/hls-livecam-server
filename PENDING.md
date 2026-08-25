@@ -128,6 +128,24 @@ and rebuilds the hls.js session. A fatal error in that window reached
 **Any viewer that reloads its player on a mode change has this, not just one
 that restarts capture.** Check for the reload, not for the restart.
 
+### The switch cover timer is per-node. Do not clone ours.
+
+`TRANSITION_MAX_MS` is the bounded fallback that clears the switch static if
+the video's own `playing` event never arrives. It is **17s on tanzania and
+13s on tina**, and those numbers are measurements of *those machines*, not a
+shared constant.
+
+**macOS should not take ours.** A mode change there switches in under 10
+seconds; on Linux it takes ~16, because our publisher has to be restarted to
+open or close the microphone and mediamtx has to rebuild the HLS muxer behind
+it. Copying 17s onto a node that switches in 8 would leave viewers staring at
+snow for twice as long as necessary, and the whole point of the cover is that
+it clears on the real event and only falls back on the timer.
+
+Measure your own switch, then set the fallback a little above it. Note it
+also bounds how long the fault surface stays suppressed, so it is not free to
+raise without limit.
+
 ### Timestamp off the video, and a real licence line at the foot
 
 The timestamp was a translucent chip over the top-left of the picture — a
