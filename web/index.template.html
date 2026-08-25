@@ -217,6 +217,13 @@
     font-size: 11px; line-height: 1.45;
     color: var(--text-muted);
     padding: 0 2px;
+    text-align: center;
+    /* It is one sentence, so it should read as one block rather than a
+       ragged left column under a centred picture. Capped so it wraps into
+       tidy lines instead of stretching the full width of a wide feed. */
+    max-width: 78ch;
+    margin: 0 auto;
+    text-wrap: balance;
   }
   .page-foot a { color: var(--text-dim); text-decoration: underline; }
   .page-foot a:hover { color: var(--text); }
