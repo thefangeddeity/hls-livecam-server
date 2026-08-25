@@ -868,6 +868,58 @@
   html[data-theme="light"] .transport svg { fill: #2c2c30; }
   .listen .cap { font-size: 10.5px; color: var(--emboss-dim); line-height: 1.3; }
 
+  /* A groove cut into the housing with a raised metal thumb -- the same
+     material story as the buttons, not a browser slider dropped in. The
+     filled portion is brighter housing, never phosphor: phosphor lives
+     behind glass and this is on the panel face. */
+  .vol-row { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
+
+  .vol {
+    -webkit-appearance: none; appearance: none;
+    flex: 1; min-width: 0; height: 18px;
+    background: none; cursor: pointer;
+  }
+  .vol::-webkit-slider-runnable-track {
+    height: 5px; border-radius: 3px;
+    background: linear-gradient(180deg, #141416, #1c1c1f);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.05);
+  }
+  .vol::-moz-range-track {
+    height: 5px; border-radius: 3px;
+    background: linear-gradient(180deg, #141416, #1c1c1f);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.8);
+  }
+  .vol::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 13px; height: 13px; border-radius: 50%;
+    margin-top: -4px;                    /* centre on a 5px track */
+    background: linear-gradient(180deg, #3a3a40, #26262a);
+    border: 1px solid #45454d;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.5);
+  }
+  .vol::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%; border: 1px solid #45454d;
+    background: linear-gradient(180deg, #3a3a40, #26262a);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.5);
+  }
+  .vol:active::-webkit-slider-thumb { background: linear-gradient(180deg, #45454d, #303036); }
+
+  html[data-theme="light"] .vol::-webkit-slider-runnable-track {
+    background: linear-gradient(180deg, #d8d8dd, #e6e6ea);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.18), 0 1px 0 #fff;
+  }
+  html[data-theme="light"] .vol::-webkit-slider-thumb {
+    background: linear-gradient(180deg, #fff, #e6e6ea); border-color: #c2c2c8;
+  }
+
+  /* Muted is not the same as zero, so the groove dims rather than moving. */
+  .vol-row.is-muted .vol { opacity: .4; }
+
+  .vol-read {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .06em;
+    min-width: 22px; text-align: right; flex: 0 0 auto;
+  }
+
   .talk {
     margin-top: 9px; border-radius: 7px; padding: 8px 10px;
     font-size: 10.5px; letter-spacing: .09em;
@@ -1109,6 +1161,15 @@
           <!-- Hidden: hls.js attaches to this, the transport button drives it.
                The native controls duplicated a control the panel already has. -->
           <audio id="roomAudioPlayer" preload="none" playsinline hidden></audio>
+        </div>
+
+        <!-- Sits between the transport and the mute, because that is the
+             order you reach for them: start it, set it, silence it. -->
+        <div class="vol-row">
+          <input type="range" id="audioVol" class="vol"
+                 min="0" max="100" step="1" value="100"
+                 aria-label="Room audio volume">
+          <span class="vol-read eng" id="audioVolRead">100</span>
         </div>
 
         <div class="divider"></div>
@@ -2154,7 +2215,37 @@
   // Full scale. The room mic is quiet at source (measured mean -39 dB), so
   // there is no headroom to give away here -- the <audio> element's own
   // slider is the place to turn it down, and it cannot go above 1.0.
-  audio.volume    = 1.0;
+  /* Volume is a listening preference like the mute beside it: per-viewer,
+     persisted locally, and it never reaches the API. Restored before the
+     stream starts so the first audible moment is already at the chosen
+     level rather than jumping to it. */
+  var volEl     = document.getElementById('audioVol');
+  var volReadEl = document.getElementById('audioVolRead');
+  var volRow    = volEl ? volEl.closest('.vol-row') : null;
+
+  var savedVol = null;
+  try { savedVol = localStorage.getItem('hls-livecam-volume'); } catch (e) {}
+  var startVol = savedVol === null ? 100 : Math.max(0, Math.min(100, parseInt(savedVol, 10) || 0));
+
+  audio.volume = startVol / 100;
+  if (volEl) volEl.value = startVol;
+  if (volReadEl) volReadEl.textContent = startVol;
+
+  function applyVolume(v, persist) {
+    v = Math.max(0, Math.min(100, v));
+    audio.volume = v / 100;
+    if (volReadEl) volReadEl.textContent = v;
+    if (persist) {
+      try { localStorage.setItem('hls-livecam-volume', String(v)); } catch (e) {}
+    }
+  }
+
+  if (volEl) {
+    /* input fires per pixel of drag, change on release -- so the level
+       follows the thumb but only the settled value is written to storage. */
+    volEl.addEventListener('input',  function () { applyVolume(parseInt(volEl.value, 10), false); });
+    volEl.addEventListener('change', function () { applyVolume(parseInt(volEl.value, 10), true); });
+  }
 
   muteBox.addEventListener('change', function () { setMuted(muteBox.checked); });
 
@@ -2171,6 +2262,9 @@
   function paintTransport() {
     if (iconEl) iconEl.innerHTML = audio.paused ? PLAY_ICON : PAUSE_ICON;
     indicator(document.getElementById('indMute'), muteBox.checked || audio.paused);
+    /* Muted dims the groove rather than dragging it to zero: the level you
+       chose is still the level you get back when you unmute. */
+    if (volRow) volRow.classList.toggle('is-muted', muteBox.checked);
   }
 
   if (toggleBtn) {
