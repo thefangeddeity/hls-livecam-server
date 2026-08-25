@@ -800,9 +800,12 @@
     // you get, so the host name leads.
     var Host = host ? host.charAt(0).toUpperCase() + host.slice(1) : '';
     document.title = (Host ? Host + ' | ' : '') + 'HLSLS' + (build ? ' ' + build : '');
-    document.title = 'Cam @' + (info.hostname || window.location.hostname);
   }).catch(function(){
-    document.title = 'Cam @' + window.location.hostname;
+    // /api/info unreachable: name the node from the URL and say nothing
+    // about a build we cannot read. A wrong version in a tab is worse than
+    // no version.
+    var h = (window.location.hostname || '').split('.')[0];
+    document.title = (h ? h.charAt(0).toUpperCase() + h.slice(1) + ' | ' : '') + 'HLSLS';
   });
   if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
 
