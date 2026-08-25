@@ -2290,19 +2290,22 @@
     }
   });
 
+  /* Muting only mutes. This used to call play() on unmute, from when the
+     key was the only audio control and unmuting was the gesture that
+     started the stream. The transport owns playback now, so unmuting here
+     would start it behind the operator's back -- and it would contradict
+     the tube, which reports STOP and MUTE separately precisely because they
+     are different states that clear by different actions.
+     If the transport is stopped, unmuting correctly changes nothing
+     audible: STOP stays lit, which is the panel saying which control to
+     reach for next. */
   function setMuted(muted) {
     audioMuted  = muted;
     audio.muted = muted;
     try {
       localStorage.setItem('hls-livecam-mute-audio', muted ? '1' : '0');
     } catch (e) { /* private mode */ }
-
-    if (muted) { setAudioState('Room audio'); return; }
-
-    var p = audio.play();
-    if (p && typeof p.catch === 'function') {
-      p.catch(function () { setAudioState('Tap to enable'); });
-    }
+    setAudioState('Room audio');
   }
 
   var savedMute = null;
@@ -2431,10 +2434,14 @@
       hlsAudio.loadSource(url);
       hlsAudio.attachMedia(audio);
 
+      /* Ready, not started. Playback begins when the transport says so.
+         Starting here because the key happened to be unmuted would make the
+         mute state decide autoplay, which is the same conflation the tube
+         was just corrected for -- and it would have the room audible on
+         page load without anyone asking for it. */
       hlsAudio.on(Hls.Events.MANIFEST_PARSED, function () {
         stage(hlsLed, 'ok');
-        if (audioMuted) { setAudioState('Room audio'); return; }
-        audio.play().catch(function () { setAudioState('Tap to enable'); });
+        setAudioState('Room audio');
       });
 
       hlsAudio.on(Hls.Events.ERROR, function (_e, data) {
@@ -2451,8 +2458,7 @@
       audio.src = url;
       audio.addEventListener('loadedmetadata', function () {
         stage(hlsLed, 'ok');
-        if (audioMuted) { setAudioState('Room audio'); return; }
-        audio.play().catch(function () { setAudioState('Tap to enable'); });
+        setAudioState('Room audio');
       }, { once: true });
       return;
     }
