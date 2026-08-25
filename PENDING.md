@@ -40,11 +40,24 @@ macOS switches in under 10s because one combined avfoundation session
 restarts; no loopback, no muxer rebuild behind it. Our countdown is 10s
 (operator's call, over a measured ~8). We will not take 17s.
 
-### Footer line — will adopt verbatim, not yet done
+### Footer line — adopted verbatim
 
-Agreed on the reasoning: attribution and the warranty disclaimer are why the
-licence works, and a fleet where each viewer words its own has none. Queued
-with the header clock removal and the timestamp chip. Not in this commit.
+Done. Same sentence, same order, `GNU GPL v3` and `Source` linked, the clock
+as the tail rather than a separate item. Both of ariana's old clocks are gone
+with it: the one beside the live pill and the translucent chip over the
+picture. `.video-overlay`'s CSS went too rather than being left to rot.
+
+Placed under the feed, not under the whole window — the video and the line
+are one column now, so on mobile it stays with the picture instead of sinking
+below the sidebar.
+
+Carried your note that **the date is temporary**, pending the VCR-style
+timestamp burned into the frame by the HUD code, at which point the footer
+keeps the licence and drops the clock.
+
+**One thing to confirm:** `e39be06` put the clock back in the header beside
+the pill and `c5855fb` then dropped it for the footer. I have taken the
+footer as the settled position. Say if that is backwards.
 
 ### Hide: we publish black, you publish static — deliberate divergence
 
@@ -118,7 +131,8 @@ of the text beside it rather than outshine it.
 | `3adac51` | error overlay no longer contradicts the switch overlay |
 | `bc87a1f` `4aff357` | feed mode persisted, defaults hidden, fails closed |
 | `90fe3b8` | remote mode changes take the suppression window |
-| this one | engraved header title, brand mark, emboss tokens on `:root` |
+| `3c00a58` | engraved header title, brand mark, emboss tokens on `:root` |
+| this one | fleet footer adopted; both old clocks removed |
 
 ## Open on macOS
 

@@ -182,6 +182,25 @@
   }
 
   /* ── VIDEO ── */
+  /* The feed and the line beneath it are one column, so the line sits at the
+     foot of the picture rather than the foot of the window. */
+  .video-col {
+    flex: 1; display: flex; flex-direction: column;
+    min-width: 0; min-height: 0; gap: 8px;
+  }
+
+  .page-foot {
+    flex: 0 0 auto;
+    font-size: 11px; line-height: 1.45;
+    color: var(--text-muted);
+    padding: 0 2px;
+  }
+  .page-foot a { color: var(--text-dim); text-decoration: underline; }
+  .page-foot a:hover { color: var(--text); }
+  /* The date is the tail of the sentence, not a separate item, so it takes
+     the same size and colour as the rest of the line. */
+  .page-foot #footClock { font-variant-numeric: tabular-nums; }
+
   .video-wrap {
     flex: 1;
     position: relative;
@@ -205,21 +224,6 @@
   }
   .dark-overlay.visible { display: flex; }
   .dark-overlay img { width: 100%; height: 100%; object-fit: cover; opacity: 0.85; }
-  .video-overlay {
-    position: absolute;
-    top: 12px; left: 16px;
-    padding: 6px 10px;
-    background: rgba(0,0,0,0.55);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: #fff;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 0.02em;
-    opacity: 0.85;
-    pointer-events: none;
-  }
   .error-overlay {
     position: absolute; inset: 0;
     display: none;
@@ -931,11 +935,11 @@
   </div>
   <div class="status-bar">
     <span class="live-pill" id="liveIndicator">CONNECTING</span>
-    <span id="clockDisplay" class="desktop-only">--:--:--</span>
   </div>
 </header>
 
 <div class="main">
+  <div class="video-col">
   <div class="video-wrap" id="videoContainer">
     <video id="video" autoplay muted playsinline webkit-playsinline></video>
     <div class="switch-overlay" id="switchOverlay">
@@ -945,7 +949,6 @@
     <div class="dark-overlay" id="darkOverlay">
       <img src="/dark.png" alt="">
     </div>
-    <div class="video-overlay" id="tsOverlay">--</div>
     <button class="fs-btn" onclick="toggleFullscreen()" title="Fullscreen">
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
@@ -955,6 +958,25 @@
       <div class="title">Signal lost</div>
       <div class="sub">Retrying…</div>
     </div>
+  </div>
+
+  <!-- Fleet-standard footer, cloned verbatim from the Linux branch. The
+       attribution and the warranty disclaimer are why the licence works, and
+       a fleet where each viewer words its own has none -- so this is one
+       line, one font, identical on every node. The clock rides at the tail of
+       the sentence rather than getting furniture of its own.
+
+       TEMPORARY, per tanzania: the intended end state is a VCR-style date
+       burned into the frame by the HUD code, so it comes from the picture and
+       is the same for every viewer regardless of their machine's clock. When
+       that lands the footer keeps the licence and drops the date. -->
+  <div class="page-foot">
+    HLS Livecam Server by The Fanged Deity — free software under the
+    <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>
+    or later, with NO WARRANTY whatsoever. You get what you get.
+    <a href="https://github.com/thefangeddeity/hls-livecam-server" target="_blank" rel="noopener">Source</a>.
+    <span id="footClock">--</span>
+  </div>
   </div>
 
   <aside class="sidebar" id="sidebar">
@@ -1574,10 +1596,9 @@
     var hh = String(now.getHours()).padStart(2,'0');
     var mm = String(now.getMinutes()).padStart(2,'0');
     var ss = String(now.getSeconds()).padStart(2,'0');
-    var clockEl = document.getElementById('clockDisplay');
-    if (clockEl) clockEl.textContent = hh+':'+mm+':'+ss;
     var date = now.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
-    document.getElementById('tsOverlay').textContent = date+'  '+hh+':'+mm+':'+ss;
+    var footEl = document.getElementById('footClock');
+    if (footEl) footEl.textContent = date+' '+hh+':'+mm+':'+ss;
   }
   setInterval(updateClock, 1000); updateClock();
 
