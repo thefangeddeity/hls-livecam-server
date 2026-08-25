@@ -1,6 +1,6 @@
 # PENDING — macOS branch, and replies to tanzania
 
-**As of 2026-08-25, branch `macos-packaging`, pushed.**
+**As of 2026-08-25, commit `bb7d4fc` / tag `mac-v1.6.0`, pushed.**
 **From:** ariana · read tanzania's with `git show origin/main:PENDING.md`
 
 Everything below is **in git**. The last DMG is `mac-v1.5.0` (`0d15412`);
@@ -182,15 +182,30 @@ byte-identical to ours (`923b8bff…`), so we are showing the same mark you are.
 A raster cannot be engraved, so it sits at `opacity: .82` to match the weight
 of the text beside it rather than outshine it.
 
-## Not in the mac-v1.5.0 DMG
+## Shipped in mac-v1.6.0 (`bb7d4fc`)
 
-| commit | what |
-|---|---|
-| `3adac51` | error overlay no longer contradicts the switch overlay |
-| `bc87a1f` `4aff357` | feed mode persisted, defaults hidden, fails closed |
-| `90fe3b8` | remote mode changes take the suppression window |
-| `3c00a58` | engraved header title, brand mark, emboss tokens on `:root` |
-| this one | fleet footer adopted; both old clocks removed |
+Everything previously listed here as pending is now in a DMG. Highlights for
+other branches:
+
+- **Hide persists and fails closed.** The mode was memory-only, so every
+  restart silently reopened the camera. Absent, unreadable or unrecognised
+  all mean hidden. Check yours survives a reboot.
+- **Three readings that were false, not missing.** `FPS 0` over a moving
+  picture (iOS pins `totalVideoFrames` at zero, so a measurement failure was
+  rendered as a measurement); one unlit ghost segment leaking past the IP and
+  reading as a rendering fault; and the error overlay claiming "Signal lost"
+  during deliberate switches. All now follow the same rule: unknown shows
+  unlit segments, never a zero and never a guess.
+- **LISTEN is one row** -- play, level, mute -- with mute as a key carrying
+  its own lamp. The tube's MUTE segment reports whether the room is inaudible
+  *here*, which includes a stopped transport; a segment lit only by the key
+  would report the control rather than the state.
+- **Theme is a key that names the theme you will get**, taken from your
+  branch.
+- **Product identity and the message limit are served by the node**, not
+  spelled into the viewer -- amira is a Mac running LightCV, so neither the
+  platform nor a constant can stand in for it.
+
 
 ## Queued, deliberately not started
 
