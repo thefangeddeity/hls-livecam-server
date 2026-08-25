@@ -420,6 +420,25 @@
     .message-section { flex: none; }
   }
 
+  /* Build label. Deliberately quiet -- it needs to be findable when someone
+     asks "which build is this?", not to compete with the live indicator. */
+  .brand .build-tag {
+    margin-left: 8px;
+    padding: 1px 6px;
+    border: 1px solid var(--border, rgba(128,128,128,.3));
+    border-radius: 4px;
+    color: var(--text-muted, #8e8e93);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: .02em;
+    white-space: nowrap;
+    cursor: help;
+  }
+
+  @media (max-width: 640px) {
+    .brand .build-tag { display: none; }
+  }
+
   /* ── Audio panel ─────────────────────────────────────────────── */
 
   .audio-control {
@@ -629,6 +648,10 @@
     <span>HLS Livecam</span>
     <span class="sep">//</span>
     <span class="host"></span>
+    <!-- Substituted at render time from `git describe`. Hovering gives the
+         build stamp and commit, which is what distinguishes two installs of
+         the same tag. -->
+    <span class="build-tag" title="@BUILD_LABEL@">@VERSION@</span>
   </div>
   <div class="status-bar">
     <span class="live-pill" id="liveIndicator">CONNECTING</span>
@@ -1380,14 +1403,59 @@
   }
 
   /*
-   * Mic, MediaMTX and RTSP describe server-side pipeline state that a browser
-   * cannot observe: reaching the HLS endpoint says nothing about whether the
-   * microphone opened or how the RTSP hop is behaving. They stay pending
-   * rather than showing a green light this page cannot actually vouch for.
+   * Mic, MediaMTX and RTSP are server-side facts a browser cannot observe for
+   * itself, so broadcast-api measures them and reports them at /api/pipeline.
+   * Until that first response lands they stay pending -- an unknown stage is
+   * shown as unknown, never guessed at.
+   *
+   * The HLS lamp is deliberately NOT driven from here. The browser's own
+   * attempt to load and play the stream is better evidence than the server's
+   * view of its own endpoint, and the player's event handlers already own it.
    */
   stage(micLed,  'pending');
   stage(mtxLed,  'pending');
   stage(rtspLed, 'pending');
+
+  var pipelineTimer = null;
+
+  function applyPipeline(p) {
+    stage(micLed,  p.mic      === 'ok' ? 'ok' : p.mic      === 'fail' ? 'fail' : 'pending');
+    stage(mtxLed,  p.mediamtx === 'ok' ? 'ok' : p.mediamtx === 'fail' ? 'fail' : 'pending');
+    stage(rtspLed, p.rtsp     === 'ok' ? 'ok' : p.rtsp     === 'fail' ? 'fail' : 'pending');
+
+    /* The server's own detail string is the useful thing to surface on hover:
+       "capture hung opening the camera/microphone" beats a grey dot. */
+    var host = document.getElementById('roomAudio');
+    if (host && p.detail) host.title = p.detail;
+  }
+
+  function pollPipeline() {
+    fetch('/api/pipeline', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (p) { if (p) applyPipeline(p); })
+      .catch(function () {
+        /* The API being unreachable is itself information: nothing
+           server-side can be vouched for, so drop back to unknown. */
+        stage(micLed,  'pending');
+        stage(mtxLed,  'pending');
+        stage(rtspLed, 'pending');
+      });
+  }
+
+  pollPipeline();
+  pipelineTimer = setInterval(pollPipeline, 5000);
+
+  // Stop polling while the tab is hidden. A wall-mounted dashboard sits open
+  // for weeks; there is no reason to keep waking the server for a page nobody
+  // is looking at.
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (pipelineTimer) { clearInterval(pipelineTimer); pipelineTimer = null; }
+    } else if (!pipelineTimer) {
+      pollPipeline();
+      pipelineTimer = setInterval(pollPipeline, 5000);
+    }
+  });
 
   function setMuted(muted) {
     audio.muted = muted;

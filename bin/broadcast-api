@@ -110,6 +110,7 @@ FRAME_W, FRAME_H = (int(x) for x in _cfg.get('VIDEO_SIZE', '1280x720').split('x'
 FRAME_BYTES = FRAME_W * FRAME_H * 3
 RTSP_PORT   = _cfg.get('RTSP_PORT', '8554')
 RTSP_URL    = f"rtsp://127.0.0.1:{RTSP_PORT}/cam"
+HLS_PORT    = _cfg.get('HLS_PORT', '8888')
 
 # Blur renderer: 'font' (original, PIL text engine) or 'vector' (run-7 §3).
 # Defaults to 'font' so behaviour is unchanged until the PM gates the vectorized
@@ -121,6 +122,26 @@ GOP_SECONDS = float(_cfg.get('GOP_SECONDS', 1))
 
 _cam_proc = None
 _pub_proc = None
+
+# ── Pipeline status ──────────────────────────────────────────────
+#
+# The viewer's audio panel shows a lamp per stage. Three of them sat grey
+# forever because nothing server-side ever reported on them, and a permanently
+# grey lamp is indistinguishable from a broken one.
+#
+# The capture stage is reported by the writer loop, which is the only thing
+# that knows whether ffmpeg got past opening the devices. It is deliberately
+# not inferred from "is the process alive": a capture deadlocked inside
+# avformat_open_input is alive, burning CPU, and producing nothing, which is
+# the exact failure this stack was losing hours to.
+_pipeline_lock  = threading.Lock()
+_pipeline_state = {'capture': 'pending', 'detail': 'starting'}
+
+
+def _set_capture_state(state, detail=''):
+    with _pipeline_lock:
+        _pipeline_state['capture'] = state
+        _pipeline_state['detail']  = detail
 
 # ── Mode state ───────────────────────────────────────────────────
 _mode      = 'show'
@@ -471,6 +492,8 @@ def _writer_loop():
                         f'[consecutive failures: {failures}]',
                         file=sys.stderr, flush=True,
                     )
+                    _set_capture_state(
+                        'fail', 'capture hung opening the camera/microphone')
                     _kill_hard(proc)
                 else:
                     print(
@@ -479,6 +502,9 @@ def _writer_loop():
                         f'[consecutive failures: {failures}]',
                         file=sys.stderr, flush=True,
                     )
+                    _set_capture_state(
+                        'fail',
+                        f'capture exited ({proc.returncode}) before connecting')
 
                 if failures >= MAX_FAST_RETRIES:
                     print(
@@ -493,6 +519,11 @@ def _writer_loop():
                 continue
 
             failures = 0
+            # Connecting proves the AVFoundation session opened both the camera
+            # and the microphone: ffmpeg is given -map 0:a:0, so a microphone it
+            # could not open would have aborted the process rather than let it
+            # reach mediamtx.
+            _set_capture_state('ok', 'capture connected')
             print(
                 f'broadcast-api: combined AV capture connected to {RTSP_URL} '
                 f'(pid {proc.pid})',
@@ -501,6 +532,7 @@ def _writer_loop():
 
             rc = proc.wait()
 
+            _set_capture_state('fail', f'capture exited ({rc}); restarting')
             print(
                 f'broadcast-api: combined AV publisher exited ({rc}); '
                 'restarting',
@@ -600,6 +632,86 @@ def msg_lock_post():
     except Exception:
         pass
     return ('true' if _msg_lock else 'false'), 200
+
+
+_pipeline_cache = {'at': 0.0, 'data': None}
+_PIPELINE_TTL   = 2.0
+
+
+def _tcp_open(port, timeout=0.5):
+    try:
+        with socket.create_connection(('127.0.0.1', int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _hls_audio_state():
+    """('ok'|'fail', has_audio_track) for the local HLS master playlist."""
+    try:
+        import urllib.request
+        url = f'http://127.0.0.1:{HLS_PORT}/cam/index.m3u8'
+        with urllib.request.urlopen(url, timeout=1.5) as r:
+            if r.status != 200:
+                return 'fail', False
+            body = r.read(8192).decode('utf-8', 'replace')
+        return 'ok', ('TYPE=AUDIO' in body)
+    except Exception:
+        return 'fail', False
+
+
+@app.route('/api/pipeline', methods=['GET'])
+def pipeline():
+    """Per-stage health for the viewer's audio panel.
+
+    Every value here is measured, never assumed. The panel previously lit only
+    the HLS lamp because that was the one stage a browser can observe for
+    itself; the other three are server-side facts that had no way to reach it.
+
+    Polled by every open viewer, so results are cached briefly -- the lsof and
+    socket probes are cheap but not free, and the underlying state does not
+    change faster than the cache window.
+    """
+    now = time.time()
+    if _pipeline_cache['data'] and now - _pipeline_cache['at'] < _PIPELINE_TTL:
+        return _pipeline_cache['data']
+
+    with _pipeline_lock:
+        capture = _pipeline_state['capture']
+        detail  = _pipeline_state['detail']
+
+    mediamtx = 'ok' if _tcp_open(RTSP_PORT) else 'fail'
+
+    # RTSP is the publisher's own socket to mediamtx, which is a stronger claim
+    # than "the port is listening": it says this capture reached it.
+    #
+    # Order matters. Testing the process first reports a red lamp during the
+    # ordinary startup window, before the writer loop has spawned ffmpeg at
+    # all -- a failure indication for a stack that is merely still starting.
+    # Defer to the capture stage, which is the thing that knows.
+    proc = _pub_proc
+    if capture == 'pending':
+        rtsp = 'pending'
+    elif proc is None or proc.poll() is not None:
+        rtsp = 'fail'
+    else:
+        rtsp = 'ok' if _has_rtsp_connection(proc.pid, RTSP_PORT) else 'fail'
+
+    hls, has_audio = _hls_audio_state()
+
+    data = {
+        # The microphone opened iff the capture session did; they are one
+        # AVFoundation session and audio is a mapped output stream.
+        'mic':      capture,
+        'mediamtx': mediamtx,
+        'rtsp':     rtsp,
+        'hls':      hls,
+        'audio_track': has_audio,
+        'detail':   detail,
+    }
+    _pipeline_cache['at']   = now
+    _pipeline_cache['data'] = data
+    return data
 
 
 @app.route('/api/info', methods=['GET'])
