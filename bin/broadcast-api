@@ -146,7 +146,10 @@ def _set_capture_state(state, detail=''):
 # ── Mode state ───────────────────────────────────────────────────
 _mode      = 'show'
 _mode_lock = threading.Lock()
-_bw_mode   = False
+# Foveal layer: a modifier on CV mode, and the successor to B&W Blur's flag.
+# Renamed rather than deleted so the control, its endpoint and its state keep
+# the same shape when the CV port lands.
+_foveal_mode = False
 try:
     with open(LOCK_FILE) as _f:
         _msg_lock = _f.read().strip() == "true"
@@ -584,15 +587,18 @@ def _writer_loop():
             time.sleep(2.0)
 
 
-def bw_mode_get():
-    return ('true' if _bw_mode else 'false'), 200
+@app.route('/api/foveal', methods=['GET'])
+@app.route('/api/bw-mode', methods=['GET'])    # deprecated alias
+def foveal_get():
+    return ('true' if _foveal_mode else 'false'), 200
 
 
-@app.route('/api/bw-mode', methods=['POST'])
-def bw_mode_post():
-    global _bw_mode
-    _bw_mode = not _bw_mode
-    return ('true' if _bw_mode else 'false'), 200
+@app.route('/api/foveal', methods=['POST'])
+@app.route('/api/bw-mode', methods=['POST'])   # deprecated alias, see feed_mode_post
+def foveal_post():
+    global _foveal_mode
+    _foveal_mode = not _foveal_mode
+    return ('true' if _foveal_mode else 'false'), 200
 
 
 @app.route('/api/feed-mode', methods=['GET'])
@@ -605,7 +611,18 @@ def feed_mode_get():
 def feed_mode_post():
     global _mode
     new_mode = request.get_data(as_text=True).strip()
-    if new_mode not in ('show', 'cloak', 'hide'):
+    # `cloak` is accepted as a deprecated alias for `cv`. Blur is gone -- the
+    # slot is retargeted at computer vision -- but camdash and the Qt
+    # dashboard still POST the old word, and they are a separate thread of
+    # work. Accepting both keeps them functional across that gap.
+    #
+    # Note the GET side returns `cv`, so an un-updated client will not see its
+    # own button highlight. That is harmless today because the mode renders
+    # nothing on macOS at all; remove this alias once camdash and the Qt
+    # dashboard are ported.
+    if new_mode == 'cloak':
+        new_mode = 'cv'
+    if new_mode not in ('show', 'cv', 'hide'):
         abort(400)
     with _mode_lock:
         _mode = new_mode
@@ -732,10 +749,34 @@ def pipeline():
 
     hls, has_audio = _hls_audio_state()
 
+    # Encoder settings, reported rather than measured. These are what ffmpeg
+    # was told to produce, so they are exact for as long as capture is up; the
+    # alternative -- deriving them from the manifest -- only offers a combined
+    # video+audio BANDWIDTH, which would overstate the audio figure badly.
+    # Reported as null when capture is not connected, so the viewer shows
+    # unlit segments instead of describing a stream that is not running.
+    try:
+        audio_rate = int(str(_cfg.get('AUDIO_RATE', '48000')).strip())
+    except ValueError:
+        audio_rate = None
+    try:
+        audio_ch = int(str(_cfg.get('AUDIO_CHANNELS', '2')).strip())
+    except ValueError:
+        audio_ch = None
+    try:
+        audio_kbps = int(str(_cfg.get('AUDIO_BITRATE_K', '96')).strip())
+    except ValueError:
+        audio_kbps = None
+    if capture != 'ok':
+        audio_rate = audio_ch = audio_kbps = None
+
     data = {
         # The microphone opened iff the capture session did; they are one
         # AVFoundation session and audio is a mapped output stream.
         'mic':      capture,
+        'audio_rate_hz':  audio_rate,
+        'audio_channels': audio_ch,
+        'audio_kbps':     audio_kbps,
         'mediamtx': mediamtx,
         'rtsp':     rtsp,
         'hls':      hls,

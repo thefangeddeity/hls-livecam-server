@@ -271,30 +271,6 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
-  .stat {
-    display: flex; justify-content: space-between; align-items: center;
-    font-size: 13px; padding: 3px 0;
-  }
-  .stat .k { color: var(--text-dim); }
-  .stat .v { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
-  .info-chip {
-    display: flex; align-items: center; gap: 8px;
-    padding: 9px 12px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    font-size: 12px; color: var(--text-dim);
-  }
-  .info-chip .label { font-weight: 500; color: var(--text); }
-  .info-chip .badge {
-    margin-left: auto;
-    font-size: 10px; font-weight: 600;
-    color: var(--text-muted);
-    background: var(--panel);
-    border: 1px solid var(--border);
-    padding: 2px 6px; border-radius: 4px;
-    letter-spacing: 0.02em;
-  }
   .sidebar-scroll {
     display: flex;
     flex-direction: column;
@@ -334,10 +310,6 @@
   .btn[hidden] { display: none; }
 
   /* ── CONTROLS STACK ── */
-  .controls-stack { display: flex; flex-direction: column; gap: 6px; }
-  .feed-mode-label { font-size: 10px; color: var(--text-muted); margin-bottom: 1px; }
-  .feed-mode-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
-  .mute-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); cursor: pointer; padding: 2px 0; }
 
   /* ── MESSAGE BOX ── */
   .message-section { display: flex; flex-direction: column; gap: 8px; }
@@ -377,7 +349,15 @@
     transition: color 0.2s;
   }
   .msg-hint.ok { color: var(--success); }
-  .msg-hint.locked { color: var(--warn); }
+  /* Locked is an ordinary resting state -- most of the time it is simply how
+     the box sits -- so it reads as engraved housing text rather than as a
+     warning. Only ok/err, which are transient and acted on, keep a colour. */
+  .msg-hint.locked {
+    color: var(--emboss-dim, var(--text-muted));
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+  }
   .msg-hint.err { color: var(--danger); }
 
   /* ── FULLSCREEN OVERLAY BTN ── */
@@ -439,245 +419,380 @@
     .brand .build-tag { display: none; }
   }
 
-  /* ── Audio panel ─────────────────────────────────────────────── */
-
-  .audio-control {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 3px 1px 5px;
-  }
-
-  .audio-main { min-width: 0; }
-
-  .audio-description {
-    margin: 0 0 10px;
-    color: var(--text-muted, #888);
-    font-size: 10px;
-    line-height: 15px;
-    white-space: normal;
-  }
-
-  #roomAudioPlayer {
-    display: block;
-    width: 100%;
-    height: 30px;
-    margin: 0 0 11px;
-  }
-
-  .audio-mute {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    min-height: 18px;
-    margin: 0;
-    padding: 0;
-    color: var(--text-muted, #888);
-    font-size: 10px;
-    line-height: 18px;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .audio-mute input {
-    width: 12px;
-    height: 12px;
-    margin: 0;
-    flex: 0 0 12px;
-  }
-
-  /* The lamp stack is shared by the audio panel and the video/stream panel.
-     The .audio-* names came first and are kept so that panel's markup is
-     untouched; new callers use the neutral .status-* names. */
-  /* ── Faux VFD status display ─────────────────────────────────── */
-  /*
-   * A small vacuum-fluorescent panel behind glass, shared by the Video and
-   * Audio boxes. Deliberately dark in both themes: it reads as a screen set
-   * into the panel, and a screen does not invert when the page does.
+  /* ══ SIDEBAR INSTRUMENT PANEL ═══════════════════════════════════
    *
-   * Unlit rows stay faintly visible rather than disappearing, which is how
-   * real VFD segments behave -- and it keeps "unknown" legible as its own
-   * state instead of looking like a rendering failure.
+   * Three materials, and the rule is the design -- keep them separate:
+   *
+   *   engraved   every label. One gray, one carved shadow, cast into the
+   *              housing. It cannot light up, gray out, or turn green.
+   *   lamps      all state. A bulb is dark and recessed, or green and lit.
+   *              The label beside it never moves, so the eye tracks bulbs
+   *              instead of re-reading words.
+   *   phosphor   all live values, behind glass, over ghost segments.
+   *
+   * Nothing outside the glass is ever phosphor-coloured; nothing inside it
+   * is ever gray.
    */
+
+  .sidebar-scroll {
+    --housing:       #1b1b1d;
+    --housing-hi:    rgba(255,255,255,.045);
+    --housing-lo:    #141416;
+    --housing-top:   #1f1f22;
+    --border-soft:   #242427;
+    --emboss:        #8a8a90;
+    --emboss-strong: #a2a2a8;
+    --emboss-dim:    #6a6a70;
+    --led-on:        #30d158;
+    --led-off:       #3a3a3e;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Phosphor colourway. One variable drives glass, ghost and lit text, so
+       switching between blue-green / green / amber / ice is a one-line
+       change. Default blue-green. */
+    --phos:       #3fe8cd;
+    --phos-ghost: rgba(63,232,205,.12);
+    --phos-label: rgba(63,232,205,.40);
+    --glass-a:    #070d0e;
+    --glass-b:    #0b1416;
+  }
+
+  /* The housing is furniture and adapts to the page theme. The tube never
+     does -- a vacuum tube does not invert -- so the glass variables above
+     are deliberately absent from this block. */
+  html[data-theme="light"] .sidebar-scroll {
+    --housing:       #ececee;
+    --housing-hi:    rgba(255,255,255,.9);
+    --housing-lo:    #e2e2e5;
+    --housing-top:   #f5f5f7;
+    --border-soft:   #d2d2d6;
+    --emboss:        #5c5c63;
+    --emboss-strong: #3a3a40;
+    --emboss-dim:    #85858c;
+    --led-off:       #c2c2c7;
+  }
+
+  .panel {
+    background: linear-gradient(180deg, var(--housing-top) 0%,
+                var(--housing) 34%, var(--housing-lo) 100%);
+    border: 1px solid var(--border-soft);
+    border-radius: 11px;
+    padding: 13px 14px 14px;
+    box-shadow: inset 0 1px 0 var(--housing-hi), 0 1px 2px rgba(0,0,0,.4);
+  }
+
+  /* Engraved: carved into the housing. The light-theme shadow is re-tuned --
+     the dark one relies on a bright top edge that vanishes on a light
+     surface, leaving the text flat. */
+  .eng {
+    color: var(--emboss);
+    text-shadow: 0 1px 0 rgba(255,255,255,.055), 0 -1px 0 rgba(0,0,0,.55);
+  }
+  html[data-theme="light"] .eng {
+    text-shadow: 0 1px 0 rgba(255,255,255,.85), 0 -1px 0 rgba(0,0,0,.20);
+  }
+
+  .panel .section-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .11em; margin: 0 0 11px;
+  }
+  .sub-title {
+    font-size: 8.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .13em; margin: 0 0 8px;
+    color: var(--emboss-dim);
+    text-shadow: 0 1px 0 rgba(255,255,255,.04);
+  }
+  html[data-theme="light"] .sub-title { text-shadow: 0 1px 0 rgba(255,255,255,.8); }
+
+  /* ── The tube ─────────────────────────────────────────────────── */
+
   .vfd {
-    --vfd-on:  #4dffb0;
-    --vfd-dim: rgba(77, 255, 176, .24);
-    --vfd-err: #ff6b5a;
-
-    box-sizing: border-box;
-    width: 100%;
-    margin-top: 8px;
-    padding: 7px 9px 6px;
-    border-radius: 4px;
-
-    /* Two columns across the full panel width. Stacking these beside the
-       stats instead squeezed the stat column to ~118px, which truncated
-       "1280 x 720" to "1280...". The readout is the thing that should be
-       compact here, not the numbers it sits under. */
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1px 14px;
-    background:
-      linear-gradient(180deg, rgba(77,255,176,.05), rgba(0,0,0,0) 60%),
-      #04120c;
-    border: 1px solid rgba(0,0,0,.55);
-    box-shadow:
-      inset 0 1px 3px rgba(0,0,0,.9),
-      inset 0 0 12px rgba(77,255,176,.07),
-      0 0 0 1px rgba(255,255,255,.04);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 8.5px;
-    line-height: 14px;
-    letter-spacing: .06em;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .vfd-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 6px;
-    white-space: nowrap;
-  }
-
-  .vfd-label { color: var(--vfd-dim); }
-
-  .vfd-val {
-    font: inherit;
-    font-weight: 700;
-    color: var(--vfd-dim);
-  }
-
-  .vfd-val.ok {
-    color: var(--vfd-on);
-    text-shadow: 0 0 5px rgba(77, 255, 176, .75);
-  }
-
-  .vfd-val.fail {
-    color: var(--vfd-err);
-    text-shadow: 0 0 5px rgba(255, 107, 90, .7);
-  }
-
-  .vfd-val.pending {
-    color: var(--vfd-dim);
-    text-shadow: none;
-  }
-
-  .audio-talk-row { width: 100%; }
-
-  .cb-button {
-    width: 100%;
-    height: 36px;
-    min-height: 36px;
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0;
-    padding: 0 9px;
-    border: 1px solid rgba(255,255,255,.14);
-    border-radius: 6px;
-    background: rgba(255,255,255,.045);
-    color: var(--text, #ddd);
-    font: inherit;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: .04em;
-    text-align: left;
-    opacity: .72;
-    cursor: not-allowed;
-  }
-
-  .cb-dot {
-    width: 8px;
-    height: 8px;
-    flex: 0 0 8px;
-    border-radius: 50%;
-    border: 1px solid rgba(255,255,255,.28);
-    background: #555;
-  }
-
-  .cb-button:disabled { opacity: .72; }
-
-  #muteAudio {
-    width: 12px;
-    height: 12px;
-    margin: 0;
-  }
-
-  #audioStatus { display: none; }
-
-  /*
-   * On a phone the sidebar goes full width, so the readout has room to
-   * spare. Give it a little more size rather than less -- it is being read
-   * at arm's length there, not on a desk.
-   */
-  @media (max-width: 420px) {
-    .vfd {
-      font-size: 9.5px;
-      line-height: 15px;
-      gap: 2px 18px;
-    }
-  }
-
-  /* Slightly shorter message field */
-  #msgBox {
-    min-height: 88px;
-    height: 88px;
-  }
-
-  /* ── Video panel stat rows ───────────────────────────────────── */
-  /*
-   * These rows were styled by three overlapping rules that disagreed. One
-   * selector matched on `.sidebar-scroll > .section.desktop-only` and carried
-   * higher specificity than the `.stream-section` rules meant to govern them,
-   * so a row took its line-height from one rule and its size from another,
-   * while `.stat .v` kept a weight of 500 that neither intended. Hence rows
-   * that did not share a baseline or a weight.
-   *
-   * One block owns them now, and everything the row needs is declared here
-   * rather than inherited from a rule that also styles something else.
-   */
-  .stream-section {
-    padding-top: 8px !important;
-    padding-bottom: 8px !important;
-  }
-
-  .stream-section .stat {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;   /* text aligns on its baseline, not its box */
-    gap: 8px;
-    margin: 0;
-    padding: 1px 0;
-    min-width: 0;
-    font-size: 10px;
-    line-height: 15px;
-    font-weight: 400;
-  }
-
-  .stream-section .stat .k,
-  .stream-section .stat .v {
-    font: inherit;           /* one declaration, so neither can drift */
-    letter-spacing: normal;
-    white-space: nowrap;
-  }
-
-  .stream-section .stat .k {
-    color: var(--text-muted, #888);
-    flex: 0 0 auto;
-  }
-
-  /* The stats share the panel with the 82px lamp column, leaving roughly
-     118px here. A long hostname must ellipsize rather than wrap onto a
-     second line and knock the rows out of alignment. */
-  .stream-section .stat .v {
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-    min-width: 0;
+    position: relative; border-radius: 5px; padding: 8px 9px 7px;
+    background: linear-gradient(180deg, var(--glass-a) 0%,
+                var(--glass-b) 62%, var(--glass-a) 100%);
+    border: 1px solid #040809;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05),
+                inset 0 0 20px rgba(0,0,0,.75);
     overflow: hidden;
-    text-overflow: ellipsis;
-    text-align: right;
+    min-width: 0;
+  }
+  /* Scanlines and the curve of the glass. */
+  .vfd::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(180deg,
+                rgba(0,0,0,.15) 0 1px, transparent 1px 3px);
+    opacity: .55;
+  }
+  .vfd::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 42%;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,0));
+  }
+
+  .vrow {
+    position: relative; display: grid; grid-template-columns: auto 1fr;
+    align-items: baseline; gap: 8px; height: 20px;
+  }
+  .vrow + .vrow { margin-top: 1px; }
+
+  .vlab {
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: .13em;
+    color: var(--phos-label); text-transform: uppercase; line-height: 20px;
+  }
+  .vval { position: relative; text-align: right; line-height: 20px; height: 20px; }
+
+  .vghost, .vlit {
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    font-variant-numeric: tabular-nums; letter-spacing: .05em;
+    white-space: nowrap; line-height: 20px;
+  }
+  /* Unlit segments sit under every value. An unknown reading shows these
+     alone -- never a zero and never a guess. */
+  .vghost {
+    position: absolute; inset: 0; text-align: right;
+    color: var(--phos-ghost); pointer-events: none; user-select: none;
+  }
+  .vlit {
+    position: relative; color: var(--phos);
+    text-shadow: 0 0 1px var(--phos),
+                 0 0 7px color-mix(in srgb, var(--phos) 52%, transparent),
+                 0 0 15px color-mix(in srgb, var(--phos) 24%, transparent);
+  }
+  .vunit { font-size: 8px; letter-spacing: .1em; opacity: .7; margin-left: 3px; }
+
+  .vind {
+    display: flex; gap: 8px; margin-top: 6px; padding-top: 5px;
+    border-top: 1px solid rgba(255,255,255,.04);
+  }
+  .vind i {
+    font-family: var(--mono); font-style: normal; font-size: 7.5px;
+    letter-spacing: .12em; color: var(--phos-ghost);
+  }
+  .vind i.on {
+    color: var(--phos);
+    text-shadow: 0 0 6px color-mix(in srgb, var(--phos) 52%, transparent);
+  }
+
+  /* ── Tube + lamp column ───────────────────────────────────────── */
+
+  .split { display: grid; grid-template-columns: 1fr 86px; gap: 11px; align-items: start; }
+  .leds  { display: flex; flex-direction: column; gap: 7px; padding-top: 2px; }
+  .led   {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 10.5px; line-height: 15px; white-space: nowrap;
+  }
+  .led .n {
+    color: var(--emboss);
+    text-shadow: 0 1px 0 rgba(255,255,255,.05), 0 -1px 0 rgba(0,0,0,.5);
+  }
+  html[data-theme="light"] .led .n { text-shadow: 0 1px 0 rgba(255,255,255,.85); }
+
+  .bulb {
+    width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--led-off);
+    box-shadow: inset 0 1px 1px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.05);
+  }
+  .led.on .bulb {
+    background: var(--led-on);
+    box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5);
+  }
+  /* A failed stage is not the same as an unknown one. Unknown stays dark; a
+     measured failure reads red, so "not yet" never looks like "broken". */
+  .led.fail .bulb {
+    background: #ff453a;
+    box-shadow: 0 0 6px rgba(255,69,58,.7), inset 0 0 2px rgba(255,255,255,.4);
+  }
+
+  /* ── Controls ─────────────────────────────────────────────────── */
+
+  .divider {
+    height: 1px; background: var(--border-soft); margin: 12px -14px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.03);
+  }
+
+  .btnrow { display: flex; gap: 7px; }
+  .panel .btn {
+    flex: 1; text-align: center; font-size: 11.5px; font-weight: 500;
+    padding: 8px 4px; border-radius: 7px;
+    background: linear-gradient(180deg, #2c2c30, #232326);
+    border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35);
+    color: #d6d6da; cursor: pointer;
+  }
+  html[data-theme="light"] .panel .btn {
+    background: linear-gradient(180deg, #fff, #ededf0);
+    border-color: #cfcfd4; color: #2c2c30;
+    box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0,0,0,.10);
+  }
+  /* Pressed in, not tinted -- the button is a physical object. */
+  .panel .btn.pressed {
+    background: linear-gradient(180deg, #191a1c, #212124);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
+    color: #fff; border-color: #3c3c44;
+  }
+  html[data-theme="light"] .panel .btn.pressed {
+    background: linear-gradient(180deg, #d9d9de, #e6e6ea);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.18);
+    color: #000; border-color: #c2c2c8;
+  }
+  .panel .btn.pending {
+    color: var(--emboss-dim); cursor: not-allowed;
+    background: linear-gradient(180deg, #242427, #1e1e21);
+    border-color: #2c2c31;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  html[data-theme="light"] .panel .btn.pending {
+    background: linear-gradient(180deg, #e8e8eb, #e0e0e4);
+    border-color: #d5d5da; box-shadow: none;
+  }
+  .panel .btn .badge {
+    display: block; font-family: var(--mono); font-size: 7px;
+    letter-spacing: .1em; color: var(--phos-label); margin-top: 2px;
+  }
+  /* The badge is the one phosphor-coloured thing outside the glass. It is a
+     legend for the tube's own CV indicator, so it is deliberate rather than
+     an exception -- but it is dimmed to sit below the lit values. */
+
+  .chk {
+    display: flex; align-items: center; gap: 8px; font-size: 11px;
+    margin-top: 9px; color: var(--emboss-strong); cursor: pointer;
+  }
+  .chkrow { display: flex; gap: 10px; }
+  .chkrow .chk { flex: 1; min-width: 0; }
+  .chk.pending { color: var(--emboss-dim); cursor: not-allowed; }
+  .chk.pending .box { opacity: .5; }
+  .chk input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .box {
+    width: 13px; height: 13px; border-radius: 3.5px; flex: 0 0 auto;
+    background: linear-gradient(180deg, #1a1a1c, #212124);
+    border: 1px solid #3a3a40;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.55);
+  }
+  html[data-theme="light"] .box {
+    background: linear-gradient(180deg, #fff, #f0f0f3);
+    border-color: #c4c4ca; box-shadow: inset 0 1px 2px rgba(0,0,0,.12);
+  }
+  .box.on {
+    background: linear-gradient(180deg, #3f8cff, #2f6fdc);
+    border-color: #2f6fdc;
+    box-shadow: 0 0 5px rgba(63,140,255,.4), inset 0 1px 0 rgba(255,255,255,.3);
+    position: relative;
+  }
+  .box.on::after {
+    content: ""; position: absolute; left: 3.5px; top: 1px;
+    width: 4px; height: 7px; border: solid #fff;
+    border-width: 0 1.6px 1.6px 0; transform: rotate(42deg);
+  }
+
+  /* ── Listen ───────────────────────────────────────────────────── */
+
+  .listen { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+  .transport {
+    width: 54px; height: 32px; border-radius: 7px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #2c2c30, #232326);
+    border: 1px solid #34343a; cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35);
+  }
+  html[data-theme="light"] .transport {
+    background: linear-gradient(180deg, #fff, #ededf0);
+    border-color: #cfcfd4; box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0,0,0,.10);
+  }
+  .transport svg { fill: #d6d6da; }
+  html[data-theme="light"] .transport svg { fill: #2c2c30; }
+  .listen .cap { font-size: 10.5px; color: var(--emboss-dim); line-height: 1.3; }
+
+  .talk {
+    margin-top: 9px; border-radius: 7px; padding: 8px 10px;
+    font-size: 10.5px; letter-spacing: .09em;
+    display: flex; align-items: center; gap: 8px;
+    background: linear-gradient(180deg, #26262a, #1e1e21);
+    border: 1px solid #32323a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  html[data-theme="light"] .talk {
+    background: linear-gradient(180deg, #eeeef1, #e6e6ea);
+    border-color: #d5d5da; box-shadow: none;
+  }
+  .talk[aria-disabled="true"] { cursor: not-allowed; }
+
+  /* ── Alert ────────────────────────────────────────────────────── */
+
+  /* Dark metal like every other control. Being red made it the loudest thing
+     on a panel whose whole point is that nothing outside the glass shouts --
+     and it no longer needs to signal "careful", because sitting alone at the
+     bottom of Audio under ALERT already does that. The lamp is the only part
+     that lights, and only while a buzz is actually going out. */
+  /* A pair of transport keys: raised metal, engraved legend, pressed in when
+     they fire. Same family as the Listen transport above them. */
+  .buzz {
+    width: 100%; border-radius: 8px; padding: 10px 11px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .11em;
+    text-transform: uppercase; cursor: pointer;
+    background: linear-gradient(180deg, #2c2c30, #232326);
+    border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  html[data-theme="light"] .buzz {
+    background: linear-gradient(180deg, #fff, #ededf0);
+    border-color: #cfcfd4;
+    box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0,0,0,.10);
+  }
+  .buzz:active,
+  .buzz.sending {
+    background: linear-gradient(180deg, #191a1c, #212124);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
+    border-color: #3c3c44;
+  }
+  html[data-theme="light"] .buzz:active,
+  html[data-theme="light"] .buzz.sending {
+    background: linear-gradient(180deg, #d9d9de, #e6e6ea);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.18);
+  }
+  .btnrow .buzz { flex: 1; width: auto; padding: 10px 8px; }
+  .buzz.pending {
+    color: var(--emboss-dim); cursor: not-allowed;
+    background: linear-gradient(180deg, #242427, #1e1e21);
+    border-color: #2c2c31;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  html[data-theme="light"] .buzz.pending {
+    background: linear-gradient(180deg, #e8e8eb, #e0e0e4);
+    border-color: #d5d5da; box-shadow: none;
+  }
+  .buzz.pending .eng { color: var(--emboss-dim); }
+  .buzz svg { fill: var(--emboss); flex: 0 0 auto; }
+  .buzz .bulb { transition: background .12s, box-shadow .12s; }
+  .buzz.sending .bulb {
+    background: #ff453a;
+    box-shadow: 0 0 7px rgba(255,69,58,.8), inset 0 0 2px rgba(255,255,255,.4);
+  }
+
+  /* ── Message ──────────────────────────────────────────────────── */
+
+  .panel .msg-box {
+    width: 100%; border-radius: 7px; padding: 9px 10px; min-height: 74px;
+    font-size: 11.5px; font-family: inherit; resize: vertical;
+    color: var(--text, #e5e5e7);
+    background: linear-gradient(180deg, #161618, #1b1b1e);
+    border: 1px solid #2e2e33;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,.5);
+  }
+  html[data-theme="light"] .panel .msg-box {
+    background: linear-gradient(180deg, #fff, #f7f7f9);
+    border-color: #d5d5da; box-shadow: inset 0 1px 3px rgba(0,0,0,.08);
+  }
+  .panel .msg-box.empty { color: #6e6e74; font-style: italic; }
+
+  /* ── Unhoused preferences ─────────────────────────────────────── */
+
+  .prefs { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
+  .prefs .chk { margin-top: 0; }
+
+  @media (max-width: 420px) {
+    .split { grid-template-columns: 1fr 80px; gap: 9px; }
+    .led   { font-size: 10px; }
   }
 </style>
 </head>
@@ -724,10 +839,147 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-scroll">
 
-      <!-- MESSAGE -->
-      <div class="section message-section">
-        <div class="section-title">Message <span id="msgHint" class="msg-hint"></span></div>
-        <div class="feed-mode-label">Leave a message for viewers</div>
+      <!-- ══ VIDEO ══════════════════════════════════════════════════
+           Ordered by media path: each panel owns its whole path, reading
+           status first and then the controls that act on it. Show/Hide
+           live here for the same reason Buzz lives in Audio. -->
+      <div class="panel">
+        <div class="section-title eng">Video</div>
+
+        <div class="split">
+          <div class="vfd">
+            <div class="vrow">
+              <span class="vlab">Host</span>
+              <span class="vval"><span class="vghost">▩▩▩▩▩▩▩▩</span><span class="vlit" id="hostVal"></span></span>
+            </div>
+            <div class="vrow">
+              <span class="vlab">Res</span>
+              <span class="vval"><span class="vghost">8888×888</span><span class="vlit" id="resVal"></span></span>
+            </div>
+            <div class="vrow">
+              <span class="vlab">Fps</span>
+              <span class="vval"><span class="vghost">88.8</span><span class="vlit" id="fpsVal"></span></span>
+            </div>
+            <div class="vind">
+              <i id="indLive">LIVE</i><i id="indRec">REC</i><i id="indAv">A/V</i><i id="indCv">CV</i>
+            </div>
+          </div>
+
+          <div class="leds" role="status" aria-label="Video pipeline status">
+            <div class="led" id="videoCamLed"><span class="bulb"></span><span class="n eng">Camera</span></div>
+            <div class="led" id="videoMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
+            <div class="led" id="videoRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
+            <div class="led" id="videoHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="btnrow">
+          <button type="button" class="btn" id="showBtn" onclick="setFeedMode('show')">Show</button>
+          <!-- Blur's slot, retargeted rather than removed. Inert until the CV
+               port lands; wiring it to feed-mode now would ship a button that
+               changes state and nothing else. -->
+          <button type="button" class="btn pending" id="cvBtn" disabled
+                  title="Computer vision mode — not yet available">CV<span class="badge">SOON</span></button>
+          <button type="button" class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
+        </div>
+
+        <!-- B&W Blur's slot, retargeted the same way. A modifier on CV cannot
+             be togglable before CV exists. -->
+        <label class="chk pending" id="fovealRow" title="Modifier on CV mode — not yet available">
+          <input type="checkbox" id="fovealCheck" disabled>
+          <span class="box"></span><span class="eng">Foveal layer</span>
+        </label>
+
+        <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
+      </div>
+
+      <!-- ══ AUDIO ══════════════════════════════════════════════════ -->
+      <div class="panel">
+        <div class="section-title eng">Audio</div>
+
+        <div class="split">
+          <div class="vfd">
+            <div class="vrow">
+              <span class="vlab">Rate</span>
+              <span class="vval"><span class="vghost">88.8</span><span class="vlit" id="audioRate"></span></span>
+            </div>
+            <div class="vrow">
+              <span class="vlab">Bits</span>
+              <span class="vval"><span class="vghost">888</span><span class="vlit" id="audioBits"></span></span>
+            </div>
+            <div class="vind">
+              <i id="indStereo">STEREO</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+            </div>
+          </div>
+
+          <div class="leds" role="status" aria-label="Audio pipeline status">
+            <div class="led" id="audioMicLed"><span class="bulb"></span><span class="n eng">Mic</span></div>
+            <div class="led" id="audioMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
+            <div class="led" id="audioRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
+            <div class="led" id="audioHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+        <div class="sub-title">Listen</div>
+
+        <div class="listen" id="roomAudio">
+          <button type="button" class="transport" id="audioToggle" aria-label="Play or pause room audio">
+            <svg id="audioIcon" width="12" height="13" viewBox="0 0 12 13" aria-hidden="true">
+              <rect x="1" y="1" width="3.4" height="11" rx="1"></rect>
+              <rect x="7.6" y="1" width="3.4" height="11" rx="1"></rect>
+            </svg>
+          </button>
+          <div class="cap">Sound in room</div>
+          <!-- Hidden: hls.js attaches to this, the transport button drives it.
+               The native controls duplicated a control the panel already has. -->
+          <audio id="roomAudioPlayer" preload="none" playsinline hidden></audio>
+        </div>
+
+        <div class="divider"></div>
+        <!-- Listen is what comes in; these two are what goes out. TALK and
+             Buzz are the same class of action -- reaching into the room --
+             so they are built as one set rather than separated by a rule. -->
+        <div class="sub-title">Send</div>
+
+        <div class="btnrow">
+          <button type="button" class="buzz pending" id="talkButton" disabled
+                  title="Talk-back — not yet available">
+            <span class="bulb"></span>
+            <span class="eng">TALK</span>
+          </button>
+          <button type="button" class="buzz" id="buzzBtn" onclick="sendBuzz()">
+            <span class="bulb"></span>
+            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 1a4 4 0 0 0-4 4v3.2L2.6 10.4A.8.8 0 0 0 3.3 11.6h9.4a.8.8 0 0 0 .7-1.2L12 8.2V5a4 4 0 0 0-4-4Z"></path>
+              <path d="M6.4 12.8a1.6 1.6 0 0 0 3.2 0Z"></path>
+            </svg>
+            <span class="eng">BUZZ</span>
+          </button>
+        </div>
+
+        <!-- The two mutes are one set: each silences the side of the panel
+             above it, incoming and outgoing, so they sit together rather than
+             one per sub-section. -->
+        <div class="chkrow">
+          <label class="chk">
+            <input type="checkbox" id="muteAudio" checked>
+            <span class="box"></span><span class="eng">Mute audio</span>
+          </label>
+          <label class="chk">
+            <input type="checkbox" id="muteCheck" onchange="toggleMute()">
+            <span class="box"></span><span class="eng">Mute buzzes</span>
+          </label>
+        </div>
+
+        <span id="audioStatus" aria-live="polite" hidden></span>
+      </div>
+
+      <!-- ══ MESSAGE ════════════════════════════════════════════════ -->
+      <div class="panel message-section">
+        <div class="section-title eng">Message <span id="msgHint" class="msg-hint"></span></div>
         <div class="msg-box-wrap">
           <textarea class="msg-box empty" id="msgBox" readonly>(no message)</textarea>
         </div>
@@ -736,110 +988,18 @@
           <button class="btn" id="clearBtn" onclick="clearMessage()">Clear</button>
           <button class="btn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
         </div>
+        <label class="chk">
+          <input type="checkbox" id="lockCheck" onchange="toggleMsgLock()">
+          <span class="box"></span><span class="eng">Lock message</span>
+        </label>
       </div>
 
-      <!-- CONTROLS — always visible -->
-      <div class="section">
-        <div class="section-title">Controls</div>
-        <div class="controls-stack">
-          <div class="feed-mode-label">Show, blur, or hide feed</div>
-          <div class="feed-mode-grid">
-            <button class="btn" id="showBtn" onclick="setFeedMode('show')">Show</button>
-            <button class="btn" id="cloakBtn" onclick="setFeedMode('cloak')">Blur</button>
-            <button class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
-          </div>
-          <!-- Alphabetized: B&W Blur, Light theme, Lock message. Mute Buzzes
-               moved out with the Buzz button it belongs to. -->
-          <label class="mute-label">
-            <input type="checkbox" id="bwCheck" onchange="toggleBw()"> B&amp;W Blur
-          </label>
-          <label class="mute-label">
-            <input type="checkbox" id="themeCheck" onchange="toggleTheme()"> Light theme
-          </label>
-          <label class="mute-label">
-            <input type="checkbox" id="lockCheck" onchange="toggleMsgLock()"> Lock message
-          </label>
-          <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
-        </div>
-      </div>
-
-
-      <!-- STREAM INFO — desktop only -->
-      <div class="section desktop-only stream-section">
-        <div class="section-title">Video</div>
-        <!-- Stats left, lamps right -- the same two-column instrument as the
-             Audio panel, so both read the same way.
-
-             Camera, MediaMTX and RTSP come from the same /api/pipeline
-             measurement the audio lamps use: capture is a single AVFoundation
-             session, so the camera and the microphone succeed or fail
-             together and showing them disagree would be a lie. The HLS lamp
-             is this player's own, mirroring the live indicator. -->
-        <div class="stat"><span class="k">Host</span><span class="v" id="hostVal">--</span></div>
-        <div class="stat"><span class="k">Resolution</span><span class="v">1280 × 720</span></div>
-        <div class="stat"><span class="k">Framerate</span><span class="v" id="fpsVal">--</span></div>
-
-        <div class="vfd" role="status" aria-label="Video pipeline status">
-          <div class="vfd-row"><span class="vfd-label">CAM</span><span class="vfd-val pending" id="videoCamLed">--</span></div>
-          <div class="vfd-row"><span class="vfd-label">RTSP</span><span class="vfd-val pending" id="videoRtspLed">--</span></div>
-          <div class="vfd-row"><span class="vfd-label">MTX</span><span class="vfd-val pending" id="videoMtxLed">--</span></div>
-          <div class="vfd-row"><span class="vfd-label">HLS</span><span class="vfd-val pending" id="videoHlsLed">--</span></div>
-        </div>
-      </div>
-
-      <!-- AUDIO — capture publishes video and audio in one session, so this
-           is available on mobile too, unlike the desktop-only stat panels. -->
-      <div class="section">
-        <div class="section-title">Audio</div>
-        <div class="info-chip">
-          <div class="audio-control" id="roomAudio">
-
-            <div class="audio-main">
-              <div class="audio-description">Listen to sound in room</div>
-
-              <audio id="roomAudioPlayer"
-                     preload="none"
-                     playsinline
-                     controls></audio>
-
-              <label class="audio-mute">
-                <input type="checkbox" id="muteAudio" checked>
-                <span>Mute audio</span>
-              </label>
-            </div>
-
-            <div class="vfd" role="status" aria-label="Audio pipeline status">
-              <div class="vfd-row"><span class="vfd-label">MIC</span><span class="vfd-val pending" id="audioMicLed">--</span></div>
-              <div class="vfd-row"><span class="vfd-label">RTSP</span><span class="vfd-val pending" id="audioRtspLed">--</span></div>
-              <div class="vfd-row"><span class="vfd-label">MTX</span><span class="vfd-val pending" id="audioMtxLed">--</span></div>
-              <div class="vfd-row"><span class="vfd-label">HLS</span><span class="vfd-val pending" id="audioHlsLed">--</span></div>
-            </div>
-
-            <div class="audio-talk-row">
-              <button type="button" class="cb-button" id="talkButton" disabled>
-                <span class="cb-dot"></span>
-                TALK
-              </button>
-            </div>
-
-            <span id="audioStatus" aria-live="polite"></span>
-
-          </div>
-        </div>
-      </div>
-
-      <!-- BUZZ — last. The button and its mute belong together (they were
-           split across the controls list with unrelated toggles between
-           them), and it sits below the media panels because it is the one
-           control that reaches out to the room rather than describing it. -->
-      <div class="section">
-        <div class="section-title">Buzz</div>
-        <div class="controls-stack">
-          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
-          <label class="mute-label">
-            <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
-          </label>
-        </div>
+      <!-- Unhoused: a viewer preference, not part of any media path. -->
+      <div class="prefs">
+        <label class="chk">
+          <input type="checkbox" id="themeCheck" onchange="toggleTheme()">
+          <span class="box"></span><span class="eng">Light theme</span>
+        </label>
       </div>
 
     </div>
@@ -853,7 +1013,7 @@
   var errorOverlay = document.getElementById('errorOverlay');
   var darkOverlay  = document.getElementById('darkOverlay');
   var showBtn      = document.getElementById('showBtn');
-  var cloakBtn     = document.getElementById('cloakBtn');
+  var cvBtn        = document.getElementById('cvBtn');
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
   var muteCheck    = document.getElementById('muteCheck');
@@ -952,13 +1112,18 @@
   }
 
   function sendBuzz() {
+    // The key stays pressed and its lamp lit for as long as the buzz is
+    // actually in flight -- the button reports what it is doing rather than
+    // just accepting the click.
     buzzBtn.disabled = true;
+    buzzBtn.classList.add('sending');
     fetch('/api/buzz', { method: 'POST' })
       .then(function(r) { return r.ok ? r.text() : null; })
       .catch(function() { return null; })
       .then(function(ts) {
         if (ts) lastBuzzTs = ts.trim();
         buzzBtn.disabled = false;
+        buzzBtn.classList.remove('sending');
       });
   }
 
@@ -988,9 +1153,12 @@
   }
 
   function updateFeedButtons() {
-    showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
-    cloakBtn.className = 'btn' + (feedMode === 'cloak' ? '' : ' primary');
-    hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
+    // A pressed button is pushed in, not tinted -- the panel's buttons are
+    // physical objects. CV has no pressed state: it is inert until the port
+    // lands, and 'cv' is never returned as the current mode.
+    showBtn.className = 'btn' + (feedMode === 'show' ? ' pressed' : '');
+    hideBtn.className = 'btn' + (feedMode === 'hide' ? ' pressed' : '');
+    if (cvBtn) cvBtn.className = 'btn pending';
   }
   // Cloak/hide are rendered server-side: broadcast-api burns the block-art
   // effect directly into the encoded HLS frames, so every viewer (and the
@@ -1034,8 +1202,7 @@
   function setFeedMode(mode) {
     if (mode === feedMode) return;
     fadeOut();
-    var btn = mode === 'show' ? showBtn : mode === 'cloak' ? cloakBtn : hideBtn;
-    showBtn.disabled = true; cloakBtn.disabled = true; hideBtn.disabled = true;
+    showBtn.disabled = true; hideBtn.disabled = true;
     fetch('/api/feed-mode', { method: 'POST', body: mode })
       .then(function(r) { return r.ok ? r.text() : null; })
       .then(function(text) {
@@ -1046,7 +1213,7 @@
       })
       .catch(function() {})
       .then(function() {
-        showBtn.disabled = false; cloakBtn.disabled = false; hideBtn.disabled = false;
+        showBtn.disabled = false; hideBtn.disabled = false;
       });
   }
 
@@ -1217,13 +1384,34 @@
       var count = null;
       if (typeof video.getVideoPlaybackQuality === 'function') count = video.getVideoPlaybackQuality().totalVideoFrames;
       else if (video.webkitDecodedFrameCount !== undefined) count = video.webkitDecodedFrameCount;
-      if (count === null) { fpsEl.textContent = '—'; return; }
+      // Behind glass an unknown value shows ghost segments -- clearing the
+      // lit span reveals them. Never a dash, never a zero.
+      if (count === null) { fpsEl.textContent = ''; return; }
       if (lastCount === null) { lastCount = count; return; }   // no delta on the first tick
-      fpsEl.textContent = (count - lastCount) + ' fps'; lastCount = count;
+      fpsEl.innerHTML = (count - lastCount) + '<span class="vunit">FPS</span>';
+      lastCount = count;
     }, 1000);
     document.addEventListener('visibilitychange', function() {
       if (document.hidden) lastCount = null;  // resync on return, don't emit a burst
     });
+  })();
+
+  // ── VIDEO TUBE: resolution ──
+  // Read from the decoded stream rather than printed as a constant, so the
+  // tube cannot claim 1280x720 while something else is being published.
+  (function setupResReadout() {
+    var resEl = document.getElementById('resVal');
+    if (!resEl) return;
+    function paint() {
+      if (video.videoWidth && video.videoHeight) {
+        resEl.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
+      } else {
+        resEl.textContent = '';     // ghosts show through
+      }
+    }
+    video.addEventListener('loadedmetadata', paint);
+    video.addEventListener('resize', paint);
+    paint();
   })();
 
   // ── BROADCAST ──
@@ -1240,7 +1428,7 @@
       msgBox.classList.add('locked');
       msgActions.hidden = true;
       // Persistent (not auto-cleared like setHint()'s transient ok/err hints).
-      msgHint.textContent = '🔒 Messages locked';
+      msgHint.textContent = 'locked';
       msgHint.className = 'msg-hint locked';
     } else {
       msgBox.classList.remove('locked');
@@ -1263,23 +1451,12 @@
     if (cb) cb.checked = document.documentElement.dataset.theme === 'light';
   })();
 
-  // B&W is a modifier on Blur (design system §6b) and only bites while the feed
-  // mode is `cloak`; the control stays live regardless so state is visible.
-  var bwCheck = document.getElementById('bwCheck');
-  function toggleBw() {
-    fetch('/api/bw-mode', { method: 'POST' })
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .then(function(t) { if (t !== null && bwCheck) bwCheck.checked = t.trim() === 'true'; })
-      .catch(function() {});
-  }
-  function pollBw() {
-    fetch('/api/bw-mode', { cache: 'no-store' })
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .catch(function() { return null; })
-      .then(function(t) { if (t !== null && bwCheck) bwCheck.checked = t.trim() === 'true'; });
-  }
-  pollBw();
-  setInterval(pollBw, 3000);
+  // Foveal layer took over B&W Blur's control and its endpoint, since it is
+  // the same shape of thing: a modifier on the processing mode beside it.
+  // Both ship inert until the CV port lands, so nothing polls -- a control
+  // that cannot be changed has no state worth fetching every three seconds.
+  // The endpoint is /api/foveal and is ready when the port is.
+  var fovealCheck = document.getElementById('fovealCheck');
 
   var lockCheck = document.getElementById('lockCheck');
   function toggleMsgLock() {
@@ -1436,16 +1613,20 @@
 
   var hlsAudio = null;
 
-  /* Drives one VFD cell: the lit state and the word it shows. "--" for
-     unknown reads as an idle segment rather than a claim either way. */
-  var VFD_TEXT = { ok: 'OK', fail: 'ERR', pending: '--' };
-
+  /* Drives one lamp. The label beside it is engraved and never changes, so
+     the bulb carries the whole state: dark for unknown, green for ok, red
+     for a measured failure. Unknown and failed are deliberately different --
+     "not yet" must not look like "broken". */
   function stage(el, state) {
     if (!el) return;
-    if (!VFD_TEXT[state]) state = 'pending';
-    el.classList.remove('pending', 'ok', 'fail');
-    el.classList.add(state);
-    el.textContent = VFD_TEXT[state];
+    el.classList.remove('on', 'fail');
+    if (state === 'ok') el.classList.add('on');
+    else if (state === 'fail') el.classList.add('fail');
+  }
+
+  /* One tube indicator: lit or ghosted. */
+  function indicator(el, on) {
+    if (el) el.classList.toggle('on', !!on);
   }
 
   function setAudioState(text) {
@@ -1491,7 +1672,11 @@
     return 'pending';
   }
 
-  function refreshVideoHls() { stage(vHlsLed, videoHlsState()); }
+  function refreshVideoHls() {
+    var st = videoHlsState();
+    stage(vHlsLed, st);
+    indicator(document.getElementById('indLive'), st === 'ok');
+  }
 
   if (liveInd && window.MutationObserver) {
     new MutationObserver(refreshVideoHls)
@@ -1509,8 +1694,30 @@
     stage(vRtspLed, norm(p.rtsp));
     refreshVideoHls();
 
+    /* Audio tube. These are the encoder's own settings, reported by the
+       server rather than guessed from the manifest, which carries a combined
+       BANDWIDTH for video+audio and would overstate both. A value the server
+       does not know is left blank so the ghost segments show through. */
+    var rateEl = document.getElementById('audioRate');
+    var bitsEl = document.getElementById('audioBits');
+    if (rateEl) {
+      rateEl.innerHTML = p.audio_rate_hz
+        ? (p.audio_rate_hz / 1000).toFixed(1) + '<span class="vunit">KHZ</span>'
+        : '';
+    }
+    if (bitsEl) {
+      bitsEl.innerHTML = p.audio_kbps
+        ? p.audio_kbps + '<span class="vunit">KBPS</span>'
+        : '';
+    }
+
+    /* Tube indicators. A/V is lit only when the stream really carries an
+       audio track, which is the one claim the manifest can settle. */
+    indicator(document.getElementById('indAv'), p.audio_track);
+    indicator(document.getElementById('indStereo'), p.audio_channels === 2);
+
     /* The server's own detail string is the useful thing to surface on hover:
-       "capture hung opening the camera/microphone" beats a grey dot. */
+       "capture hung opening the camera/microphone" beats a dark lamp. */
     var host = document.getElementById('roomAudio');
     if (host && p.detail) host.title = p.detail;
   }
@@ -1578,6 +1785,35 @@
   audio.volume    = 1.0;
 
   muteBox.addEventListener('change', function () { setMuted(muteBox.checked); });
+
+  /* Transport. The native <audio> controls were removed: they duplicated the
+     mute this panel already has, and their volume slider could only ever cut
+     below the source level, which is the opposite of what a quiet room mic
+     needs. Play/pause is the one thing they offered that this panel did not. */
+  var toggleBtn = document.getElementById('audioToggle');
+  var iconEl    = document.getElementById('audioIcon');
+  var PAUSE_ICON = '<rect x="1" y="1" width="3.4" height="11" rx="1"></rect>'
+                 + '<rect x="7.6" y="1" width="3.4" height="11" rx="1"></rect>';
+  var PLAY_ICON  = '<path d="M2 1.2 11 6.5 2 11.8Z"></path>';
+
+  function paintTransport() {
+    if (iconEl) iconEl.innerHTML = audio.paused ? PLAY_ICON : PAUSE_ICON;
+    indicator(document.getElementById('indMute'), muteBox.checked || audio.paused);
+  }
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function () {
+      if (audio.paused) {
+        audio.play().catch(function () { setAudioState('Tap to enable'); });
+      } else {
+        audio.pause();
+      }
+    });
+  }
+  audio.addEventListener('play',  paintTransport);
+  audio.addEventListener('pause', paintTransport);
+  muteBox.addEventListener('change', paintTransport);
+  paintTransport();
 
   audio.addEventListener('playing', function () {
     stage(hlsLed, 'ok');
