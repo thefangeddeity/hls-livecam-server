@@ -15,7 +15,6 @@ MACOS="$CONTENTS/MacOS"
 VERSION="$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo unknown)"
 BUILD_STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
 GIT_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-GIT_DIRTY="$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
 
 # A version is only meaningful if someone else can check out the thing it
 # names. Refuse to package a tree whose contents exist nowhere but this disk:
@@ -264,7 +263,7 @@ ln -s /Applications "$STAGE/Applications"
 
 cat > "$STAGE/README.txt" <<README
 HLS Livecam ${VERSION}
-Build ${BUILD_STAMP}  commit ${GIT_COMMIT}$([[ "$GIT_DIRTY" != "0" ]] && echo " (+${GIT_DIRTY} uncommitted)")
+Build ${BUILD_STAMP}  commit ${GIT_COMMIT}$([[ "$BUILD_TRUST" != "release" ]] && echo "  [UNTRACKED BUILD]")
 
 SETUP
   1. Drag HLS Livecam.app to Applications.
@@ -289,7 +288,8 @@ version=${VERSION}
 build=${BUILD_STAMP}
 commit=${GIT_COMMIT}
 trust=${BUILD_TRUST}
-uncommitted_files=${GIT_DIRTY}
+modified_tracked_files=${GIT_MODIFIED}
+untracked_shipped_files=${SHIPPED_UNTRACKED:-none}
 built_by=$(whoami)@$(hostname -s)
 INFO
 
