@@ -6,6 +6,7 @@ __pycache__/
 # Runtime state (generated)
 state/*.pid
 state/logs/
+state/enabled
 state/mediamtx.yml
 state/dark.png
 state/dark_orig.png
@@ -20,6 +21,14 @@ web/index.html
 
 # Large vendored binary (re-downloadable)
 vendor/mediamtx
+
+# Packaged DMGs -- rebuildable from scripts/build-macos-dmg.sh, ~600 MB each
+# because they carry the whole venv. These must never reach the remote.
+dist/
+
+# Ad-hoc backups taken before risky refactors
+.packaging-backup/
+.pre-combined-av-backup-*/
 
 # macOS
 .DS_Store
