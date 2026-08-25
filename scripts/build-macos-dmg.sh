@@ -26,12 +26,26 @@ GIT_DIRTY="$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
 # ALLOW_DIRTY_BUILD=1 overrides for local iteration. The label is marked so an
 # override can never be mistaken for a release.
 PUSHED="$(git -C "$ROOT" branch -r --contains HEAD 2>/dev/null | tr -d ' ' | paste -sd, -)"
+
+# Modified tracked files always matter. Untracked files matter only when they
+# are inside a directory that gets copied into the bundle -- an untracked file
+# under bin/ is shipped by the ditto below and exists in no commit, while a
+# stray directory elsewhere in the checkout affects nothing. Counting all
+# untracked files instead would block builds over scratch files that never
+# leave the working tree.
+GIT_MODIFIED="$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null | wc -l | tr -d ' ')"
+SHIPPED_UNTRACKED="$(git -C "$ROOT" ls-files --others --exclude-standard \
+  -- bin gui web vendor 2>/dev/null | paste -sd' ' -)"
 BUILD_TRUST="release"
 
-if [[ "$GIT_DIRTY" != "0" || -z "$PUSHED" ]]; then
+if [[ "$GIT_MODIFIED" != "0" || -n "$SHIPPED_UNTRACKED" || -z "$PUSHED" ]]; then
   BUILD_TRUST="untracked"
-  [[ "$GIT_DIRTY" != "0" ]] && echo "  working tree has ${GIT_DIRTY} uncommitted file(s)" >&2
-  [[ -z "$PUSHED" ]]        && echo "  HEAD (${GIT_COMMIT}) is not on any remote branch" >&2
+  [[ "$GIT_MODIFIED" != "0" ]] && \
+    echo "  ${GIT_MODIFIED} modified tracked file(s)" >&2
+  [[ -n "$SHIPPED_UNTRACKED" ]] && \
+    echo "  untracked file(s) that would ship: ${SHIPPED_UNTRACKED}" >&2
+  [[ -z "$PUSHED" ]] && \
+    echo "  HEAD (${GIT_COMMIT}) is not on any remote branch" >&2
   if [[ "${ALLOW_DIRTY_BUILD:-0}" != "1" ]]; then
     echo "ERROR: refusing to build a DMG that cannot be traced to a pushed commit." >&2
     echo "       Commit and push, or re-run with ALLOW_DIRTY_BUILD=1 to override." >&2

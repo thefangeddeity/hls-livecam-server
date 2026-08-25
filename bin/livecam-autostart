@@ -1,0 +1,57 @@
+#!/bin/bash
+set -u
+
+APP="/Applications/HLS Livecam.app"
+RUNTIME="$APP/Contents/Resources/app"
+LIVE="$RUNTIME/bin/livecam"
+STATE="$HOME/Library/Application Support/HLS Livecam/state"
+MMTX_PID="$STATE/mediamtx.pid"
+API_PID="$STATE/broadcast-api.pid"
+
+LOCK_DIR="$STATE/autostart.lock"
+LOCK_PID="$LOCK_DIR/pid"
+
+# Atomic mkdir gives us a process-independent singleton lock on macOS.
+# If the recorded process is dead, the lock is stale and may be reclaimed.
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    if [ -f "$LOCK_PID" ]; then
+        OLD_PID="$(cat "$LOCK_PID" 2>/dev/null || true)"
+        if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+            exit 0
+        fi
+    fi
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" || exit 0
+fi
+
+echo "$$" > "$LOCK_PID"
+
+cleanup_lock() {
+    rm -rf "$LOCK_DIR"
+}
+trap cleanup_lock EXIT INT TERM HUP
+
+log() {
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+}
+
+pid_alive() {
+    local f="$1"
+    [ -f "$f" ] || return 1
+    local p
+    p="$(cat "$f" 2>/dev/null || true)"
+    [ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+log "autostart supervisor starting"
+
+"$LIVE" start
+
+while :; do
+    sleep 2
+
+    if ! pid_alive "$MMTX_PID" || ! pid_alive "$API_PID"; then
+        log "backend component disappeared; restarting livecam"
+        "$LIVE" start || true
+    fi
+done
