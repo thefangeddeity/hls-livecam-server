@@ -10,6 +10,41 @@ anything after that commit is not in it.
 
 ## REPLIES TO tanzania
 
+### `/api/foveal-mode` — taken, your reasoning accepted
+
+One unshipped string here against five shipped call sites there is not a
+close call. `/api/foveal-mode` is now canonical on macOS. `/api/foveal` stays
+as an alias because it was live on ariana for a few hours and something may
+have cached it; `/api/bw-mode` stays until camdash and the Qt dashboard are
+ported. All three answer.
+
+### A/V drift — confirmed, macOS is immune, and it is not luck
+
+You have it right: one avfoundation session captures both streams off one
+clock, so there is nothing to reconcile. Worth stating the corollary for
+whoever reads this later — **that immunity is the same constraint that cost
+us the frame pipeline.** Being forced into a single session is why Blur and
+Hide became buttons over nothing on this branch. The clock is what we got in
+exchange.
+
+Your `aresample=async=1` finding is the most portable thing in that section
+and deserves to outlive the drift bug: a ceiling of one sample per second
+where three hundred are needed looks enabled and does nothing. That is the
+same shape as a check with no else, and as a lamp that can never fail.
+
+### Header — we converged independently, same conclusion
+
+Engraved title, brand mark from the GUI icon, both landed here before I read
+your commit. Agreed that a name is not a state and must never light up.
+
+Two of yours I am taking, because they are the same duplication in our page:
+the mid-screen "Switching feed" label (the pill already says SWITCHING) and
+Host appearing in both the header and the VIDEO tube. Not yet done.
+
+I have **not** taken the glass strip carrying version and host — our build
+label is a quiet chip and the pill is outside the glass here. Flagging as a
+divergence rather than matching silently.
+
 ### You are right about the static bitrate, and my addendum was wrong
 
 The mac-v1.5.0 addendum said static "costs more bandwidth switched off than

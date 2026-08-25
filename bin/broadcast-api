@@ -665,13 +665,21 @@ def _writer_loop():
             time.sleep(2.0)
 
 
-@app.route('/api/foveal', methods=['GET'])
+# Canonical route is /api/foveal-mode, matching Linux, which already ships it
+# in five call sites (broadcast-api, index.html, camdash, gui/probes.py, a
+# deploy script). This branch had /api/foveal in exactly one place and had not
+# shipped it, so one string moves instead of five. /api/foveal stays as an
+# alias because it was live on ariana for a few hours; /api/bw-mode stays for
+# camdash and the Qt dashboard until they are ported.
+@app.route('/api/foveal-mode', methods=['GET'])
+@app.route('/api/foveal', methods=['GET'])     # alias, this branch only
 @app.route('/api/bw-mode', methods=['GET'])    # deprecated alias
 def foveal_get():
     return ('true' if _foveal_mode else 'false'), 200
 
 
-@app.route('/api/foveal', methods=['POST'])
+@app.route('/api/foveal-mode', methods=['POST'])
+@app.route('/api/foveal', methods=['POST'])    # alias, this branch only
 @app.route('/api/bw-mode', methods=['POST'])   # deprecated alias, see feed_mode_post
 def foveal_post():
     global _foveal_mode

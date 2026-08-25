@@ -408,6 +408,17 @@
     body { overflow: auto; height: auto; min-height: 100dvh; }
     header { padding: 10px 16px; }
     .main { flex-direction: column; padding: 0; gap: 0; flex: none; }
+
+    /* The column stops growing here -- .main is a column on mobile, so a
+       flex:1 child would stretch to fill the viewport instead of sitting at
+       the feed's own height. */
+    .video-col { flex: none; width: 100%; gap: 0; }
+
+    /* .main drops its padding on mobile, so the footer supplies its own or
+       it runs into the screen edges. It stays directly under the picture,
+       matching desktop and matching what the line is for. */
+    .page-foot { padding: 10px 16px 2px; }
+
     .video-wrap { flex: none; width: 100%; aspect-ratio: 16 / 9; border-radius: 0; box-shadow: none; }
     video { object-fit: contain; }
     .sidebar {
@@ -1740,7 +1751,8 @@
   // the same shape of thing: a modifier on the processing mode beside it.
   // Both ship inert until the CV port lands, so nothing polls -- a control
   // that cannot be changed has no state worth fetching every three seconds.
-  // The endpoint is /api/foveal and is ready when the port is.
+  // The endpoint is /api/foveal-mode (fleet-standard, matching Linux) and is
+  // ready when the port is.
   var fovealCheck = document.getElementById('fovealCheck');
 
   var lockCheck = document.getElementById('lockCheck');
