@@ -1386,8 +1386,16 @@
           var wasHidden = (feedMode === 'hide');
           feedMode = mode;
           updateFeedButtons();
-          /* Another viewer (or camdash) changed it. Animate only when the
-             on/off state actually flipped. */
+          /* Another viewer (or camdash) changed it. The publisher restarts
+             server-side either way, so this page's stream drops and hls.js
+             errors -- exactly as it does for a local switch. It needs the
+             same suppression window, or a mode change made elsewhere raises
+             "Signal lost" here while the feed is merely changing.
+             (tanzania's PENDING flagged the general shape of this: any viewer
+             that reloads or loses its player on a mode change has it, not
+             only one that initiated the change.) */
+          beginFeedSwitch();
+          setTimeout(endFeedSwitch, HOLD_SECONDS * 1000);
           if (wasHidden !== (mode === 'hide')) applyFeedModeVisual(mode, true);
         }
         if (feedModeFirstPoll) {
