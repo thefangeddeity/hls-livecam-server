@@ -287,7 +287,11 @@
 
   /* ── DESKTOP SIDEBAR ── */
   .sidebar {
-    width: 260px;
+    /* 260px was sized for a hostname. A tailscale address is 15 characters of
+       tabular mono and did not fit, and shrinking type to make it fit was
+       treating the symptom -- the housing is the thing with slack in it, and
+       the feed beside it loses 32px it will not miss. */
+    width: 292px;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -446,12 +450,31 @@
     }
     .sidebar-scroll { overflow-y: visible; }
 
-    /* The header cannot carry brand, version and status on a phone -- the
-       name was wrapping onto two lines to make room. The status pill goes,
-       because it is the one thing already reported elsewhere on the page:
-       the VIDEO tube carries a LIVE segment and an HLS lamp, both visible
-       without scrolling. The version strip stays, since nothing else shows
-       which build you are looking at. */
+    /* ── Why the LIVE pill is desktop-only ──────────────────────────
+     *
+     * On a desktop the header is a status bar: the feed and the whole panel
+     * are on screen at once, so a pill that tracks the player belongs at the
+     * top where the eye returns between glances, and it is the only element
+     * that reports the stream itself rather than a stage of the pipeline. It
+     * costs nothing there -- the header has width to spare.
+     *
+     * On a phone the same header has to carry the brand, the version strip
+     * and the pill in about 390px, and it could not: the product name was
+     * wrapping onto two lines to make room. Something had to go, and the
+     * pill is the only one of the three that is already reported elsewhere
+     * on the same screen -- the VIDEO tube carries a LIVE segment and an HLS
+     * lamp, both above the fold. The version strip has no such duplicate:
+     * nothing else on the page says which build you are looking at.
+     *
+     * Implemented by hiding the container, not the element, and only inside
+     * this breakpoint: `header .status-bar { display: none }`. The pill keeps
+     * its text, which videoHlsState() reads and a MutationObserver watches,
+     * so the tube's LIVE segment and the HLS lamp go on tracking the player
+     * on mobile exactly as on desktop. Removing the element instead would
+     * have silently stopped both, and the symptom -- a dark HLS lamp on
+     * phones only -- would have looked like a pipeline fault rather than a
+     * layout change.
+     */
     header .status-bar { display: none; }
     .brand-name { white-space: nowrap; }
     header { gap: 10px; }
@@ -697,11 +720,6 @@
   }
   .vunit { font-size: 8px; letter-spacing: .1em; opacity: .7; margin-left: 3px; }
 
-  /* An address is the longest thing either tube shows. It takes a step down
-     so it fits without shrinking every other reading to match. The ghost
-     carries the same class or the unlit segments drift off the lit ones. */
-  .vrow.vrow-wide .vghost,
-  .vrow.vrow-wide .vlit { font-size: 11px; letter-spacing: .03em; }
 
   .vind {
     display: flex; gap: 6px; margin-top: 6px; padding-top: 5px;
@@ -1128,7 +1146,7 @@
 
         <div class="split">
           <div class="vfd">
-            <div class="vrow vrow-wide">
+            <div class="vrow">
               <span class="vlab">IP</span>
               <span class="vval"><span class="vghost">888.888.888.888</span><span class="vlit" id="hostVal"></span></span>
             </div>
