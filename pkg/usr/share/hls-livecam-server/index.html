@@ -1501,11 +1501,11 @@
       ? '<path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/>'
       : '<rect x="1" y="1" width="3.4" height="10" rx="1"/><rect x="6.6" y="1" width="3.4" height="10" rx="1"/>';
     var lamp = document.getElementById('listenLamp');
-    // Lit means sound is actually reaching the listener: playing, not
-    // muted, and not turned all the way down. A slider at zero is silence
-    // by another route, and the lamp would be lying if it stayed green.
-    if (lamp) lamp.className = 'bulb' +
-      (!roomAudio.paused && !roomAudio.muted && roomAudio.volume > 0 ? ' on' : '');
+    // Lit means THE TRANSPORT IS RUNNING. Nothing else. It does not
+    // consult mute or volume: those are the mute key's business and they
+    // have their own lamp and their own segment. A lamp that answered two
+    // questions would go dark on a press that never touched it.
+    if (lamp) lamp.className = 'bulb' + (roomAudio.paused ? '' : ' on');
     // MUTE names the state of the audio PATH: silenced, by either route --
     // the mute key or a slider dragged to zero. It is deliberately not lit
     // by 'paused'. Stopped and muted are different things and the panel
@@ -1513,18 +1513,12 @@
     // anything is playing. Lighting MUTE for a stopped stream would make
     // the segment mean "no sound right now", which is what the lamp says,
     // and leave nothing saying whether the mute key is engaged.
-    // STOP and MUTE are different facts and each gets its own segment.
-    // STOPPED is "the transport is not running" -- nothing is being fetched
-    // or decoded. MUTE is "the path is silenced" -- audio is flowing and
-    // being thrown away at the last step, by the key or by a slider at
-    // zero. Folding them together, which is what this did before, loses the
-    // one thing the operator actually needs to know: whether pressing play
-    // will help, or whether it is already playing and you cannot hear it.
+    // STOP belongs to the transport: nothing is being fetched or decoded.
+    // MUTE belongs to the mute key and is painted by paintMute(). Keeping
+    // each segment with the control that owns it is what makes the two
+    // independent -- one function, one stage, no reaching across.
     var iStop = document.getElementById('indStop');
     if (iStop) iStop.className = roomAudio.paused ? 'on' : '';
-    var iMute = document.getElementById('indMute');
-    if (iMute) iMute.className =
-      (roomAudio.muted || roomAudio.volume === 0) ? 'on' : '';
     paintLamps();
   }
 
@@ -1544,16 +1538,21 @@
     if (!v) return;
     roomAudio.volume = Math.max(0, Math.min(1, v.value / 100));
     try { localStorage.setItem('livecamVolume', v.value); } catch (e) {}
-    paintTransport();
+    paintMute();   // volume is audibility, not transport
   }
 
+  // Mute only. It does not call paintTransport(): pressing MUTE has no
+  // business changing the play key's appearance, and the volume slider
+  // shares this because a slider at zero is silence by another route.
   function paintMute() {
     var lamp = document.getElementById('muteLamp');
     if (lamp) lamp.className = 'bulb' + (roomAudio.muted ? ' on' : '');
-    paintTransport();
+    var iMute = document.getElementById('indMute');
+    if (iMute) iMute.className =
+      (roomAudio.muted || roomAudio.volume === 0) ? 'on' : '';
   }
 
-  function paintListen() { paintTransport(); }
+  function paintListen() { paintTransport(); paintMute(); }
   try { roomAudio.muted = localStorage.getItem('livecamMuted') !== '0'; } catch (e) { roomAudio.muted = true; }
   try {
     var _sv = localStorage.getItem('livecamVolume');
