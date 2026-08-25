@@ -81,6 +81,31 @@ ditto "$ROOT/bin" "$RUNTIME/bin"
 ditto "$ROOT/gui" "$RUNTIME/gui"
 ditto "$ROOT/web" "$RUNTIME/web"
 ditto "$ROOT/vendor" "$RUNTIME/vendor"
+
+# Render the viewer from its template rather than shipping whatever
+# web/index.html happens to be sitting in the build machine's working tree.
+# Nothing in the installed bundle runs livecam-setup, so the page copied here
+# is the page the operator gets, permanently. Rendering makes the shipped
+# viewer a function of committed source instead of local disk state.
+BUILD_HLS_PORT="$(grep -E '^HLS_PORT=' "$ROOT/config.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')"
+[[ -n "$BUILD_HLS_PORT" ]] || BUILD_HLS_PORT=8888
+sed "s|@HLS_PORT@|${BUILD_HLS_PORT}|g" \
+  "$ROOT/web/index.template.html" > "$RUNTIME/web/index.html"
+
+# An unsubstituted placeholder would ship a viewer that cannot reach the
+# stream, and it is invisible until someone opens the page.
+if grep -q '@[A-Z_]*@' "$RUNTIME/web/index.html"; then
+  echo "ERROR: unsubstituted placeholder in rendered index.html" >&2
+  grep -n '@[A-Z_]*@' "$RUNTIME/web/index.html" >&2
+  exit 1
+fi
+
+# The audio panel has been lost once already by regenerating the viewer from a
+# template that never carried it. Fail the build rather than ship a silent one.
+if ! grep -q 'roomAudioPlayer' "$RUNTIME/web/index.html"; then
+  echo "ERROR: rendered viewer has no audio player" >&2
+  exit 1
+fi
 # Dereference while copying the venv. It contains an absolute symlink into
 # Homebrew (.venv/bin/python3.14 -> /usr/local/opt/...), and codesign refuses
 # to seal a bundle containing a link pointing outside it: "invalid destination

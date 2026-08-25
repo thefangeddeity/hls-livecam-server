@@ -16,7 +16,14 @@ state/msg_lock
 state/camdash-feed.state
 state/cell_aspect
 
-# Rendered from template by setup
+# Rendered from web/index.template.html by livecam-setup.
+#
+# This rule has no effect: index.html was committed before it was added, and
+# .gitignore does not apply to tracked files. It is kept only so the intent is
+# on record -- do NOT `git rm --cached` it to "make the ignore work". The
+# template is the source of truth; edit that and re-render. Keeping the
+# rendered file tracked also means its diffs stay visible in review, which is
+# how the audio panel was found missing from the template in the first place.
 web/index.html
 
 # Large vendored binary (re-downloadable)
