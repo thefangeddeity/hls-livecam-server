@@ -146,6 +146,11 @@ def _set_capture_state(state, detail=''):
 # ── Mode state ───────────────────────────────────────────────────
 _mode      = 'show'
 _mode_lock = threading.Lock()
+# Bumped on every mode change. The writer loop captures it when it spawns a
+# publisher and tears that publisher down as soon as the value moves, which is
+# how a mode change reaches the encoder at all -- the mode decides which
+# devices ffmpeg opens, so it cannot be applied to a running process.
+_mode_generation = 0
 # Foveal layer: a modifier on CV mode, and the successor to B&W Blur's flag.
 # Renamed rather than deleted so the control, its endpoint and its state keep
 # the same shape when the CV port lands.
@@ -311,7 +316,7 @@ def _drain_loop(cam_holder):
 
 
 
-def _start_combined_av_publisher():
+def _start_combined_av_publisher(mode='show'):
     """
     One AVFoundation session for camera + microphone.
 
@@ -364,20 +369,42 @@ def _start_combined_av_publisher():
                 audio_filter = ['-af',
                                 f'volume={gain_db}dB,alimiter=limit=0.95']
 
+    # Hidden means the devices are not opened at all, not that something is
+    # drawn over the picture. A client-side overlay hides the feed in one
+    # browser tab while the real stream stays available to every other viewer,
+    # to camdash, and to anyone who requests the HLS URL directly -- which is
+    # the opposite of what a control called Hide should do.
+    #
+    # Publishing generated black instead means the camera is genuinely closed:
+    # its indicator light goes out, which no overlay can achieve, and the
+    # microphone is closed with it. Black also costs almost nothing to encode,
+    # unlike static, which is incompressible by construction.
+    if mode == 'hide':
+        source = [
+            '-f', 'lavfi',
+            '-i', f'color=c=black:s={FRAME_W}x{FRAME_H}:r={fr}',
+            '-f', 'lavfi',
+            '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+        ]
+    else:
+        source = [
+            '-f', 'avfoundation',
+            '-framerate', str(fr),
+            '-video_size', f'{FRAME_W}x{FRAME_H}',
+            '-pixel_format', 'uyvy422',
+            '-use_wallclock_as_timestamps', '1',
+            '-i', f'{video_idx}:{audio_idx}',
+            '-map', '0:v:0',
+            '-map', '0:a:0',
+        ]
+
     cmd = [
         FFMPEG,
         '-hide_banner',
         '-loglevel', 'error',
-
-        '-f', 'avfoundation',
-        '-framerate', str(fr),
-        '-video_size', f'{FRAME_W}x{FRAME_H}',
-        '-pixel_format', 'uyvy422',
-        '-use_wallclock_as_timestamps', '1',
-        '-i', f'{video_idx}:{audio_idx}',
-
-        '-map', '0:v:0',
-        '-map', '0:a:0',
+        *source,
 
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
@@ -392,7 +419,7 @@ def _start_combined_av_publisher():
         '-b:a', '96k',
         '-ar', '48000',
         '-ac', '2',
-        *audio_filter,
+        *(audio_filter if mode != 'hide' else []),
 
         '-rtsp_transport', 'tcp',
         '-f', 'rtsp',
@@ -493,7 +520,10 @@ def _writer_loop():
 
     while True:
         try:
-            proc = _start_combined_av_publisher()
+            with _mode_lock:
+                spawn_mode = _mode
+                spawn_gen  = _mode_generation
+            proc = _start_combined_av_publisher(spawn_mode)
             _cam_proc = proc
             _pub_proc = proc
 
@@ -566,7 +596,19 @@ def _writer_loop():
                 file=sys.stderr, flush=True,
             )
 
-            rc = proc.wait()
+            # Poll rather than block: a plain wait() cannot notice that the
+            # mode moved, and the mode is only expressible by restarting
+            # ffmpeg with different inputs.
+            while proc.poll() is None:
+                with _mode_lock:
+                    stale = (_mode_generation != spawn_gen)
+                if stale:
+                    print(f'broadcast-api: feed mode changed to {_mode}; '
+                          f'restarting publisher', file=sys.stderr, flush=True)
+                    _kill_hard(proc)
+                    break
+                time.sleep(0.25)
+            rc = proc.returncode
 
             _set_capture_state('fail', f'capture exited ({rc}); restarting')
             print(
@@ -624,8 +666,12 @@ def feed_mode_post():
         new_mode = 'cv'
     if new_mode not in ('show', 'cv', 'hide'):
         abort(400)
+    global _mode_generation
     with _mode_lock:
+        changed = (new_mode != _mode)
         _mode = new_mode
+        if changed:
+            _mode_generation += 1
     return new_mode, 200
 
 
@@ -770,9 +816,22 @@ def pipeline():
     if capture != 'ok':
         audio_rate = audio_ch = audio_kbps = None
 
+    # While hidden, ffmpeg is publishing generated black and silence -- the
+    # camera and microphone are closed. Reporting the capture stage as ok
+    # would be true of the process and false of the devices, which is the
+    # distinction these lamps exist to make. Report it as off, and drop the
+    # audio figures: nothing from the room is being encoded.
+    with _mode_lock:
+        mode_now = _mode
+    if mode_now == 'hide':
+        capture = 'off'
+        detail = 'feed hidden; camera and microphone closed'
+        audio_rate = audio_ch = audio_kbps = None
+
     data = {
         # The microphone opened iff the capture session did; they are one
         # AVFoundation session and audio is a mapped output stream.
+        'mode':     mode_now,
         'mic':      capture,
         'audio_rate_hz':  audio_rate,
         'audio_channels': audio_ch,

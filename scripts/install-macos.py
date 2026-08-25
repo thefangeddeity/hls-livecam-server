@@ -1,5 +1,7 @@
 from pathlib import Path
 import shutil
+import re
+import sys
 import subprocess
 import tempfile
 import os
@@ -207,6 +209,47 @@ for name in ["bin", "gui", "web", "vendor"]:
 src = ROOT / ".venv"
 dst = RUNTIME / ".venv"
 shutil.copytree(src, dst, symlinks=False)
+
+# Render the viewer from its template rather than shipping whatever
+# web/index.html happens to be in the working tree.
+#
+# The copytree above takes web/ wholesale, and index.html is a GENERATED file
+# -- so an installer run would bake in whatever stale render was lying around
+# and overwrite a newer viewer on the target. The DMG build already renders;
+# this path did not, which meant the two installers could disagree about what
+# the viewer is. Same substitution, same guards.
+tpl = ROOT / "web" / "index.template.html"
+if tpl.exists():
+    hls_port = "8888"
+    cfg = ROOT / "config.env"
+    if cfg.exists():
+        for line in cfg.read_text().splitlines():
+            if line.startswith("HLS_PORT="):
+                hls_port = line.split("=", 1)[1].split("#")[0].strip() or hls_port
+
+    label = "unknown"
+    try:
+        out = subprocess.run(["git", "-C", str(ROOT), "describe", "--tags", "--always"],
+                             capture_output=True, text=True, timeout=5)
+        if out.returncode == 0:
+            label = out.stdout.strip() or label
+    except Exception:
+        pass
+
+    rendered = (tpl.read_text()
+                .replace("@HLS_PORT@", hls_port)
+                .replace("@VERSION@", label)
+                .replace("@BUILD_LABEL@", label))
+
+    # Both are invisible until someone opens the page, so fail here instead.
+    leftover = re.findall(r"@[A-Z_]+@", rendered)
+    if leftover:
+        sys.exit(f"ERROR: unsubstituted placeholder(s) in index.html: {sorted(set(leftover))}")
+    if "roomAudioPlayer" not in rendered:
+        sys.exit("ERROR: rendered viewer has no audio player")
+
+    (RUNTIME / "web" / "index.html").write_text(rendered)
+    print(f"      viewer rendered from template ({label}, HLS port {hls_port})")
 
 # Copy config template if present.
 if (ROOT / "config.env.example").exists():
