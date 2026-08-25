@@ -26,6 +26,23 @@ STATE_DIR = os.path.join(ROOT, "state")
 CONFIG    = os.path.join(ROOT, "config.env")
 os.makedirs(STATE_DIR, exist_ok=True)
 
+# Capture ffmpeg's stderr to a real file. It used to go to DEVNULL, which is
+# why a capture wedged inside avformat_open_input left no trace anywhere: the
+# process stayed alive, the pidfile stayed valid, and every viewer got a 404
+# off a stack that looked healthy (observed: 31 minutes, silently).
+# When installed, ROOT is inside the read-only .app bundle -- the state dir
+# humans actually read (and the one livecam writes broadcast-api.log and
+# mediamtx.log into) lives in Application Support. Follow it there.
+_IN_BUNDLE = ".app/Contents/Resources/" in BIN_DIR
+LOG_DIR = (os.path.expanduser("~/Library/Application Support/HLS Livecam/state/logs")
+           if _IN_BUNDLE else os.path.join(STATE_DIR, "logs"))
+FFMPEG_LOG     = os.path.join(LOG_DIR, "capture-ffmpeg.log")
+FFMPEG_LOG_MAX = 2 * 1024 * 1024
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+except Exception:
+    pass
+
 sys.path.insert(0, BIN_DIR)
 import block_art as _ba
 
@@ -44,14 +61,29 @@ GOL_COLS       = 80
 # started by the login agent rather than by hand, killing capture outright while
 # the Flask side keeps serving happily (observed in broadcast-api.log). Resolve
 # once, at import, against PATH and then the known install locations.
+# Camera helper inside the installed macOS application bundle.
+_CAMERA_HELPER = os.path.normpath(os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "Helpers",
+    "HLS Livecam Camera.app",
+    "Contents",
+    "MacOS",
+    "camera-capture",
+))
+
 FFMPEG = (
     shutil.which('ffmpeg')
-    or next((p for p in ('/usr/local/bin/ffmpeg',      # Homebrew, Intel
-                         '/opt/homebrew/bin/ffmpeg',   # Homebrew, Apple Silicon
+    or next((p for p in ('/usr/local/bin/ffmpeg',
+                         '/opt/homebrew/bin/ffmpeg',
                          '/usr/bin/ffmpeg')
              if os.path.exists(p)), None)
-    or 'ffmpeg'   # last resort: fail loudly the same way it used to
+    or 'ffmpeg'
 )
+
+# Same PATH hazard as ffmpeg above: under launchd, /usr/sbin is on the default
+# PATH, but resolve explicitly rather than betting the watchdog on it.
+LSOF = shutil.which('lsof') or '/usr/sbin/lsof'
 
 app = Flask(__name__)
 
@@ -209,7 +241,15 @@ def _resolve_avf_index():
 
 
 def _start_cam_reader():
-    """Reader ffmpeg: captures the webcam via avfoundation, emits raw RGB."""
+    """Capture raw RGB frames from the macOS camera helper when installed."""
+    if os.path.exists(_CAMERA_HELPER):
+        return subprocess.Popen(
+            [_CAMERA_HELPER],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+
     idx = _resolve_avf_index()
     fr  = int(_cfg.get('FRAMERATE', 15))
     return subprocess.Popen([
@@ -246,153 +286,239 @@ def _drain_loop(cam_holder):
             time.sleep(1.0)
 
 
+
+def _start_combined_av_publisher():
+    """
+    One AVFoundation session for camera + microphone.
+
+    The resulting RTSP track contains:
+      video: H.264 1280x720 @ configured FPS
+      audio: AAC 48 kHz stereo @ 96 kb/s
+
+    This deliberately bypasses the old Python frame-processing writer
+    path. The API server remains alive for control/message endpoints,
+    while media capture/publishing is handled by this single process.
+    """
+    fr = int(_cfg.get('FRAMERATE', 15))
+    video_idx = _resolve_avf_index()
+    audio_idx = str(
+        _cfg.get('AUDIO_DEVICE', 'Built-in Microphone')
+    ).strip() or 'Built-in Microphone'
+
+    rtsp_port = str(_cfg.get('RTSP_PORT', '8554')).strip() or '8554'
+    rtsp_url = f'rtsp://127.0.0.1:{rtsp_port}/cam'
+
+    cmd = [
+        FFMPEG,
+        '-hide_banner',
+        '-loglevel', 'error',
+
+        '-f', 'avfoundation',
+        '-framerate', str(fr),
+        '-video_size', f'{FRAME_W}x{FRAME_H}',
+        '-pixel_format', 'uyvy422',
+        '-use_wallclock_as_timestamps', '1',
+        '-i', f'{video_idx}:{audio_idx}',
+
+        '-map', '0:v:0',
+        '-map', '0:a:0',
+
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-vf', 'format=yuv420p',
+        '-profile:v', 'high',
+        '-level', '4.0',
+        '-b:v', '1500k',
+        '-g', str(fr),
+
+        '-c:a', 'aac',
+        '-b:a', '96k',
+        '-ar', '48000',
+        '-ac', '2',
+
+        '-rtsp_transport', 'tcp',
+        '-f', 'rtsp',
+        rtsp_url,
+    ]
+
+    print(
+        'broadcast-api: combined AV capture: '
+        f'video={video_idx} audio={audio_idx} -> {rtsp_url}',
+        file=sys.stderr,
+        flush=True,
+    )
+
+    return subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=_open_ffmpeg_log(),
+    )
+
+
+def _open_ffmpeg_log():
+    """Append-mode handle for ffmpeg's stderr, rotated one generation deep.
+
+    Checked at launch rather than on a timer: a crash loop relaunches often,
+    which is exactly the case that would otherwise run the disk down. Falls
+    back to DEVNULL rather than taking the capture down with it -- a missing
+    log is a degraded diagnosis, an exception here is a dead stream.
+    """
+    try:
+        if os.path.exists(FFMPEG_LOG) and os.path.getsize(FFMPEG_LOG) > FFMPEG_LOG_MAX:
+            os.replace(FFMPEG_LOG, FFMPEG_LOG + '.1')
+        return open(FFMPEG_LOG, 'ab', buffering=0)
+    except Exception:
+        return subprocess.DEVNULL
+
+
+def _has_rtsp_connection(pid, port):
+    """True when `pid` holds an ESTABLISHED TCP socket to the local RTSP port.
+
+    This is the signal that ffmpeg got past opening its AVFoundation input and
+    actually reached mediamtx. A hung capture never opens any socket at all.
+    """
+    try:
+        out = subprocess.run(
+            [LSOF, '-a', '-p', str(pid), '-i', 'TCP', '-n', '-P'],
+            capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return False
+    needle = f':{port}'
+    return any('ESTABLISHED' in ln and needle in ln for ln in out.splitlines())
+
+
+def _kill_hard(proc):
+    """Terminate, then kill. A capture deadlocked inside avformat_open_input is
+    blocked in a mach_msg syscall and will not act on SIGTERM, so don't wait on
+    it politely -- give it a second, then SIGKILL.
+
+    Written out rather than looped over (proc.terminate, proc.kill): comparing a
+    bound method with `is` builds a fresh object every access and never matches,
+    which silently stretched the SIGTERM grace to the SIGKILL timeout.
+    """
+    try:
+        proc.terminate()
+    except Exception:
+        return
+    try:
+        proc.wait(timeout=1.0)
+        return
+    except Exception:
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=3.0)
+    except Exception:
+        pass
+
+
+# Startup-race watchdog tuning. CONNECT_TIMEOUT is a startup budget, not a
+# steady-state poll: a healthy capture connects in well under a second.
+CONNECT_TIMEOUT  = 5.0
+CONNECT_POLL     = 0.5
+MAX_FAST_RETRIES = 3
+BACKOFF_SECONDS  = 15.0
+
+
 def _writer_loop():
-    global _hide_frame, _cam_proc, _pub_proc
-    fr    = int(_cfg.get('FRAMERATE', 15))
-    delay = 1.0 / fr
+    """
+    Combined macOS A/V publisher.
 
-    cam_holder = [_start_cam_reader()]
-    _cam_proc = cam_holder[0]
-    threading.Thread(target=_drain_loop, args=(cam_holder,), daemon=True).start()
+    One AVFoundation capture session owns both camera and microphone.
+    There is no Python raw-video pipe, no second AVFoundation client,
+    and no audio publisher competing for a second capture session.
+    """
+    global _cam_proc, _pub_proc
 
-    pub_holder = [_start_publisher()]
-    _pub_proc = pub_holder[0]
-    time.sleep(1.0)
+    failures = 0
 
-    # run-13: the exception handler below (BrokenPipeError/OSError) only
-    # covers a write() that fails outright. It does not cover a write() that
-    # BLOCKS FOREVER, which is what actually happened in the outage this
-    # fixes -- RTSP backpressure stalled the publisher's stdin without ever
-    # raising, without the process exiting, so `poll()` (the only other
-    # respawn trigger) never fired either. The writer thread just hung on one
-    # write() call permanently, silently, for 3.5 days. Python's blocking
-    # pipe write has no timeout of its own, so this watchdog is one: if no
-    # frame has written successfully in WATCHDOG_TIMEOUT seconds, kill the
-    # publisher from a second thread. That's what actually unblocks the hung
-    # write() (EPIPE once its process is gone) -- the ordinary except/respawn
-    # path then handles it exactly like any other dead publisher.
-    WATCHDOG_TIMEOUT = 5.0
-    last_write_ok = [time.monotonic()]
-
-    def _watchdog():
-        while True:
-            time.sleep(1.0)
-            if time.monotonic() - last_write_ok[0] <= WATCHDOG_TIMEOUT:
-                continue
-
-            # A stalled write is only worth killing the publisher over when we
-            # actually HAVE a frame to send it. If the camera reader has never
-            # produced one (_cam_frame is None), the publisher is innocent --
-            # the input side is what's broken. Killing it here would respawn
-            # ffmpeg every WATCHDOG_TIMEOUT seconds forever, which is exactly
-            # what happened while diagnosing the 2026-08-10 outage: a dead
-            # camera produced an endless publisher-respawn loop that burned CPU
-            # on a 2-core machine and disguised an input fault as an output
-            # fault. Leave the publisher alone and let the health signal below
-            # name the real problem instead.
-            if _cam_frame is None:
-                print('broadcast-api: no camera frames yet -- publisher idle, '
-                      'not respawning (input-side fault, not publisher)',
-                      file=sys.stderr, flush=True)
-                last_write_ok[0] = time.monotonic()
-                continue
-
-            try:
-                pub_holder[0].kill()
-            except Exception:
-                pass
-            # Reset so we don't re-kill every second while the respawned
-            # publisher is still warming up.
-            last_write_ok[0] = time.monotonic()
-
-    threading.Thread(target=_watchdog, daemon=True).start()
-
-    prev_mode = None
     while True:
-        with _mode_lock:
-            mode = _mode
-
-        # Publisher died (mediamtx restart, broken pipe) → respawn.
-        if pub_holder[0].poll() is not None:
-            pub_holder[0] = _start_publisher()
-            _pub_proc = pub_holder[0]
-            time.sleep(0.5)
-
-        frame_start = time.monotonic()
         try:
-            with _cam_frame_lock:
-                raw = _cam_frame
-            if raw is None:
-                time.sleep(delay)
+            proc = _start_combined_av_publisher()
+            _cam_proc = proc
+            _pub_proc = proc
+
+            # Startup race guard. ffmpeg's avfoundation input intermittently
+            # deadlocks in avformat_open_input when a single session opens both
+            # the camera and the microphone: the process stays alive and burns
+            # CPU, but never opens its RTSP output, so mediamtx never sees a
+            # publisher and viewers get a 404 off a stack that looks healthy
+            # from every angle -- the pidfile is valid, and the bare wait()
+            # this replaced blocked forever on a process that was never coming
+            # back. So confirm the connection actually happened. Only the
+            # startup window is polled; once connected we go back to a plain
+            # wait() for the rest of the process's life.
+            deadline  = time.monotonic() + CONNECT_TIMEOUT
+            connected = False
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break
+                if _has_rtsp_connection(proc.pid, RTSP_PORT):
+                    connected = True
+                    break
+                time.sleep(CONNECT_POLL)
+
+            if not connected:
+                failures += 1
+                if proc.poll() is None:
+                    print(
+                        f'broadcast-api: combined AV capture (pid {proc.pid}) '
+                        f'never connected to {RTSP_URL} within '
+                        f'{CONNECT_TIMEOUT:.0f}s -- hung opening the capture '
+                        f'device; killing and relaunching '
+                        f'[consecutive failures: {failures}]',
+                        file=sys.stderr, flush=True,
+                    )
+                    _kill_hard(proc)
+                else:
+                    print(
+                        f'broadcast-api: combined AV capture exited '
+                        f'({proc.returncode}) before connecting to {RTSP_URL} '
+                        f'[consecutive failures: {failures}]',
+                        file=sys.stderr, flush=True,
+                    )
+
+                if failures >= MAX_FAST_RETRIES:
+                    print(
+                        f'broadcast-api: {failures} consecutive capture '
+                        f'failures; backing off {BACKOFF_SECONDS:.0f}s. '
+                        f'ffmpeg stderr: {FFMPEG_LOG}',
+                        file=sys.stderr, flush=True,
+                    )
+                    time.sleep(BACKOFF_SECONDS)
+                else:
+                    time.sleep(1.0)
                 continue
 
-            if mode == 'show':
-                frame_arr = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
-            elif mode == 'cloak':
-                if BLUR_RENDERER == 'vector':
-                    # Vectorized path: ~5x faster, and the only one that meets the
-                    # 15fps budget. Returns an array directly -- no PNG round trip.
-                    frame_arr = (_ba.render_cloak_vec_bw if _bw_mode else _ba.render_cloak_vec)(
-                        raw, FRAME_W, FRAME_H, GOL_COLS)
-                elif _bw_mode:
-                    rendered = _png_to_raw(_ba.render_cloak_bytes_bw(raw, FRAME_W, FRAME_H, GOL_COLS))
-                    frame_arr = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3)
-                else:
-                    rendered = _png_to_raw(_ba.render_cloak_bytes(raw, FRAME_W, FRAME_H, GOL_COLS))
-                    frame_arr = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3)
-            else:  # hide
-                if prev_mode != 'hide':
-                    warped_arr = _apply_svhs_warp(np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3))
-                    rendered = _png_to_raw(_ba.render_cloak_bytes_bw(warped_arr.tobytes(), FRAME_W, FRAME_H, GOL_COLS))
-                    _hide_frame = np.frombuffer(rendered, np.uint8).reshape(FRAME_H, FRAME_W, 3).copy()
-                frame_arr = _hide_frame
-            prev_mode = mode
+            failures = 0
+            print(
+                f'broadcast-api: combined AV capture connected to {RTSP_URL} '
+                f'(pid {proc.pid})',
+                file=sys.stderr, flush=True,
+            )
 
-            try:
-                pub_holder[0].stdin.write(np.ascontiguousarray(frame_arr, np.uint8).tobytes())
-                last_write_ok[0] = time.monotonic()
-            except (BrokenPipeError, OSError):
-                # run-13: a broken pipe means the publisher's stdin is unusable,
-                # but ffmpeg does not necessarily exit when that happens -- it
-                # can sit alive with a dead pipe indefinitely. The old comment
-                # here ("loop top will respawn it next tick") was wrong: the
-                # respawn check is `pub_holder[0].poll() is not None`, which
-                # only fires on actual process exit. A live-but-broken
-                # publisher makes poll() return None forever, so the old code
-                # just re-caught this same exception on every subsequent
-                # frame, silently, forever -- this is what produced the
-                # 3.5-day family-facing outage diagnosed in run-13. Force the
-                # respawn here, at the point the failure is actually detected,
-                # instead of hoping a condition that may never become true
-                # catches it later.
-                try:
-                    pub_holder[0].kill()
-                    pub_holder[0].wait(timeout=2)
-                except Exception:
-                    pass
-                pub_holder[0] = _start_publisher()
-                _pub_proc = pub_holder[0]
-                time.sleep(0.5)
+            rc = proc.wait()
 
-        except Exception:
-            time.sleep(0.1)
-            continue
+            print(
+                f'broadcast-api: combined AV publisher exited ({rc}); '
+                'restarting',
+                file=sys.stderr,
+                flush=True,
+            )
 
-        # Frame-pace to the target rate, but never sleep a fixed amount on
-        # top of a render that already blew the budget (cloak/hide) -- that
-        # would only throttle the achievable real framerate further, on top
-        # of the wallclock-timestamp fix in _start_publisher() that already
-        # makes ffmpeg track real (not nominal) frame arrival time.
-        remaining = delay - (time.monotonic() - frame_start)
-        if remaining > 0:
-            time.sleep(remaining)
+            time.sleep(1.0)
+
+        except Exception as exc:
+            print(
+                f'broadcast-api: combined AV publisher error: {exc}',
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(2.0)
 
 
-threading.Thread(target=_writer_loop, daemon=True).start()
-
-
-# ── Feed-mode / bw-mode / msg-lock API ───────────────────────────
-@app.route('/api/bw-mode', methods=['GET'])
 def bw_mode_get():
     return ('true' if _bw_mode else 'false'), 200
 
@@ -569,6 +695,16 @@ def _shutdown(signum, frame):
 
 
 if __name__ == '__main__':
-    signal.signal(signal.SIGTERM, _shutdown)
-    port = int(_cfg.get('WEB_PORT', 8080))
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    # Media capture/publishing runs independently of the HTTP control plane.
+    # One AVFoundation session owns camera + microphone.
+    threading.Thread(
+        target=_writer_loop,
+        daemon=True,
+        name='combined-av-publisher',
+    ).start()
+
+    app.run(
+        host='0.0.0.0',
+        port=int(_cfg.get('WEB_PORT', 8080)),
+        threaded=True,
+    )
