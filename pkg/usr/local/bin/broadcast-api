@@ -140,26 +140,50 @@ _hide_frame     = None
 _cam_frame      = None
 _cam_frame_lock = threading.Lock()
 
-# Hide publishes a black frame. Matches the Windows node, whose hide_command
-# is `-f lavfi -i color=black:s=1280x720:r=30` -- viewers get a blank screen
-# and the viewer UI says so politely, rather than being shown something that
-# looks like a fault.
+# Hide publishes VHS static (PM, run-21). It previously published flat black,
+# matching the Windows node's `-f lavfi -i color=black`.
 #
-# Replaces _apply_svhs_warp(), which row-shuffled and horizontally rolled the
-# *live camera frame*: the torn-scanline look reported in run-6 was real image
-# content, not noise. A black frame is derived from nothing at all.
+# Rendered HERE rather than in each client, deliberately. The viewer could
+# draw its own snow over a black stream -- it already owns drawStatic() for
+# feed transitions -- but the Qt dashboard, camdash, and anyone opening the
+# HLS URL directly would each need their own copy, and any surface that
+# missed the memo would show flat black and read it as a dead feed. One
+# server-side renderer covers every consumer, including ones not written yet.
 #
-# The VHS static that Windows shows belongs to feed *transitions*, not to
-# Hide, and is drawn client-side by the viewer -- see index.html's
-# drawStatic(). Nothing generates it here.
-_BLACK_FRAME = None
+# It is the same recipe as index.html's drawStatic(), itself ported from the
+# Windows node's draw_switching(): a small grey noise field regenerated each
+# frame, alternate rows dimmed for scanlines, and a dark tracking band
+# rolling slowly up the frame, scaled up with smoothing off.
+#
+# Derived from nothing at all -- no camera frame touches this path. That was
+# the point of replacing _apply_svhs_warp(), which row-shuffled and rolled
+# the *live camera frame*: the torn-scanline look reported in run-6 was real
+# image content. Static must never be made out of the picture it hides.
+#
+# Cost is bounded by construction: the noise is generated at 224x126 (28k
+# samples) and upscaled with INTER_NEAREST, so the encoder sees large flat
+# blocks rather than per-pixel noise, and the publisher's -b:v 1500k caps
+# the bitrate at what the live feed already uses.
+_STATIC_W, _STATIC_H = 224, 126
+_static_frame_n = 0
 
 def _render_hide_frame(width, height):
-    """Black frame, allocated once and reused."""
-    global _BLACK_FRAME
-    if _BLACK_FRAME is None or _BLACK_FRAME.shape[:2] != (height, width):
-        _BLACK_FRAME = np.zeros((height, width, 3), dtype=np.uint8)
-    return _BLACK_FRAME
+    """One frame of VHS snow. Regenerated per call -- it has to move."""
+    global _static_frame_n
+    _static_frame_n += 1
+
+    noise = np.random.randint(0, 256, (_STATIC_H, _STATIC_W),
+                              dtype=np.int16).astype(np.float32)
+    # scanlines: every other row at 72%
+    noise[1::2] *= 0.72
+    # tracking band: a dark bar drifting up the frame, one row per 2 frames
+    band = (_static_frame_n // 2) % _STATIC_H
+    lo, hi = max(0, band - 2), min(_STATIC_H, band + 3)
+    noise[lo:hi] *= 0.35
+
+    small = noise.astype(np.uint8)
+    big = _cv2.resize(small, (width, height), interpolation=_cv2.INTER_NEAREST)
+    return np.repeat(big[:, :, None], 3, axis=2)
 
 def _start_loopback_publisher(denv):
     fr = int(denv.get('FRAMERATE', 15))

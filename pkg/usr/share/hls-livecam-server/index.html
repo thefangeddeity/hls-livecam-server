@@ -733,6 +733,8 @@
   var switchStatic  = document.getElementById('switchStatic');
   var staticTimer   = null;
   var staticFrameN  = 0;
+  // Open for the length of a feed-mode cover. See fadeOut() for why.
+  var switching     = false;
 
   // Analog VHS snow, ported from the Windows node's draw_switching()
   // (windows/src/gui/panels.rs): a small grey noise field regenerated each
@@ -779,17 +781,30 @@
   // rather than for a fixed count. The old 16s countdown was chosen when
   // segments were 4s; it both outlasted the real switch and told every
   // viewer to stare at a number.
-  // 9000 -> 11000 (run-18 §1) -> 13000 (run-20 aside). The 9s figure was
-  // itself a recalibration: the original 16s was chosen when segments were
-  // 4s, and run-6 replaced it with a bounded fallback sized to the measured
-  // switch. In practice the cover clears on the video's own 'playing' event,
-  // so this only matters when that event never arrives -- and 11s was still
-  // visually gated two seconds short of the real switch (PM-observed).
-  var TRANSITION_MAX_MS = 13000;
+  // 9000 -> 11000 (run-18 §1) -> 13000 (run-20 aside) -> 17000 (PM, this
+  // run: still cutting the cover short). The 9s figure was itself a
+  // recalibration: the original 16s was chosen when segments were 4s, and
+  // run-6 replaced it with a bounded fallback sized to the measured switch.
+  // In practice the cover clears on the video's own 'playing' event, so
+  // this only matters when that event never arrives -- but it also bounds
+  // how long showError() stays suppressed, so it is not free to raise
+  // without limit.
+  var TRANSITION_MAX_MS = 17000;
 
   function fadeOut() {
     video.style.opacity = '0';
     if (fadeInTimer) clearTimeout(fadeInTimer);
+    // A mode change tears the hls.js session down and rebuilds it, so the
+    // player errors BY DESIGN inside this window. Surfacing that as "Signal
+    // lost / Retrying" contradicts the "Switching feed" notice already on
+    // screen -- two explanations for one blank frame, and the wrong one
+    // blames the system for the operator's own request. Suppress the error
+    // surface for the length of the cover and clear anything already up.
+    // (The pre-existing feedMode === 'hide' guard in showError() was this
+    // same bug caught in one specific case; this generalises it.)
+    switching = true;
+    errorOverlay.classList.remove('visible');
+    reconnectBtn.hidden = true;
     switchOverlay.classList.add('visible');
     startStatic();
 
@@ -802,6 +817,7 @@
       stopStatic();
       video.style.opacity = '1';
       switchOverlay.classList.remove('visible');
+      switching = false;
     }
     // Clear the static when the new stream actually starts, with a bounded
     // fallback so a switch that never recovers cannot strand the overlay on
@@ -962,6 +978,12 @@
     // for the same blank frame. The deliberate one wins; the stream recovers
     // on its own either way.
     if (feedMode === 'hide') return;
+    // Inside a switch cover the error is our own doing -- see fadeOut().
+    if (switching) {
+      errorOverlay.classList.remove('visible');
+      reconnectBtn.hidden = true;
+      return;
+    }
     errorOverlay.classList.add('visible');
     reconnectBtn.hidden = false;
   }
@@ -977,7 +999,9 @@
 
   function scheduleRetry(ms) {
     if (retryTimer) clearTimeout(retryTimer);
-    setStatus('RECONNECTING', 'reconnecting');
+    // Neutral, not warning-coloured: nothing is wrong during a cover.
+    if (switching) setStatus('SWITCHING');
+    else setStatus('RECONNECTING', 'reconnecting');
     retryTimer = setTimeout(initHLS, ms);
   }
 
@@ -1018,7 +1042,9 @@
     hls.on(Hls.Events.ERROR, function(e, data) {
       if (!data.fatal) { scheduleRetry(3000); return; }
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovering) {
-        recovering = true; setStatus('RECONNECTING', 'reconnecting');
+        recovering = true;
+        if (switching) setStatus('SWITCHING');
+        else setStatus('RECONNECTING', 'reconnecting');
         hls.recoverMediaError(); setTimeout(function() { recovering = false; }, 4000);
       } else { showError(); scheduleRetry(5000); }
     });
