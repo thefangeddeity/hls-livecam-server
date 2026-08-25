@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""First-run setup, executed from inside the installed application bundle.
+
+This is what makes the DMG self-sufficient. Everything here used to live in the
+repo-side installer script, which resolved its paths against a hardcoded
+checkout directory and therefore only ever worked on a machine that already had
+the source. Nothing in this file may assume a checkout, a dev machine, or a
+terminal: it runs from /Applications, launched by Finder, with no tty attached.
+(The build refuses to ship any file under bin/ that names a checkout path, so
+keep it that way.)
+
+Two consequences of having no tty shape the whole file:
+
+  * Every prompt goes through osascript, not input()/getpass(). A GUI app has
+    nowhere to read stdin from.
+  * Privilege escalation uses `do shell script ... with administrator
+    privileges`, which produces the native auth sheet, rather than sudo.
+
+Setup is idempotent and marker-guarded, so the launcher can call it on every
+start and pay nothing after the first.
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import livecam_platform as P
+
+BIN_DIR   = os.path.dirname(os.path.abspath(__file__))
+RUNTIME   = os.path.dirname(BIN_DIR)                 # Contents/Resources/app
+RESOURCES = os.path.dirname(RUNTIME)                 # Contents/Resources
+CONTENTS  = os.path.dirname(RESOURCES)               # Contents
+APP_PATH  = os.path.dirname(CONTENTS)                # HLS Livecam.app
+
+SETUP_VERSION = "2"
+MARKER        = os.path.join(P.state_dir(), "setup-complete")
+
+TITLE = "HLS Livecam Setup"
+
+
+def log(msg):
+    print(f"[firstrun] {msg}", file=sys.stderr, flush=True)
+
+
+# ── osascript front end ──────────────────────────────────────────
+
+def _osa(script):
+    return subprocess.run(["osascript", "-e", script],
+                          capture_output=True, text=True, timeout=600)
+
+
+def _quote(s):
+    """Escape for embedding in an AppleScript string literal."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def dialog(text, buttons=("OK",), default=None, icon="note"):
+    btns = ", ".join(f'"{_quote(b)}"' for b in buttons)
+    default = default or buttons[-1]
+    out = _osa(f'display dialog "{_quote(text)}" with title "{_quote(TITLE)}" '
+               f'buttons {{{btns}}} default button "{_quote(default)}" '
+               f'with icon {icon}')
+    m = re.search(r"button returned:([^,\n]*)", out.stdout)
+    return m.group(1).strip() if m else None
+
+
+def password_prompt(text):
+    out = _osa(f'display dialog "{_quote(text)}" with title "{_quote(TITLE)}" '
+               f'default answer "" with hidden answer '
+               f'buttons {{"Cancel", "Continue"}} default button "Continue"')
+    if "button returned:Continue" not in out.stdout:
+        return None
+    m = re.search(r"text returned:(.*?)(?:, button returned:|$)",
+                  out.stdout, re.S)
+    return m.group(1) if m else None
+
+
+def admin_shell(command):
+    """Run a shell command via the native administrator auth sheet."""
+    out = _osa(f'do shell script "{_quote(command)}" with administrator privileges')
+    return out.returncode == 0, (out.stdout + out.stderr).strip()
+
+
+# ── Install-time policy, shipped inside the bundle ───────────────
+
+def install_env():
+    env = {}
+    for path in (os.path.join(RESOURCES, "install.env"),
+                 os.path.join(RUNTIME, "install.env")):
+        try:
+            for line in open(path):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.split("#", 1)[0].strip()
+            break
+        except FileNotFoundError:
+            continue
+    return env
+
+
+IENV = install_env()
+
+
+# ── Dependencies ─────────────────────────────────────────────────
+
+def find_ffmpeg():
+    return (shutil.which("ffmpeg")
+            or next((p for p in ("/usr/local/bin/ffmpeg",
+                                 "/opt/homebrew/bin/ffmpeg",
+                                 "/usr/bin/ffmpeg") if os.path.exists(p)), None))
+
+
+def check_dependencies():
+    """ffmpeg is the one dependency not shipped in the bundle.
+
+    Bundling it would mean relocating a dozen Homebrew dylibs (x264, x265,
+    dav1d, svt-av1, ...) with install_name_tool. That is a real piece of work
+    and a real source of subtle breakage, so for now the honest move is to
+    detect it and say so plainly rather than fail later with a stack trace.
+    """
+    if find_ffmpeg():
+        return True
+    dialog("FFmpeg is required but was not found.\n\n"
+           "Install it, then launch HLS Livecam again:\n\n"
+           "    brew install ffmpeg\n\n"
+           "Setup cannot continue without it.",
+           buttons=("Quit",), icon="stop")
+    return False
+
+
+# ── Camera configuration ─────────────────────────────────────────
+
+def detect_camera(ffmpeg):
+    """First non-screen-capture avfoundation video device."""
+    try:
+        out = subprocess.run([ffmpeg, "-hide_banner", "-f", "avfoundation",
+                              "-list_devices", "true", "-i", ""],
+                             capture_output=True, text=True, timeout=30).stderr
+    except Exception:
+        return None, None
+    in_video = False
+    for line in out.splitlines():
+        if "AVFoundation video devices" in line:
+            in_video = True
+            continue
+        if "AVFoundation audio devices" in line:
+            break
+        if not in_video:
+            continue
+        m = re.search(r"\]\s*\[(\d+)\]\s+(.+?)\s*$", line)
+        if m and "capture screen" not in m.group(2).lower():
+            return m.group(1), m.group(2)
+    return None, None
+
+
+def seed_config(ffmpeg):
+    path = P.config_path()
+    if os.path.exists(path):
+        log(f"config exists: {path}")
+        return
+    idx, name = detect_camera(ffmpeg)
+    if idx is None:
+        idx, name = "0", ""
+        log("no camera detected; writing defaults")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write("# hls-livecam-server (macOS) - written by first-run setup.\n")
+        f.write(f"AVF_VIDEO_INDEX={idx}\n")
+        if name:
+            f.write(f"AVF_DEVICE_NAME={name}\n")
+        f.write("VIDEO_SIZE=1280x720\nFRAMERATE=15\n\n")
+        f.write("WEB_PORT=8080\nRTSP_PORT=8554\nHLS_PORT=8888\n")
+    log(f"wrote config for camera [{idx}] {name}")
+
+
+# ── TCC priming ──────────────────────────────────────────────────
+
+def prime_tcc(ffmpeg):
+    """Open the camera and microphone once, from inside the app's process tree.
+
+    Doing it here is the entire reason setup runs from the app rather than a
+    script: TCC attributes the request to the responsible GUI application, so
+    the prompts carry this app's identity and its Info.plist usage strings, and
+    the resulting grant is the one the supervisor's children will inherit.
+
+    A denial does not raise -- ffmpeg's avfoundation input responds to a refused
+    camera by deadlocking rather than erroring, so this is bounded by a timeout
+    and its result is advisory only.
+    """
+    cfg = P.read_config()
+    idx = cfg.get("AVF_VIDEO_INDEX", "0")
+    granted = {}
+    for label, spec in (("camera", f"{idx}:none"), ("microphone", "none:0")):
+        try:
+            proc = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error",
+                 "-f", "avfoundation", "-i", spec, "-t", "1",
+                 "-f", "null", "-"],
+                capture_output=True, text=True, timeout=20)
+            granted[label] = proc.returncode == 0
+        except subprocess.TimeoutExpired:
+            granted[label] = False
+        except Exception:
+            granted[label] = False
+        log(f"TCC probe {label}: {'ok' if granted[label] else 'not granted'}")
+    return granted
+
+
+# ── Automatic login ──────────────────────────────────────────────
+
+KC_KEY = bytes([0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F])
+
+
+def encode_kcpassword(password):
+    """XOR against the fixed key loginwindow uses, padded to a whole key length.
+
+    Obfuscation, not encryption -- the key ships with the OS. The real boundary
+    is physical access to a machine that boots to a desktop by design.
+    """
+    data = password.encode("utf-8")
+    data += b"\x00" * (len(KC_KEY) - (len(data) % len(KC_KEY)))
+    return bytes(b ^ KC_KEY[i % len(KC_KEY)] for i, b in enumerate(data))
+
+
+def autologin_user():
+    out = subprocess.run(["defaults", "read",
+                          "/Library/Preferences/com.apple.loginwindow",
+                          "autoLoginUser"], capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def filevault_on():
+    try:
+        return "FileVault is On" in subprocess.run(
+            ["fdesetup", "status"], capture_output=True, text=True,
+            timeout=20).stdout
+    except Exception:
+        return False
+
+
+def configure_autologin(user):
+    mode = IENV.get("AUTOLOGIN_MODE", "kcpassword").lower()
+    if mode == "skip":
+        return
+    if autologin_user() == user:
+        log(f"autologin already set for {user}")
+        return
+    if filevault_on():
+        dialog("FileVault is on, so this Mac cannot log in automatically.\n\n"
+               "After a power cut it will stop at the login window and will "
+               "not stream until someone signs in.\n\n"
+               "Turn FileVault off if unattended restart matters.",
+               buttons=("Continue",), icon="caution")
+        return
+
+    if mode == "guide":
+        dialog("Automatic login is off.\n\n"
+               "System Settings will open. Set:\n"
+               f"    Users & Groups > Automatically log in as > {user}\n\n"
+               "Then come back and click OK.", buttons=("OK",), icon="caution")
+        subprocess.run(["open", "x-apple.systempreferences:"
+                        "com.apple.Users-Groups-Settings.extension"], check=False)
+        dialog("Click OK once automatic login is set.", buttons=("OK",))
+        log("autologin verified" if autologin_user() == user else "autologin NOT set")
+        return
+
+    if dialog("Enable automatic login?\n\n"
+              "This lets the Mac come back on its own after a power cut. "
+              "Camera capture needs a logged-in desktop session, so without it "
+              "the stream stays down until someone signs in.\n\n"
+              "You will be asked for your login password and for admin rights.",
+              buttons=("Skip", "Enable"), default="Enable",
+              icon="caution") != "Enable":
+        log("autologin declined by operator")
+        return
+
+    pw = password_prompt(f"Login password for {user}:")
+    if not pw:
+        log("autologin cancelled")
+        return
+
+    tmp = os.path.join(tempfile.mkdtemp(prefix="kcp-"), "kcpassword")
+    with open(tmp, "wb") as f:
+        f.write(encode_kcpassword(pw))
+    os.chmod(tmp, 0o600)
+    del pw
+    try:
+        ok, out = admin_shell(
+            f"/usr/bin/install -m 0600 -o root -g wheel '{tmp}' /etc/kcpassword && "
+            f"/usr/bin/defaults write /Library/Preferences/com.apple.loginwindow "
+            f"autoLoginUser '{user}'")
+        if not ok:
+            log(f"autologin failed: {out}")
+    finally:
+        try:
+            os.remove(tmp)
+            os.rmdir(os.path.dirname(tmp))
+        except Exception:
+            pass
+
+    log("autologin verified" if autologin_user() == user else "autologin NOT set")
+
+
+# ── Login Item ───────────────────────────────────────────────────
+
+LOGIN_ITEM_NAME = "HLS Livecam"
+
+
+def login_item_registered():
+    out = _osa('tell application "System Events" to get name of every login item')
+    return LOGIN_ITEM_NAME in out.stdout
+
+
+def register_login_item():
+    """Register the app itself, not a Terminal shim.
+
+    The app carries its own bundle identity and camera/microphone usage
+    strings, so prompts name this app and the grant lands on it. A LaunchAgent
+    cannot be used at all here: launchd starts agents outside any GUI session,
+    and capture with no GUI/TCC ancestry is refused the camera -- whereupon
+    ffmpeg deadlocks instead of failing, leaving a healthy-looking stack that
+    serves 404s.
+    """
+    # Delete first: re-registering an existing name silently keeps the OLD
+    # path, so an app that moved stays registered pointing at nothing.
+    _osa(f'''tell application "System Events"
+        if exists login item "{LOGIN_ITEM_NAME}" then
+            delete login item "{LOGIN_ITEM_NAME}"
+        end if
+    end tell''')
+    _osa(f'''tell application "System Events" to make login item at end
+        with properties {{name:"{LOGIN_ITEM_NAME}", path:"{APP_PATH}", hidden:false}}''')
+
+    if login_item_registered():
+        log("login item registered (verified)")
+        return True
+
+    # Verify, never assume. This needs Automation consent for System Events;
+    # if that prompt is dismissed the calls above fail silently, nothing starts
+    # at login, and the box needs hands-on recovery after every reboot.
+    dialog("Could not add HLS Livecam to your Login Items.\n\n"
+           "This usually means the Automation permission was declined.\n\n"
+           "Add it by hand:\n"
+           "    System Settings > General > Login Items > +\n"
+           f"    {APP_PATH}\n\n"
+           "Without this, streaming will not resume after a restart.",
+           buttons=("OK",), icon="caution")
+    log("login item registration FAILED")
+    return False
+
+
+# ── Supervisor ───────────────────────────────────────────────────
+
+def supervisor_running():
+    pid = P.read_pidfile(os.path.join(P.state_dir(), "supervisor.lock", "pid"))
+    return P.pid_alive(pid)
+
+
+def start_supervisor():
+    if supervisor_running():
+        log("supervisor already running")
+        return
+    P.ensure_dirs()
+    py = os.path.join(RUNTIME, ".venv", "bin", "python")
+    if not os.path.exists(py):
+        py = sys.executable
+    logf = open(os.path.join(P.log_dir(), "supervisor.log"), "ab", buffering=0)
+    subprocess.Popen([py, os.path.join(BIN_DIR, "livecam-supervisor")],
+                     stdin=subprocess.DEVNULL, stdout=logf, stderr=logf)
+    log("supervisor started")
+
+
+# ── Entry point ──────────────────────────────────────────────────
+
+def already_done():
+    try:
+        return open(MARKER).read().strip() == SETUP_VERSION
+    except Exception:
+        return False
+
+
+def main():
+    P.ensure_dirs()
+
+    if already_done():
+        start_supervisor()
+        return 0
+
+    log(f"running first-run setup (app at {APP_PATH})")
+
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        check_dependencies()
+        return 1
+
+    seed_config(ffmpeg)
+
+    dialog("Welcome to HLS Livecam.\n\n"
+           "Setup will ask for a few macOS permissions:\n\n"
+           "  - Camera and microphone, to publish the feed\n"
+           "  - Automation, to start the stream when you log in\n"
+           "  - Admin rights, only if you enable automatic login\n\n"
+           "This happens once.", buttons=("Continue",))
+
+    granted = prime_tcc(ffmpeg)
+    registered = register_login_item()
+    configure_autologin(os.environ.get("USER") or os.path.basename(
+        os.path.expanduser("~")))
+
+    if not P.is_enabled():
+        pass                      # respect an existing deliberate off
+    P.set_enabled(True)
+
+    with open(MARKER, "w") as f:
+        f.write(SETUP_VERSION + "\n")
+
+    start_supervisor()
+
+    problems = []
+    if not granted.get("camera"):
+        problems.append("- Camera access was not granted. Allow it in "
+                        "System Settings > Privacy & Security > Camera.")
+    if not granted.get("microphone"):
+        problems.append("- Microphone access was not granted. Allow it in "
+                        "System Settings > Privacy & Security > Microphone.")
+    if not registered:
+        problems.append("- Login Item not registered; streaming will not "
+                        "resume after a restart.")
+
+    if problems:
+        dialog("Setup finished with warnings:\n\n" + "\n\n".join(problems),
+               buttons=("OK",), icon="caution")
+    else:
+        dialog("Setup complete.\n\nHLS Livecam will now start automatically "
+               "whenever you log in.", buttons=("OK",))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        log(f"unhandled error: {exc}")
+        # Never let a setup failure block the app from opening -- the GUI is
+        # also the place the operator goes to diagnose.
+        sys.exit(0)
