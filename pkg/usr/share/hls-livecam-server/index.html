@@ -528,6 +528,36 @@
      Surface anchors are Apple's light-mode system greys rather than a
      per-channel invert of the dark ramp; a blind invert reads bluish, not
      neutral. Status hues (accent/danger/success/warn) are held unchanged. */
+  /* The housing adapts; the glass does not. A vacuum tube has no light mode,
+     so --phos and --glass-* are deliberately absent from this block: the
+     readout stays a dark screen set into a pale panel, exactly as it would
+     be on a real instrument. Only the metal, the engraving and the lamp
+     housings change. */
+  html[data-theme="light"] {
+    --housing: #ffffff; --housing-hi: rgba(0,0,0,.03); --housing-lo: #f4f4f7;
+    --border-soft: #d8d8dd;
+    --emboss: #6e6e73; --emboss-strong: #48484a; --emboss-dim: #9a9aa0;
+    --led-off: #d0d0d6;
+  }
+  html[data-theme="light"] .panel {
+    background: linear-gradient(180deg,#ffffff 0%,var(--housing) 34%,var(--housing-lo) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(0,0,0,.10);
+  }
+  html[data-theme="light"] .eng,
+  html[data-theme="light"] .led .n { text-shadow: 0 1px 0 rgba(255,255,255,.9), 0 -1px 0 rgba(0,0,0,.10); }
+  html[data-theme="light"] .pbtn,
+  html[data-theme="light"] .modem {
+    background: linear-gradient(180deg,#fdfdfe,#eeeef2); border-color: #d3d3d9; color: #33333a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 1px rgba(0,0,0,.10);
+  }
+  html[data-theme="light"] .pbtn.pressed { background: linear-gradient(180deg,#dededf,#eaeaee); box-shadow: inset 0 2px 4px rgba(0,0,0,.18); color: #000; }
+  html[data-theme="light"] .pbtn.pending, html[data-theme="light"] .pbtn:disabled { background: linear-gradient(180deg,#f2f2f5,#ebebef); color: #a8a8ae; }
+  html[data-theme="light"] .box { background: linear-gradient(180deg,#fff,#f0f0f3); border-color: #c3c3ca; box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
+  html[data-theme="light"] .talk { background: linear-gradient(180deg,#f7f7fa,#efeff3); border-color: #d8d8dd; }
+  html[data-theme="light"] .msg2 { background: #fff; border-color: #d8d8dd; color: #1c1c1e; box-shadow: inset 0 1px 3px rgba(0,0,0,.06); }
+  html[data-theme="light"] .msg2.empty { color: #9a9aa0; }
+  html[data-theme="light"] .pdiv { background: #e2e2e7; box-shadow: 0 1px 0 rgba(255,255,255,.9); }
+
   html[data-theme="light"] {
     --bg: #f2f2f7;
     --panel: #ffffff;
