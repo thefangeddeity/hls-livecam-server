@@ -705,7 +705,6 @@
             <span class="bulb" id="listenLamp"></span>
             <svg id="tPlay" width="11" height="12" viewBox="0 0 11 12" fill="currentColor" style="color:#d6d6da"><path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/></svg>
           </button>
-          <span class="cap eng" id="audioStateLabel">Checking…</span>
           <button class="modem" id="muteAudioBtn" onclick="toggleMuteAudio()" title="Mute audio in this browser only; the stream keeps running">
             <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
           </button>
@@ -1356,7 +1355,8 @@
   var listenBtn       = document.getElementById('listenBtn');
   var audioRateEl     = document.getElementById('audioRate');
   var audioKbpsEl     = document.getElementById('audioKbps');
-  var audioStateLabel = document.getElementById('audioStateLabel');
+  var audioStateLabel = null;   // caption removed: the tube and the lamps
+                                // already carry every state it spelled out
   var audioReady      = false;
 
   // ── ROOM AUDIO TRANSPORT ──
@@ -1393,10 +1393,7 @@
   function togglePlay() {
     if (roomAudio.paused) {
       resolveAudioSrc(function() {
-        roomAudio.play().then(paintTransport).catch(function() {
-          audioStateLabel.textContent = 'Tap to enable';
-          paintTransport();
-        });
+        roomAudio.play().then(paintTransport).catch(paintTransport);
       });
     } else {
       roomAudio.pause();
@@ -1445,7 +1442,6 @@
         // measurement. Ghost dashes, never a zero and never a guess.
         if (!a) {
           audioReady = false;
-          audioStateLabel.textContent = 'Unknown';
           audioRateEl.textContent = '';
           audioKbpsEl.textContent = '';
           paintListen();
@@ -1453,10 +1449,6 @@
         }
         var live = (a.state === 'ok');
         audioReady = live;
-        audioStateLabel.textContent =
-          a.state === 'ok'       ? 'Sound in room' :
-          a.state === 'off'      ? 'Closed' :
-                                   'No mic';
         var iSt = document.getElementById('indStereo');
         if (iSt) iSt.className = (live && a.channels === 2) ? 'on' : '';
         // Reported, not asserted: these come from what the node told ffmpeg.
