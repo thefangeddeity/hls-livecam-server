@@ -448,14 +448,6 @@
     padding: 3px 1px 5px;
   }
 
-  .audio-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 82px;
-    column-gap: 16px;
-    align-items: start;
-    width: 100%;
-  }
-
   .audio-main { min-width: 0; }
 
   .audio-description {
@@ -497,58 +489,78 @@
   /* The lamp stack is shared by the audio panel and the video/stream panel.
      The .audio-* names came first and are kept so that panel's markup is
      untouched; new callers use the neutral .status-* names. */
-  .audio-status-stack,
-  .status-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
-    width: 82px;
-    min-width: 82px;
-    padding-top: 1px;
-  }
+  /* ── Faux VFD status display ─────────────────────────────────── */
+  /*
+   * A small vacuum-fluorescent panel behind glass, shared by the Video and
+   * Audio boxes. Deliberately dark in both themes: it reads as a screen set
+   * into the panel, and a screen does not invert when the page does.
+   *
+   * Unlit rows stay faintly visible rather than disappearing, which is how
+   * real VFD segments behave -- and it keeps "unknown" legible as its own
+   * state instead of looking like a rendering failure.
+   */
+  .vfd {
+    --vfd-on:  #4dffb0;
+    --vfd-dim: rgba(77, 255, 176, .24);
+    --vfd-err: #ff6b5a;
 
-  /* In the Stream panel the stack is the only occupant, so it spans the
-     panel and lays its lamps out in two columns rather than a narrow file. */
-  .status-stack.status-grid {
+    box-sizing: border-box;
+    width: 100%;
+    margin-top: 8px;
+    padding: 7px 9px 6px;
+    border-radius: 4px;
+
+    /* Two columns across the full panel width. Stacking these beside the
+       stats instead squeezed the stat column to ~118px, which truncated
+       "1280 x 720" to "1280...". The readout is the thing that should be
+       compact here, not the numbers it sits under. */
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 7px 10px;
-    width: 100%;
-    min-width: 0;
-    margin-top: 7px;
+    gap: 1px 14px;
+    background:
+      linear-gradient(180deg, rgba(77,255,176,.05), rgba(0,0,0,0) 60%),
+      #04120c;
+    border: 1px solid rgba(0,0,0,.55);
+    box-shadow:
+      inset 0 1px 3px rgba(0,0,0,.9),
+      inset 0 0 12px rgba(77,255,176,.07),
+      0 0 0 1px rgba(255,255,255,.04);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 8.5px;
+    line-height: 14px;
+    letter-spacing: .06em;
+    font-variant-numeric: tabular-nums;
   }
 
-  .audio-status-item,
-  .status-item {
+  .vfd-row {
     display: flex;
-    align-items: center;
+    justify-content: space-between;
+    align-items: baseline;
     gap: 6px;
-    height: 13px;
-    color: var(--text-muted, #777);
-    font-size: 8px;
-    line-height: 13px;
-    letter-spacing: .025em;
     white-space: nowrap;
   }
 
-  .stack-led {
-    width: 6px;
-    height: 6px;
-    flex: 0 0 6px;
-    border-radius: 50%;
-    background: #555;
+  .vfd-label { color: var(--vfd-dim); }
+
+  .vfd-val {
+    font: inherit;
+    font-weight: 700;
+    color: var(--vfd-dim);
   }
 
-  .stack-led.pending { background: #555; }
-
-  .stack-led.ok {
-    background: #35c759;
-    box-shadow: 0 0 5px rgba(53,199,89,.45);
+  .vfd-val.ok {
+    color: var(--vfd-on);
+    text-shadow: 0 0 5px rgba(77, 255, 176, .75);
   }
 
-  .stack-led.fail {
-    background: #ff453a;
-    box-shadow: 0 0 5px rgba(255,69,58,.4);
+  .vfd-val.fail {
+    color: var(--vfd-err);
+    text-shadow: 0 0 5px rgba(255, 107, 90, .7);
+  }
+
+  .vfd-val.pending {
+    color: var(--vfd-dim);
+    text-shadow: none;
   }
 
   .audio-talk-row { width: 100%; }
@@ -596,32 +608,16 @@
   #audioStatus { display: none; }
 
   /*
-   * The audio panel is narrow on phones. Keep the two-column
-   * instrument, but tighten it when there isn't enough room to
-   * maintain readable text.
+   * On a phone the sidebar goes full width, so the readout has room to
+   * spare. Give it a little more size rather than less -- it is being read
+   * at arm's length there, not on a desk.
    */
   @media (max-width: 420px) {
-    .audio-layout {
-      grid-template-columns: minmax(0, 1fr) 76px;
-      column-gap: 12px;
+    .vfd {
+      font-size: 9.5px;
+      line-height: 15px;
+      gap: 2px 18px;
     }
-
-    .audio-status-stack {
-      width: 76px;
-      min-width: 76px;
-    }
-
-    .audio-status-item,
-    .status-item { font-size: 7.5px; }
-  }
-
-  /* ── Compact STREAM rows ─────────────────────────────────────── */
-
-  .sidebar-scroll > .section.desktop-only .stat {
-    padding-top: 0.5px;
-    padding-bottom: 0.5px;
-    margin: 0;
-    line-height: 16px;
   }
 
   /* Slightly shorter message field */
@@ -630,31 +626,58 @@
     height: 88px;
   }
 
+  /* ── Video panel stat rows ───────────────────────────────────── */
+  /*
+   * These rows were styled by three overlapping rules that disagreed. One
+   * selector matched on `.sidebar-scroll > .section.desktop-only` and carried
+   * higher specificity than the `.stream-section` rules meant to govern them,
+   * so a row took its line-height from one rule and its size from another,
+   * while `.stat .v` kept a weight of 500 that neither intended. Hence rows
+   * that did not share a baseline or a weight.
+   *
+   * One block owns them now, and everything the row needs is declared here
+   * rather than inherited from a rule that also styles something else.
+   */
   .stream-section {
     padding-top: 8px !important;
     padding-bottom: 8px !important;
   }
 
   .stream-section .stat {
-    padding-top: 1px;
-    padding-bottom: 1px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;   /* text aligns on its baseline, not its box */
+    gap: 8px;
     margin: 0;
+    padding: 1px 0;
+    min-width: 0;
     font-size: 10px;
     line-height: 15px;
     font-weight: 400;
+  }
+
+  .stream-section .stat .k,
+  .stream-section .stat .v {
+    font: inherit;           /* one declaration, so neither can drift */
+    letter-spacing: normal;
+    white-space: nowrap;
   }
 
   .stream-section .stat .k {
-    font-size: 10px;
-    line-height: 15px;
-    font-weight: 400;
     color: var(--text-muted, #888);
+    flex: 0 0 auto;
   }
 
+  /* The stats share the panel with the 82px lamp column, leaving roughly
+     118px here. A long hostname must ellipsize rather than wrap onto a
+     second line and knock the rows out of alignment. */
   .stream-section .stat .v {
-    font-size: 10px;
-    line-height: 15px;
-    font-weight: 400;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
   }
 </style>
 </head>
@@ -725,8 +748,8 @@
             <button class="btn" id="cloakBtn" onclick="setFeedMode('cloak')">Blur</button>
             <button class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
           </div>
-          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
-          <!-- Alphabetized: B&W Blur, Light theme, Lock message, Mute Buzzes -->
+          <!-- Alphabetized: B&W Blur, Light theme, Lock message. Mute Buzzes
+               moved out with the Buzz button it belongs to. -->
           <label class="mute-label">
             <input type="checkbox" id="bwCheck" onchange="toggleBw()"> B&amp;W Blur
           </label>
@@ -736,42 +759,42 @@
           <label class="mute-label">
             <input type="checkbox" id="lockCheck" onchange="toggleMsgLock()"> Lock message
           </label>
+          <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
+        </div>
+      </div>
+
+      <!-- BUZZ — the button and its mute belong together; they were split
+           across the controls list with unrelated toggles between them. -->
+      <div class="section">
+        <div class="section-title">Buzz</div>
+        <div class="controls-stack">
+          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
           <label class="mute-label">
             <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
           </label>
-          <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
         </div>
       </div>
 
       <!-- STREAM INFO — desktop only -->
       <div class="section desktop-only stream-section">
-        <div class="section-title">Stream</div>
+        <div class="section-title">Video</div>
+        <!-- Stats left, lamps right -- the same two-column instrument as the
+             Audio panel, so both read the same way.
+
+             Camera, MediaMTX and RTSP come from the same /api/pipeline
+             measurement the audio lamps use: capture is a single AVFoundation
+             session, so the camera and the microphone succeed or fail
+             together and showing them disagree would be a lie. The HLS lamp
+             is this player's own, mirroring the live indicator. -->
         <div class="stat"><span class="k">Host</span><span class="v" id="hostVal">--</span></div>
         <div class="stat"><span class="k">Resolution</span><span class="v">1280 × 720</span></div>
         <div class="stat"><span class="k">Framerate</span><span class="v" id="fpsVal">--</span></div>
 
-        <!-- Video pipeline lamps. Camera, MediaMTX and RTSP come from the same
-             /api/pipeline measurement as the audio panel: capture is a single
-             AVFoundation session, so the camera and the microphone succeed or
-             fail together and it would be dishonest to show them disagreeing.
-             The HLS lamp is this player's own, mirroring the live indicator. -->
-        <div class="status-stack status-grid" aria-label="Video pipeline status">
-          <div class="status-item">
-            <span class="stack-led pending" id="videoCamLed"></span>
-            <span>Camera</span>
-          </div>
-          <div class="status-item">
-            <span class="stack-led pending" id="videoMtxLed"></span>
-            <span>MediaMTX</span>
-          </div>
-          <div class="status-item">
-            <span class="stack-led pending" id="videoRtspLed"></span>
-            <span>RTSP</span>
-          </div>
-          <div class="status-item">
-            <span class="stack-led pending" id="videoHlsLed"></span>
-            <span>HLS</span>
-          </div>
+        <div class="vfd" role="status" aria-label="Video pipeline status">
+          <div class="vfd-row"><span class="vfd-label">CAM</span><span class="vfd-val pending" id="videoCamLed">--</span></div>
+          <div class="vfd-row"><span class="vfd-label">RTSP</span><span class="vfd-val pending" id="videoRtspLed">--</span></div>
+          <div class="vfd-row"><span class="vfd-label">MTX</span><span class="vfd-val pending" id="videoMtxLed">--</span></div>
+          <div class="vfd-row"><span class="vfd-label">HLS</span><span class="vfd-val pending" id="videoHlsLed">--</span></div>
         </div>
       </div>
 
@@ -782,46 +805,25 @@
         <div class="info-chip">
           <div class="audio-control" id="roomAudio">
 
-            <div class="audio-layout">
+            <div class="audio-main">
+              <div class="audio-description">Listen to sound in room</div>
 
-              <div class="audio-main">
-                <div class="audio-description">Listen to sound in room</div>
+              <audio id="roomAudioPlayer"
+                     preload="none"
+                     playsinline
+                     controls></audio>
 
-                <audio id="roomAudioPlayer"
-                       preload="none"
-                       playsinline
-                       controls></audio>
+              <label class="audio-mute">
+                <input type="checkbox" id="muteAudio" checked>
+                <span>Mute audio</span>
+              </label>
+            </div>
 
-                <label class="audio-mute">
-                  <input type="checkbox" id="muteAudio" checked>
-                  <span>Mute audio</span>
-                </label>
-              </div>
-
-              <div class="audio-status-stack" aria-label="Audio pipeline status">
-
-                <div class="audio-status-item">
-                  <span class="stack-led pending" id="audioMicLed"></span>
-                  <span>Mic</span>
-                </div>
-
-                <div class="audio-status-item">
-                  <span class="stack-led pending" id="audioMtxLed"></span>
-                  <span>MediaMTX</span>
-                </div>
-
-                <div class="audio-status-item">
-                  <span class="stack-led pending" id="audioRtspLed"></span>
-                  <span>RTSP</span>
-                </div>
-
-                <div class="audio-status-item">
-                  <span class="stack-led pending" id="audioHlsLed"></span>
-                  <span>HLS</span>
-                </div>
-
-              </div>
-
+            <div class="vfd" role="status" aria-label="Audio pipeline status">
+              <div class="vfd-row"><span class="vfd-label">MIC</span><span class="vfd-val pending" id="audioMicLed">--</span></div>
+              <div class="vfd-row"><span class="vfd-label">RTSP</span><span class="vfd-val pending" id="audioRtspLed">--</span></div>
+              <div class="vfd-row"><span class="vfd-label">MTX</span><span class="vfd-val pending" id="audioMtxLed">--</span></div>
+              <div class="vfd-row"><span class="vfd-label">HLS</span><span class="vfd-val pending" id="audioHlsLed">--</span></div>
             </div>
 
             <div class="audio-talk-row">
@@ -1433,10 +1435,16 @@
 
   var hlsAudio = null;
 
+  /* Drives one VFD cell: the lit state and the word it shows. "--" for
+     unknown reads as an idle segment rather than a claim either way. */
+  var VFD_TEXT = { ok: 'OK', fail: 'ERR', pending: '--' };
+
   function stage(el, state) {
     if (!el) return;
+    if (!VFD_TEXT[state]) state = 'pending';
     el.classList.remove('pending', 'ok', 'fail');
     el.classList.add(state);
+    el.textContent = VFD_TEXT[state];
   }
 
   function setAudioState(text) {
