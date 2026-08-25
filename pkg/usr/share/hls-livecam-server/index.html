@@ -70,6 +70,25 @@
   }
 
   /* ── HEADER ── */
+  /* The header is part of the same instrument as the sidebar, so it uses
+     the same three materials: the brand is engraved into the housing, the
+     host and the status sit behind glass in phosphor. Status colour is the
+     one place phosphor is allowed to leave its usual hue -- a red LIVE lamp
+     is a lamp, and the tube is where this panel puts state it must not lose
+     in a glance. */
+  header .hdr-vfd {
+    display: inline-flex; align-items: center; gap: 10px;
+    border-radius: 5px; padding: 5px 10px;
+    background: linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
+    border: 1px solid #040809;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75);
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  }
+  header .hdr-vfd .vlit { font-size: 11px; }
+  .brand-mark { width: 20px; height: 20px; display: block; flex: 0 0 auto; image-rendering: auto; }
+  /* The title is cast into the housing like every other label on this page.
+     It is a name, not a state -- it must never light up or go green. */
+  .brand-name { font-weight: 700; letter-spacing: .04em; }
   header {
     display: flex;
     align-items: center;
@@ -101,15 +120,15 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
+    padding: 0;
+    background: none;
+    border: 0;
+    font-family: var(--mono);
     font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text-dim);
-    transition: all 0.2s;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--phos);
+    text-shadow: 0 0 1px var(--phos), 0 0 7px color-mix(in srgb,var(--phos) 52%,transparent);
   }
   .live-pill::before {
     content: '';
@@ -117,11 +136,11 @@
     border-radius: 50%;
     background: var(--text-muted);
   }
-  .live-pill.live { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
+  .live-pill.live { color: var(--danger); text-shadow: 0 0 1px var(--danger), 0 0 7px color-mix(in srgb, var(--danger) 52%, transparent); }
   .live-pill.live::before { background: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
-  .live-pill.reconnecting { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
+  .live-pill.reconnecting { color: var(--warn); text-shadow: 0 0 1px var(--warn), 0 0 7px color-mix(in srgb, var(--warn) 52%, transparent); }
   .live-pill.reconnecting::before { background: var(--warn); }
-  .live-pill.dark-mode { color: var(--text-muted); background: var(--panel-2); border-color: var(--border); }
+  .live-pill.dark-mode { color: var(--phos-label); text-shadow: none; }
   .live-pill.dark-mode::before { background: var(--text-muted); animation: none; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
@@ -282,7 +301,7 @@
   .vrow + .vrow { margin-top: 1px; }
   .vlab { font-family: var(--mono); font-size: 8.5px; letter-spacing: .13em; color: var(--phos-label); text-transform: uppercase; line-height: 20px; }
   .vval { position: relative; text-align: right; line-height: 20px; height: 20px; }
-  .vghost, .vlit { font-family: var(--mono); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: .05em; white-space: nowrap; line-height: 20px; }
+  .vghost, .vlit { font-family: var(--mono); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: .05em; white-space: nowrap; line-height: 20px; }
   .vghost { position: absolute; inset: 0; text-align: right; color: var(--phos-ghost); pointer-events: none; user-select: none; }
   .vlit { position: relative; color: var(--phos); text-shadow: 0 0 1px var(--phos), 0 0 7px color-mix(in srgb,var(--phos) 52%,transparent), 0 0 15px color-mix(in srgb,var(--phos) 24%,transparent); }
   .vunit { font-size: 8px; letter-spacing: .1em; opacity: .7; margin-left: 3px; }
@@ -582,12 +601,12 @@
 
 <header>
   <div class="brand">
-    <span>HLS Livecam</span>
-    <span class="sep">//</span>
-    <span id="hostName" style="color:var(--success);font-weight:500;"></span>
+    <img src="/brand.png" alt="" class="brand-mark">
+    <span class="eng brand-name">HLS Livecam</span>
+    <span class="hdr-vfd"><span class="vlit" id="buildLabel"></span></span>
   </div>
   <div class="status-bar">
-    <span class="live-pill" id="liveIndicator">CONNECTING</span>
+    <span class="hdr-vfd"><span class="live-pill" id="liveIndicator">CONNECTING</span></span>
   </div>
 </header>
 
@@ -614,7 +633,6 @@
     </button>
     <div class="switch-overlay" id="switchOverlay">
       <canvas class="switch-static" id="switchStatic"></canvas>
-      <div class="switch-label" id="switchLabel">Switching feed…</div>
     </div>
     <div class="hide-overlay" id="hideOverlay">
       <div class="hide-title">No signal</div>
@@ -630,7 +648,7 @@
         <div class="panel-title eng">Video</div>
         <div class="split">
           <div class="vfd">
-            <div class="vrow"><span class="vlab">Host</span><span class="vval"><span class="vghost">▩▩▩▩▩▩▩▩</span><span class="vlit" id="hostVal"></span></span></div>
+            <div class="vrow"><span class="vlab">Host</span><span class="vval"><span class="vghost">888.888.88.8</span><span class="vlit" id="hostVal"></span></span></div>
             <div class="vrow"><span class="vlab">Res</span><span class="vval"><span class="vghost">8888×888</span><span class="vlit" id="resVal"></span></span></div>
             <div class="vrow"><span class="vlab">Fps</span><span class="vval"><span class="vghost">88.8</span><span class="vlit" id="fpsVal"></span></span></div>
             <div class="vind">
@@ -719,8 +737,8 @@
         <label class="chk"><input type="checkbox" id="lockCheck" onchange="toggleLock()"><span class="box"></span><span class="eng">Lock message</span></label>
       </div>
 
-      <div class="prefs">
-        <label class="chk"><input type="checkbox" id="themeCheck" onchange="toggleTheme()"><span class="box"></span><span class="eng">Light theme</span></label>
+      <div class="modemrow" style="padding:0 2px">
+        <button class="pbtn" id="themeBtn" onclick="toggleTheme()">Light theme</button>
       </div>
       <button class="pbtn" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
 
@@ -765,12 +783,18 @@
     var nameEl = document.getElementById('hostName');
     if (nameEl) nameEl.textContent = '@' + (info.hostname || '');
     var hostValEl = document.getElementById('hostVal');
-    if (hostValEl) {
-      var hn = (info.hostname || window.location.hostname || '').split('.')[0];
-      // An IP is not a name and does not fit the glass. Fall back to the
-      // tailscale address only when there is no name at all.
-      if (/^[0-9.]+$/.test(hn)) hn = (info.tailscale || hn);
-      hostValEl.textContent = hn;
+    // The VIDEO tube shows the ADDRESS, not the name: the name is already
+    // in the header and repeating it wastes the only wide field we have.
+    // The address is the thing you actually need when a feed misbehaves.
+    if (hostValEl) hostValEl.textContent =
+      info.tailscale || window.location.hostname || '';
+    // Build label in the header tube: what this is, and which node it is.
+    // Platform-prefixed so a screenshot from any fleet member identifies
+    // itself without anyone having to recognise the layout.
+    var bl = document.getElementById('buildLabel');
+    if (bl) {
+      var host = (info.hostname || window.location.hostname || '').split('.')[0];
+      bl.textContent = (info.version ? 'linux-v' + info.version + ' ' : '') + '@' + host;
     }
     document.title = 'Cam @' + (info.hostname || window.location.hostname);
   }).catch(function(){
@@ -881,8 +905,11 @@
   function applyTheme() {
     if (lightTheme) document.documentElement.setAttribute('data-theme', 'light');
     else document.documentElement.removeAttribute('data-theme');
-    var cb = document.getElementById('themeCheck');
-    if (cb) cb.checked = lightTheme;
+    var tb = document.getElementById('themeBtn');
+    if (tb) {
+      tb.className = 'pbtn' + (lightTheme ? ' pressed' : '');
+      tb.textContent = lightTheme ? 'Dark theme' : 'Light theme';
+    }
   }
   function toggleTheme() {
     lightTheme = !lightTheme;
@@ -970,7 +997,6 @@
     var on = switching || faulted;
     if (on) { startStatic(); switchOverlay.classList.add('visible'); }
     else    { stopStatic(); switchOverlay.classList.remove('visible'); }
-    if (switchLabel) switchLabel.style.display = switching ? '' : 'none';
   }
 
   function startStatic() {
