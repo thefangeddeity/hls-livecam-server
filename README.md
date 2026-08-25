@@ -114,6 +114,50 @@ curl -X POST http://localhost/api/buzz
 
 ---
 
+## PENDING.md
+
+[`PENDING.md`](PENDING.md) is the running handover: what is in git but not in
+any tag, `.deb` or AUR package, what other branches should check their own
+code for, and the measurements behind each. **Every node clones it from
+here** — it used to be copied around by hand, which meant the copies drifted.
+Read it before assuming an install matches this tree.
+
+---
+
+## The viewer
+
+The sidebar is an instrument panel, ported from the macOS branch's design
+rather than reinterpreted. Three materials, kept strictly apart:
+
+- **engraved** — every label. One gray, one carved shadow, cast into the
+  housing. It cannot light up, gray out or turn green, so the eye tracks
+  lamps instead of re-reading words.
+- **lamps** — all state. **Only what is actually measured lights up.** On
+  this branch MediaMTX and RTSP have no probe, so they stay dark rather than
+  green; a lamp that can never fail is indistinguishable from a broken one.
+- **phosphor** — live values, behind glass, over ghost segments. An unknown
+  reading shows the ghosts alone — never a zero, never a guess.
+
+Nothing outside the glass is ever phosphor-coloured, nothing inside it is
+ever gray, and **the tube does not invert in light theme**. A vacuum tube has
+no light mode: the housing goes pale, the glass stays a dark screen set into
+it.
+
+Panels run **VIDEO · AUDIO · MESSAGE**, each reading status then controls.
+The two media boxes share one geometry — a small key on the left, its control
+hard right — so learning one teaches the other.
+
+`Show / CV / Hide` set the published feed for everyone. The LISTEN transport
+and the `MUTE` key are **local to your browser**: the transport starts and
+stops the room audio without touching the picture, and MUTE silences it here
+without telling the server or stopping the stream.
+
+The picture uses `object-fit: contain`. It letterboxes rather than cropping,
+because the CV pipeline burns telemetry into the frame and `cover` was
+cutting it off at the bottom on any window shorter than 16:9.
+
+---
+
 ## Feed modes
 
 Three modes, set from the viewer, the Qt dashboard or camdash, and persisted
