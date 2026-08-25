@@ -6,8 +6,24 @@
 # bundle -- the venv and gui/ package live in the project dir, not inside
 # the .app, so a relative resolution would break the moment the .app is
 # copied anywhere the project isn't (e.g. dragged to /Applications).
-ROOT="/Users/ron/Projects/mac-hls-livecam"
+APP_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# Installed bundle:
+#   camdash-gui.app/Contents/Resources/app/
+#
+# Development checkout fallback:
+#   ~/Projects/mac-hls-livecam/
+if [ -d "$APP_ROOT/Resources/app" ]; then
+    ROOT="$APP_ROOT/Resources/app"
+else
+    ROOT="/Users/ron/Projects/mac-hls-livecam"
+fi
+
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
+
+export PATH="$ROOT/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
 cd "$ROOT"
 exec "$PY" -m gui.app "$@"
