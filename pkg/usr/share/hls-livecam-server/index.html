@@ -602,7 +602,7 @@
 <header>
   <div class="brand">
     <img src="/brand.png" alt="" class="brand-mark">
-    <span class="eng brand-name">HLS Livecam</span>
+    <span class="eng brand-name" id="brandName">HLS Livecam</span>
     <span class="hdr-vfd"><span class="vlit" id="buildLabel"></span></span>
   </div>
   <div class="status-bar">
@@ -802,6 +802,11 @@
     // name, and Source has to point where its code actually is.
     var pn = document.getElementById('prodName');
     if (pn && info.product) pn.textContent = info.product;
+    // The header wears the same name as the footer, minus the word Server:
+    // the masthead names the thing, the notice names the product. Derived
+    // rather than shipped as a fourth string, so the two cannot disagree.
+    var bn = document.getElementById('brandName');
+    if (bn && info.product) bn.textContent = info.product.replace(/ Server$/, '');
     var sl = document.getElementById('srcLink');
     if (sl && info.source) sl.href = info.source;
     var Host = host ? host.charAt(0).toUpperCase() + host.slice(1) : '';
