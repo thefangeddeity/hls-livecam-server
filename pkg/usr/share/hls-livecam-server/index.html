@@ -317,8 +317,8 @@
      panels now run [tiny modem button] ... [checkbox], button left and
      checkbox hard right, so the two boxes teach each other. */
   .modemrow { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
-  .modemrow .chk { margin-top: 0; margin-left: auto; }
-  .modem { width: 54px; height: 32px; border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; cursor: pointer; font-family: inherit;
+  .modemrow .chk, .modemrow > .modem:last-child { margin-top: 0; margin-left: auto; }
+  .modem { min-width: 54px; height: 32px; padding: 0 7px; border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; cursor: pointer; font-family: inherit;
     background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
   .modem:disabled { cursor: not-allowed; opacity: .55; }
@@ -587,6 +587,11 @@
 <div class="main">
   <div class="video-wrap" id="videoContainer">
     <video id="video" autoplay muted playsinline webkit-playsinline></video>
+    <!-- Room audio rides its own element on the audio-only rendition, the
+         way ariana does it. The <video> above stays muted permanently: it
+         carries the same AAC muxed in, and unmuting both plays the room
+         twice, slightly out of step. -->
+    <audio id="roomAudio" preload="none"></audio>
     <div class="dark-overlay" id="darkOverlay">
       <img src="/dark.png" alt="">
     </div>
@@ -671,12 +676,14 @@
         <!-- TWEAK (PM): the transport is a tiny modem button with a light,
              and Mute audio sits hard right on the same line. -->
         <div class="modemrow">
-          <button class="modem" id="listenBtn" onclick="toggleListen()" disabled title="Listen to the room">
+          <button class="modem" id="listenBtn" onclick="togglePlay()" title="Pause the feed">
             <span class="bulb" id="listenLamp"></span>
-            <svg width="11" height="12" viewBox="0 0 11 12" fill="currentColor" style="color:#d6d6da"><path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/></svg>
+            <svg id="tPlay" width="11" height="12" viewBox="0 0 11 12" fill="currentColor" style="color:#d6d6da"><path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/></svg>
           </button>
           <span class="cap eng" id="audioStateLabel">Checking…</span>
-          <label class="chk"><input type="checkbox" id="muteAudioCheck" onchange="toggleMuteAudio()"><span class="box"></span><span class="eng">Mute audio</span></label>
+          <button class="modem" id="muteAudioBtn" onclick="toggleMuteAudio()" title="Mute audio in this browser only; the stream keeps running">
+            <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
+          </button>
         </div>
 
         <div class="pdiv"></div>
@@ -685,7 +692,7 @@
           <button class="pbtn pending" id="talkBtn" disabled title="No talkback on this node">
             <span class="bulb"></span> TALK<span class="badge2">SOON</span>
           </button>
-          <button class="pbtn" id="buzzBtn" onclick="sendBuzz()">🔔 BUZZ</button>
+          <button class="pbtn" id="buzzBtn" onclick="sendBuzz()">BUZZ</button>
         </div>
         <div class="modemrow">
           <label class="chk"><input type="checkbox" id="muteCheck" onchange="toggleMute()"><span class="box"></span><span class="eng">Mute buzzes</span></label>
@@ -1055,8 +1062,6 @@
     if (iLive) iLive.className = live ? 'on' : '';
     var iAv = document.getElementById('indAv');
     if (iAv) iAv.className = audioReady ? 'on' : '';
-    var iMute = document.getElementById('indMute');
-    if (iMute) iMute.className = video.muted ? 'on' : '';
     var res = document.getElementById('resVal');
     if (res && video.videoWidth) res.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
   }
@@ -1294,29 +1299,82 @@
   var audioStateLabel = document.getElementById('audioStateLabel');
   var audioReady      = false;
 
-  function toggleListen() {
-    if (!audioReady) return;
-    video.muted = !video.muted;
-    paintListen();
-    try { localStorage.setItem('livecamListen', video.muted ? '0' : '1'); } catch (e) {}
+  // ── ROOM AUDIO TRANSPORT ──
+  // The transport starts and stops the ROOM AUDIO. It never touches the
+  // picture -- that is what Show/Hide is for, and a control that stops the
+  // feed while sitting under a heading called LISTEN would be lying about
+  // what it does.
+  var roomAudio = document.getElementById('roomAudio');
+  var audioSrcResolved = false;
+
+  // Resolve the audio-only rendition out of the master manifest rather than
+  // pointing the element at the master itself: the master carries video too,
+  // so playing it would pull ~1.5 Mb/s of pictures purely to throw them
+  // away. The URI is resolved at runtime because the rendition name encodes
+  // the publisher's track index and is not a constant.
+  function resolveAudioSrc(cb) {
+    if (audioSrcResolved) { cb(); return; }
+    fetch(HLS_URL, { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(txt) {
+        var uri = null;
+        if (txt) {
+          var m = txt.match(/#EXT-X-MEDIA:[^\n]*TYPE=AUDIO[^\n]*URI="([^"]+)"/);
+          if (m) uri = m[1];
+        }
+        // No rendition found: fall back to the master. Worse, but audible.
+        roomAudio.src = uri ? HLS_URL.replace(/[^/]*$/, uri) : HLS_URL;
+        audioSrcResolved = true;
+        cb();
+      });
   }
 
-  // The button never changes its word -- engraved labels do not move. The
-  // lamp is the only thing that carries the state.
-  function paintListen() {
+  function togglePlay() {
+    if (roomAudio.paused) {
+      resolveAudioSrc(function() {
+        roomAudio.play().then(paintTransport).catch(function() {
+          audioStateLabel.textContent = 'Tap to enable';
+          paintTransport();
+        });
+      });
+    } else {
+      roomAudio.pause();
+      paintTransport();
+    }
+  }
+
+  // Icon reflects the state: stopped shows the play triangle, running shows
+  // the pause bars.
+  function paintTransport() {
+    var g = document.getElementById('tPlay');
+    if (g) g.innerHTML = roomAudio.paused
+      ? '<path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/>'
+      : '<rect x="1" y="1" width="3.4" height="10" rx="1"/><rect x="6.6" y="1" width="3.4" height="10" rx="1"/>';
     var lamp = document.getElementById('listenLamp');
-    if (lamp) lamp.className = 'bulb' + (!video.muted && audioReady ? ' on' : '');
-    var mc = document.getElementById('muteAudioCheck');
-    if (mc) mc.checked = video.muted;
+    if (lamp) lamp.className = 'bulb' + (!roomAudio.paused && !roomAudio.muted ? ' on' : '');
+    var iMute = document.getElementById('indMute');
+    if (iMute) iMute.className = (roomAudio.muted || roomAudio.paused) ? 'on' : '';
     paintLamps();
   }
 
+  // Mute is local and unsynchronised on purpose: someone silencing the room
+  // in their own tab is not deciding for anyone else, and it must not stop
+  // the stream -- the picture and the publisher both keep running.
   function toggleMuteAudio() {
-    var mc = document.getElementById('muteAudioCheck');
-    video.muted = mc.checked;
-    paintListen();
-    try { localStorage.setItem('livecamListen', video.muted ? '0' : '1'); } catch (e) {}
+    roomAudio.muted = !roomAudio.muted;
+    paintMute();
+    try { localStorage.setItem('livecamMuted', roomAudio.muted ? '1' : '0'); } catch (e) {}
   }
+
+  function paintMute() {
+    var lamp = document.getElementById('muteLamp');
+    if (lamp) lamp.className = 'bulb' + (roomAudio.muted ? ' on' : '');
+    paintTransport();
+  }
+
+  function paintListen() { paintTransport(); }
+  try { roomAudio.muted = localStorage.getItem('livecamMuted') !== '0'; } catch (e) { roomAudio.muted = true; }
 
   function pollAudio() {
     fetch('/api/audio', { cache: 'no-store' })
@@ -1330,13 +1388,11 @@
           audioStateLabel.textContent = 'Unknown';
           audioRateEl.textContent = '';
           audioKbpsEl.textContent = '';
-          listenBtn.disabled = true;
           paintListen();
           return;
         }
         var live = (a.state === 'ok');
         audioReady = live;
-        listenBtn.disabled = !live;
         audioStateLabel.textContent =
           a.state === 'ok'       ? 'Sound in room' :
           a.state === 'off'      ? 'Closed' :
@@ -1350,7 +1406,6 @@
           ? (a.rate_hz / 1000).toFixed(1) + '<span class="vunit">KHZ</span>' : '';
         audioKbpsEl.innerHTML = live
           ? a.kbps + '<span class="vunit">KBPS</span>' : '';
-        if (!live && !video.muted) video.muted = true;   // nothing to hear
         paintListen();
       });
   }
