@@ -1492,7 +1492,11 @@ class CVProcessor:
         if getattr(self, '_persist_enabled', False) and self._persist_store is not None:
             n = len(self._persist_store.persistent())
             bits.append(f'PERSISTENT 2D ({n})' if n else 'PERSISTENT 2D')
-        line = ' \u00b7 '.join(bits)
+        # ASCII separator, deliberately. cv2.putText with a HERSHEY font
+        # cannot render U+00B7 and silently substitutes '?', so the HUD read
+        # "OVERLAY ?? DEBLOCK". A separator that renders as garbage on the
+        # only surface this string is ever drawn to is not a separator.
+        line = ', '.join(bits)
         # Acuity reads as a qualifier on everything above it rather than
         # another item in the list, so it joins with "AT".
         if self._acuity_adapt and self._acuity_last is not None:
