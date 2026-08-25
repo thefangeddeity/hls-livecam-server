@@ -445,6 +445,18 @@
       overflow-y: visible; flex-shrink: unset;
     }
     .sidebar-scroll { overflow-y: visible; }
+
+    /* The header cannot carry brand, version and status on a phone -- the
+       name was wrapping onto two lines to make room. The status pill goes,
+       because it is the one thing already reported elsewhere on the page:
+       the VIDEO tube carries a LIVE segment and an HLS lamp, both visible
+       without scrolling. The version strip stays, since nothing else shows
+       which build you are looking at. */
+    header .status-bar { display: none; }
+    .brand-name { white-space: nowrap; }
+    header { gap: 10px; }
+    .brand { min-width: 0; }
+    header .hdr-vfd { font-size: 10px; padding: 3px 7px; }
     .desktop-only { display: none !important; }
     textarea.msg-box {
     flex: none; width: 100%; max-width: 100%; -webkit-appearance: none; transform: translateZ(0); }
