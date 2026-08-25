@@ -728,6 +728,19 @@ def load_attr(l, cores, dim=False):
     return curses.color_pair(3) | curses.A_BOLD
 
 # ---------- DASHBOARD SNAPSHOT ----------
+def _api_get_json(endpoint):
+    """Parsed JSON from an endpoint, or None. None means UNKNOWN -- a node
+    that predates the endpoint, or an API that is down -- and callers must
+    render that differently from any state the endpoint itself reports."""
+    import json as _json
+    raw = _api_get(endpoint, "")
+    if not raw:
+        return None
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return None
+
 def _api_get(endpoint, default):
     import urllib.request
     try:
@@ -759,6 +772,12 @@ def sample_metrics():
         "dark":  os.path.exists(DARK_FLAG),
         "feed_mode": _api_get("feed-mode", "show"),
         "foveal_mode": _api_get("foveal-mode", "false"),
+        # Room audio. Three states, never two: 'disabled' is a node with no
+        # microphone configured, 'off' is a configured microphone that is
+        # CLOSED because the feed is hidden, 'ok' is room audio going out.
+        # An older node that predates /api/audio returns nothing, which is a
+        # fourth thing again -- unknown -- and must not read as 'disabled'.
+        "audio": _api_get_json("audio"),
         "msg_lock":  _api_get("msg-lock", "false"),
         "svc":   services_running(),
         "cputemp": round(psutil.sensors_temperatures().get("coretemp", [None])[0].current) if psutil.sensors_temperatures().get("coretemp") else "?",
@@ -1373,6 +1392,21 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
         _nginx_status = _nginx_label
         _nginx_attr = status_attr(_nginx_status, dim)
     safe(scr, y, 2, f"nginx:    {_nginx_label}", _nginx_attr); y += 1
+    # Room audio, reported rather than inferred. The figures come from what
+    # the node told ffmpeg -- never from the HLS manifest's BANDWIDTH, which
+    # is video+audio combined and overstates audio badly.
+    _aud = snap.get('audio') or None
+    if _aud is None:
+        safe(scr, y, 2, "audio:    N/A", status_attr('DOWN', dim)); y += 1
+    else:
+        _ast = str(_aud.get('state', '?'))
+        _alabel = {'ok': 'LIVE', 'off': 'CLOSED', 'disabled': 'NONE'}.get(_ast, _ast.upper())
+        safe(scr, y, 2, f"audio:    {_alabel}",
+             status_attr('LIVE' if _ast == 'ok' else 'DOWN', dim)); y += 1
+        if _ast == 'ok':
+            _khz = (_aud.get('rate_hz') or 0) / 1000.0
+            safe(scr, y, 2, f"          {_khz:.1f}kHz {_aud.get('kbps', '?')}kbps",
+                 curses.A_DIM); y += 1
     _feed_mode = snap.get('feed_mode', 'show')
     _showing  = _feed_mode == 'show'
     # Accept both -- our own broadcast-api emits 'cv' now, but a node still

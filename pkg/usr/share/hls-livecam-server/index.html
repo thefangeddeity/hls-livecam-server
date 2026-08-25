@@ -641,15 +641,9 @@
         <!-- TWEAK (PM): modem button left, checkbox hard right. -->
         <div class="modemrow">
           <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
-            <span class="bulb" id="repairLamp"></span><span class="cap2">RPR</span>
+            <span class="cap2">RELOAD</span>
           </button>
           <label class="chk" id="fovealChk"><input type="checkbox" id="fovealCheck" onchange="toggleFoveal()"><span class="box"></span><span class="eng">Foveal layer</span></label>
-        </div>
-        <div class="modemrow" id="sceneRow">
-          <button class="modem" id="sceneReregisterBtn" onclick="reregisterScene()" title="Re-register camera">
-            <span class="bulb" id="sceneLamp"></span><span class="cap2">REG</span>
-          </button>
-          <span class="chk" id="sceneChip" style="cursor:default"><span class="eng">Scene</span><span class="vlit" id="sceneBadge" style="font-size:9px"></span></span>
         </div>
       </div>
 
@@ -678,7 +672,8 @@
              and Mute audio sits hard right on the same line. -->
         <div class="modemrow">
           <button class="modem" id="listenBtn" onclick="toggleListen()" disabled title="Listen to the room">
-            <span class="bulb" id="listenLamp"></span><span class="cap2" id="listenCap">LSN</span>
+            <span class="bulb" id="listenLamp"></span>
+            <svg width="11" height="12" viewBox="0 0 11 12" fill="currentColor" style="color:#d6d6da"><path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/></svg>
           </button>
           <span class="cap eng" id="audioStateLabel">Checking…</span>
           <label class="chk"><input type="checkbox" id="muteAudioCheck" onchange="toggleMuteAudio()"><span class="box"></span><span class="eng">Mute audio</span></label>
@@ -1062,8 +1057,6 @@
     if (iAv) iAv.className = audioReady ? 'on' : '';
     var iMute = document.getElementById('indMute');
     if (iMute) iMute.className = video.muted ? 'on' : '';
-    var lamp = document.getElementById('repairLamp');
-    if (lamp) lamp.className = 'bulb' + (faulted ? ' on' : '');
     var res = document.getElementById('resVal');
     if (res && video.videoWidth) res.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
   }
@@ -1097,9 +1090,12 @@
 
   // ── SCENE MODEL — three-state: registered / stale / unregistered ──
   function applySceneState(state) {
+    // No scene row on this panel -- scene registration belongs to lightcv,
+    // where the cameras are bad enough to need a registered reference. The
+    // endpoint stays live for anything else that asks; the viewer does not
+    // nag about it.
+    if (!sceneBadge) return;
     sceneBadge.textContent = state.toUpperCase();
-    var lamp = document.getElementById('sceneLamp');
-    if (lamp) lamp.className = 'bulb' + (state === 'registered' ? ' on' : '');
     // Re-register only makes sense once something exists to re-register
     // against -- the endpoint itself rejects the call otherwise.
     sceneReregisterBtn.hidden = (state === 'unregistered');
