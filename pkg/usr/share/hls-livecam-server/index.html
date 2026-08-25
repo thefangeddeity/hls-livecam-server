@@ -350,6 +350,26 @@
   .modem:disabled { cursor: not-allowed; opacity: .55; }
   .modem:active { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
   .modem .cap2 { font-family: var(--mono); font-size: 7.5px; letter-spacing: .1em; color: var(--emboss); }
+  .vol { -webkit-appearance: none; appearance: none; flex: 1 1 auto; min-width: 52px;
+    height: 32px; background: none; cursor: pointer; }
+  .vol::-webkit-slider-runnable-track { height: 5px; border-radius: 3px;
+    background: linear-gradient(180deg,#141416,#1c1c1f);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.04); }
+  .vol::-moz-range-track { height: 5px; border-radius: 3px;
+    background: linear-gradient(180deg,#141416,#1c1c1f);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.04); }
+  .vol::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+    width: 11px; height: 18px; margin-top: -6.5px; border-radius: 3px;
+    background: linear-gradient(180deg,#3a3a40,#26262a); border: 1px solid #45454d;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 1px 2px rgba(0,0,0,.5); }
+  .vol::-moz-range-thumb {
+    width: 11px; height: 18px; border-radius: 3px;
+    background: linear-gradient(180deg,#3a3a40,#26262a); border: 1px solid #45454d;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 1px 2px rgba(0,0,0,.5); }
+  html[data-theme="light"] .vol::-webkit-slider-runnable-track,
+  html[data-theme="light"] .vol::-moz-range-track { background: linear-gradient(180deg,#e4e4e9,#eeeef2); box-shadow: inset 0 1px 2px rgba(0,0,0,.18); }
+  html[data-theme="light"] .vol::-webkit-slider-thumb,
+  html[data-theme="light"] .vol::-moz-range-thumb { background: linear-gradient(180deg,#fdfdfe,#e9e9ee); border-color: #c3c3ca; box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(0,0,0,.2); }
   .listen { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
   .listen .cap, .modemrow .cap { font-size: 9.5px; color: var(--emboss-dim); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .modemrow .chk { white-space: nowrap; }
@@ -702,6 +722,9 @@
             <span class="bulb" id="listenLamp"></span>
             <svg id="tPlay" width="11" height="12" viewBox="0 0 11 12" fill="currentColor" style="color:#d6d6da"><path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/></svg>
           </button>
+          <input type="range" class="vol" id="volSlider" min="0" max="100" step="1"
+                 value="100" oninput="setVolume()" aria-label="Volume"
+                 title="Volume in this browser only">
           <button class="modem" id="muteAudioBtn" onclick="toggleMuteAudio()" title="Mute audio in this browser only; the stream keeps running">
             <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
           </button>
@@ -1424,7 +1447,11 @@
       ? '<path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/>'
       : '<rect x="1" y="1" width="3.4" height="10" rx="1"/><rect x="6.6" y="1" width="3.4" height="10" rx="1"/>';
     var lamp = document.getElementById('listenLamp');
-    if (lamp) lamp.className = 'bulb' + (!roomAudio.paused && !roomAudio.muted ? ' on' : '');
+    // Lit means sound is actually reaching the listener: playing, not
+    // muted, and not turned all the way down. A slider at zero is silence
+    // by another route, and the lamp would be lying if it stayed green.
+    if (lamp) lamp.className = 'bulb' +
+      (!roomAudio.paused && !roomAudio.muted && roomAudio.volume > 0 ? ' on' : '');
     var iMute = document.getElementById('indMute');
     if (iMute) iMute.className = (roomAudio.muted || roomAudio.paused) ? 'on' : '';
     paintLamps();
@@ -1439,6 +1466,16 @@
     try { localStorage.setItem('livecamMuted', roomAudio.muted ? '1' : '0'); } catch (e) {}
   }
 
+  // Volume is local, like mute: it is the listener's own ear, not a
+  // decision for the other viewers, and it never reaches the API.
+  function setVolume() {
+    var v = document.getElementById('volSlider');
+    if (!v) return;
+    roomAudio.volume = Math.max(0, Math.min(1, v.value / 100));
+    try { localStorage.setItem('livecamVolume', v.value); } catch (e) {}
+    paintTransport();
+  }
+
   function paintMute() {
     var lamp = document.getElementById('muteLamp');
     if (lamp) lamp.className = 'bulb' + (roomAudio.muted ? ' on' : '');
@@ -1447,6 +1484,12 @@
 
   function paintListen() { paintTransport(); }
   try { roomAudio.muted = localStorage.getItem('livecamMuted') !== '0'; } catch (e) { roomAudio.muted = true; }
+  try {
+    var _sv = localStorage.getItem('livecamVolume');
+    var _vs = document.getElementById('volSlider');
+    if (_vs && _sv !== null) _vs.value = _sv;
+    if (_vs) roomAudio.volume = Math.max(0, Math.min(1, _vs.value / 100));
+  } catch (e) {}
 
   function pollAudio() {
     fetch('/api/audio', { cache: 'no-store' })
