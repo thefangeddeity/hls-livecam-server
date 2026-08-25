@@ -160,21 +160,27 @@
   }
   .dark-overlay.visible { display: flex; }
   .dark-overlay img { width: 100%; height: 100%; object-fit: cover; opacity: 0.85; }
-  .video-overlay {
-    position: absolute;
-    top: 12px; left: 16px;
-    padding: 6px 10px;
-    background: rgba(0,0,0,0.55);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border-radius: var(--radius-sm);
+  /* The timestamp used to be a translucent chip floating over the top-left
+     of the picture. It is page furniture until a VCR-style date is burned
+     into the feeds themselves -- at which point it comes from the frame,
+     the same for every viewer, and this footer copy goes away. A clock
+     drawn by the browser is the viewer's own clock, not the camera's, and
+     laying one over the picture invites reading it as part of the feed. */
+  .page-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 4px 10px;
+    padding: 14px 16px 20px;
     font-size: 11px;
-    color: #fff;
-    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
     letter-spacing: 0.02em;
-    opacity: 0.85;
-    pointer-events: none;
   }
+  .page-foot .ts { font-variant-numeric: tabular-nums; color: var(--text); }
+  .page-foot .sep { opacity: 0.4; }
+  .page-foot a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  .page-foot a:hover { color: var(--text); }
   .switch-overlay {
     position: absolute; inset: 0;
     display: none;
@@ -220,15 +226,19 @@
     font-size: 12px;
     color: rgba(255,255,255,0.3);
   }
+  /* Above the static (z 20), not under it: a fault now shows snow with the
+     explanation on top of it. The scrim is lighter than it was, and the
+     blur is gone -- both existed to hide a black frame, and there is no
+     black frame behind this any more. */
   .error-overlay {
     position: absolute; inset: 0;
     display: none;
     flex-direction: column;
     align-items: center; justify-content: center;
     gap: 8px;
-    background: rgba(0,0,0,0.72);
-    backdrop-filter: blur(4px);
+    background: rgba(0,0,0,0.45);
     color: #fff;
+    z-index: 25;
   }
   .error-overlay.visible { display: flex; }
   .error-overlay .title { font-size: 15px; font-weight: 600; color: var(--danger); }
@@ -454,7 +464,6 @@
     <div class="dark-overlay" id="darkOverlay">
       <img src="/dark.png" alt="">
     </div>
-    <div class="video-overlay" id="tsOverlay">--</div>
     <button class="fs-btn" onclick="toggleFullscreen()" title="Fullscreen">
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
@@ -467,7 +476,7 @@
     </button>
     <div class="switch-overlay" id="switchOverlay">
       <canvas class="switch-static" id="switchStatic"></canvas>
-      <div class="switch-label">Switching feed…</div>
+      <div class="switch-label" id="switchLabel">Switching feed…</div>
     </div>
     <div class="hide-overlay" id="hideOverlay">
       <div class="hide-title">No signal</div>
@@ -551,6 +560,15 @@
     </div>
   </aside>
 </div>
+
+<footer class="page-foot">
+  <span class="ts" id="tsOverlay">--</span>
+  <span class="sep">&middot;</span>
+  <span>HLS Livecam &mdash; free software under the
+    <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>
+    or later, with NO WARRANTY.
+    <a href="https://github.com/thefangeddeity/hls-livecam-server" target="_blank" rel="noopener">Source</a>.</span>
+</footer>
 
 <script>
   var HLS_URL = 'http://' + window.location.hostname + ':8888/cam/index.m3u8';
@@ -731,10 +749,15 @@
 
   var switchOverlay = document.getElementById('switchOverlay');
   var switchStatic  = document.getElementById('switchStatic');
+  var switchLabel   = document.getElementById('switchLabel');
   var staticTimer   = null;
   var staticFrameN  = 0;
-  // Open for the length of a feed-mode cover. See fadeOut() for why.
-  var switching     = false;
+  // Two independent reasons to cover the picture with snow. Kept separate
+  // because they clear on different events -- a switch clears when the new
+  // stream plays, a fault clears when the stream goes LIVE again -- and one
+  // must not cancel the other's cover.
+  var switching     = false;   // deliberate: the operator changed mode
+  var faulted       = false;   // involuntary: the player gave up
 
   // Analog VHS snow, ported from the Windows node's draw_switching()
   // (windows/src/gui/panels.rs): a small grey noise field regenerated each
@@ -765,6 +788,18 @@
       }
     }
     ctx.putImageData(img, 0, 0);
+  }
+
+  // Snow is what "no usable picture" looks like, whatever the reason -- a
+  // switch, a dropped stream, a dead publisher. The label is what makes the
+  // reason legible, and it belongs only to the deliberate case; a fault gets
+  // the error overlay's own words instead. So the texture is shared and the
+  // explanation is not.
+  function updateCover() {
+    var on = switching || faulted;
+    if (on) { startStatic(); switchOverlay.classList.add('visible'); }
+    else    { stopStatic(); switchOverlay.classList.remove('visible'); }
+    if (switchLabel) switchLabel.style.display = switching ? '' : 'none';
   }
 
   function startStatic() {
@@ -805,8 +840,8 @@
     switching = true;
     errorOverlay.classList.remove('visible');
     reconnectBtn.hidden = true;
-    switchOverlay.classList.add('visible');
-    startStatic();
+    faulted = false;
+    updateCover();
 
     var done = false;
     function finish() {
@@ -814,10 +849,9 @@
       done = true;
       video.removeEventListener('playing', onPlaying);
       if (fadeInTimer) { clearTimeout(fadeInTimer); fadeInTimer = null; }
-      stopStatic();
       video.style.opacity = '1';
-      switchOverlay.classList.remove('visible');
       switching = false;
+      updateCover();   // a fault raised mid-switch keeps the snow up
     }
     // Clear the static when the new stream actually starts, with a bounded
     // fallback so a switch that never recovers cannot strand the overlay on
@@ -958,6 +992,10 @@
     if (mode === 'live') {
       errorOverlay.classList.remove('visible');
       reconnectBtn.hidden = true;
+      // Genuinely back: drop the fault cover. A switch cover, if one is
+      // still open, clears on its own 'playing' event instead.
+      faulted = false;
+      updateCover();
       if (!liveAt) {
         liveAt = Date.now();
         if (uptimeInterval) clearInterval(uptimeInterval);
@@ -984,6 +1022,8 @@
       reconnectBtn.hidden = true;
       return;
     }
+    faulted = true;
+    updateCover();
     errorOverlay.classList.add('visible');
     reconnectBtn.hidden = false;
   }
