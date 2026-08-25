@@ -1452,8 +1452,16 @@
     // by another route, and the lamp would be lying if it stayed green.
     if (lamp) lamp.className = 'bulb' +
       (!roomAudio.paused && !roomAudio.muted && roomAudio.volume > 0 ? ' on' : '');
+    // MUTE names the state of the audio PATH: silenced, by either route --
+    // the mute key or a slider dragged to zero. It is deliberately not lit
+    // by 'paused'. Stopped and muted are different things and the panel
+    // already distinguishes them: the transport's own lamp says whether
+    // anything is playing. Lighting MUTE for a stopped stream would make
+    // the segment mean "no sound right now", which is what the lamp says,
+    // and leave nothing saying whether the mute key is engaged.
     var iMute = document.getElementById('indMute');
-    if (iMute) iMute.className = (roomAudio.muted || roomAudio.paused) ? 'on' : '';
+    if (iMute) iMute.className =
+      (roomAudio.muted || roomAudio.volume === 0) ? 'on' : '';
     paintLamps();
   }
 
