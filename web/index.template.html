@@ -1790,6 +1790,14 @@
     // is backgrounded or throttled — this panel then reports the viewer's
     // window state instead of the stream. Decoded-frame count tracks the feed.
     var lastCount = null;
+    /* iOS plays HLS natively and reports getVideoPlaybackQuality() with
+       totalVideoFrames pinned at 0, so the delta is always 0 and the tube
+       read "0 FPS" over a plainly moving picture. That is a measurement
+       failure, not a frame rate, and this panel's rule is that an unknown
+       value shows unlit segments rather than a number. Distinguish the two:
+       a counter that has never advanced cannot be read here, while one that
+       advanced and then stopped is telling us something real. */
+    var everAdvanced = false;
     setInterval(function() {
       if (document.hidden) return;            // decoding pauses; a delta here is meaningless
       var count = null;
@@ -1799,8 +1807,11 @@
       // lit span reveals them. Never a dash, never a zero.
       if (count === null) { fpsEl.textContent = ''; return; }
       if (lastCount === null) { lastCount = count; return; }   // no delta on the first tick
-      fpsEl.innerHTML = (count - lastCount) + '<span class="vunit">FPS</span>';
+      var delta = count - lastCount;
       lastCount = count;
+      if (delta > 0) everAdvanced = true;
+      if (!everAdvanced) { fpsEl.textContent = ''; return; }   // unmeasurable here
+      fpsEl.innerHTML = delta + '<span class="vunit">FPS</span>';
     }, 1000);
     document.addEventListener('visibilitychange', function() {
       if (document.hidden) lastCount = null;  // resync on return, don't emit a burst
