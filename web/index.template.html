@@ -494,7 +494,11 @@
     flex: 0 0 12px;
   }
 
-  .audio-status-stack {
+  /* The lamp stack is shared by the audio panel and the video/stream panel.
+     The .audio-* names came first and are kept so that panel's markup is
+     untouched; new callers use the neutral .status-* names. */
+  .audio-status-stack,
+  .status-stack {
     display: flex;
     flex-direction: column;
     gap: 9px;
@@ -503,7 +507,19 @@
     padding-top: 1px;
   }
 
-  .audio-status-item {
+  /* In the Stream panel the stack is the only occupant, so it spans the
+     panel and lays its lamps out in two columns rather than a narrow file. */
+  .status-stack.status-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px 10px;
+    width: 100%;
+    min-width: 0;
+    margin-top: 7px;
+  }
+
+  .audio-status-item,
+  .status-item {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -595,7 +611,8 @@
       min-width: 76px;
     }
 
-    .audio-status-item { font-size: 7.5px; }
+    .audio-status-item,
+    .status-item { font-size: 7.5px; }
   }
 
   /* ── Compact STREAM rows ─────────────────────────────────────── */
@@ -732,6 +749,30 @@
         <div class="stat"><span class="k">Host</span><span class="v" id="hostVal">--</span></div>
         <div class="stat"><span class="k">Resolution</span><span class="v">1280 × 720</span></div>
         <div class="stat"><span class="k">Framerate</span><span class="v" id="fpsVal">--</span></div>
+
+        <!-- Video pipeline lamps. Camera, MediaMTX and RTSP come from the same
+             /api/pipeline measurement as the audio panel: capture is a single
+             AVFoundation session, so the camera and the microphone succeed or
+             fail together and it would be dishonest to show them disagreeing.
+             The HLS lamp is this player's own, mirroring the live indicator. -->
+        <div class="status-stack status-grid" aria-label="Video pipeline status">
+          <div class="status-item">
+            <span class="stack-led pending" id="videoCamLed"></span>
+            <span>Camera</span>
+          </div>
+          <div class="status-item">
+            <span class="stack-led pending" id="videoMtxLed"></span>
+            <span>MediaMTX</span>
+          </div>
+          <div class="status-item">
+            <span class="stack-led pending" id="videoRtspLed"></span>
+            <span>RTSP</span>
+          </div>
+          <div class="status-item">
+            <span class="stack-led pending" id="videoHlsLed"></span>
+            <span>HLS</span>
+          </div>
+        </div>
       </div>
 
       <!-- AUDIO — capture publishes video and audio in one session, so this
@@ -1418,10 +1459,46 @@
 
   var pipelineTimer = null;
 
+  /* Video pipeline lamps in the Stream panel. Camera/MediaMTX/RTSP are the
+     same measurement as above -- one AVFoundation session captures both, so
+     they cannot honestly disagree -- while the HLS lamp is per-player. */
+  var vCamLed  = document.getElementById('videoCamLed');
+  var vMtxLed  = document.getElementById('videoMtxLed');
+  var vRtspLed = document.getElementById('videoRtspLed');
+  var vHlsLed  = document.getElementById('videoHlsLed');
+  var liveInd  = document.getElementById('liveIndicator');
+
+  function norm(v) {
+    return v === 'ok' ? 'ok' : v === 'fail' ? 'fail' : 'pending';
+  }
+
+  /* Mirror the live pill rather than re-testing the stream: it is already the
+     authority on this player's state, and a second opinion that disagreed
+     with the badge next to it would just be confusing. */
+  function videoHlsState() {
+    var t = ((liveInd && liveInd.textContent) || '').trim().toUpperCase();
+    if (t === 'LIVE') return 'ok';
+    if (t === 'UNSUPPORTED' || t === 'RECONNECTING' || t === 'ERROR') return 'fail';
+    return 'pending';
+  }
+
+  function refreshVideoHls() { stage(vHlsLed, videoHlsState()); }
+
+  if (liveInd && window.MutationObserver) {
+    new MutationObserver(refreshVideoHls)
+      .observe(liveInd, { childList: true, characterData: true, subtree: true });
+  }
+  refreshVideoHls();
+
   function applyPipeline(p) {
-    stage(micLed,  p.mic      === 'ok' ? 'ok' : p.mic      === 'fail' ? 'fail' : 'pending');
-    stage(mtxLed,  p.mediamtx === 'ok' ? 'ok' : p.mediamtx === 'fail' ? 'fail' : 'pending');
-    stage(rtspLed, p.rtsp     === 'ok' ? 'ok' : p.rtsp     === 'fail' ? 'fail' : 'pending');
+    stage(micLed,  norm(p.mic));
+    stage(mtxLed,  norm(p.mediamtx));
+    stage(rtspLed, norm(p.rtsp));
+
+    stage(vCamLed,  norm(p.mic));
+    stage(vMtxLed,  norm(p.mediamtx));
+    stage(vRtspLed, norm(p.rtsp));
+    refreshVideoHls();
 
     /* The server's own detail string is the useful thing to surface on hover:
        "capture hung opening the camera/microphone" beats a grey dot. */
@@ -1435,10 +1512,15 @@
       .then(function (p) { if (p) applyPipeline(p); })
       .catch(function () {
         /* The API being unreachable is itself information: nothing
-           server-side can be vouched for, so drop back to unknown. */
-        stage(micLed,  'pending');
-        stage(mtxLed,  'pending');
-        stage(rtspLed, 'pending');
+           server-side can be vouched for, so drop back to unknown. The HLS
+           lamps are not cleared -- they are the browser's own observation
+           and remain valid whether or not the API answers. */
+        stage(micLed,   'pending');
+        stage(mtxLed,   'pending');
+        stage(rtspLed,  'pending');
+        stage(vCamLed,  'pending');
+        stage(vMtxLed,  'pending');
+        stage(vRtspLed, 'pending');
       });
   }
 
