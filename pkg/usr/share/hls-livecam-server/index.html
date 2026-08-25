@@ -729,7 +729,7 @@
             <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
             <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost">888</span><span class="vlit" id="audioKbps"></span></span></div>
             <div class="vind">
-              <i id="indStereo">STEREO</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i>
             </div>
           </div>
           <div class="leds">
@@ -1513,6 +1513,15 @@
     // anything is playing. Lighting MUTE for a stopped stream would make
     // the segment mean "no sound right now", which is what the lamp says,
     // and leave nothing saying whether the mute key is engaged.
+    // STOP and MUTE are different facts and each gets its own segment.
+    // STOPPED is "the transport is not running" -- nothing is being fetched
+    // or decoded. MUTE is "the path is silenced" -- audio is flowing and
+    // being thrown away at the last step, by the key or by a slider at
+    // zero. Folding them together, which is what this did before, loses the
+    // one thing the operator actually needs to know: whether pressing play
+    // will help, or whether it is already playing and you cannot hear it.
+    var iStop = document.getElementById('indStop');
+    if (iStop) iStop.className = roomAudio.paused ? 'on' : '';
     var iMute = document.getElementById('indMute');
     if (iMute) iMute.className =
       (roomAudio.muted || roomAudio.volume === 0) ? 'on' : '';
