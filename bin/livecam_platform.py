@@ -68,6 +68,103 @@ def ensure_dirs():
         os.makedirs(d, exist_ok=True)
 
 
+# ── Build identity ───────────────────────────────────────────────
+#
+# Every operator-facing surface -- the Qt dashboard, the camdash TUI, the web
+# viewer, the DMG filename and its mounted volume name -- shows the same
+# string, so "which build am I looking at?" can be answered from whatever
+# happens to be in front of you. Two DMGs of the same version are otherwise
+# indistinguishable once installed, which is how stale bits get tested.
+#
+# The version is whatever `git describe --tags` says, never a hand-maintained
+# constant. A version string that is edited separately from the tag drifts from
+# it the first time someone forgets, and then the label is worse than useless
+# because it is confidently wrong. Deriving it means a displayed version can
+# always be resolved back to a commit that exists in the repository.
+#
+# Resolution order:
+#   1. BUILDINFO written into the runtime directory at package time. Present
+#      only in a built bundle, and authoritative there -- it records what was
+#      actually packaged, not what the working tree looks like now.
+#   2. A live `git describe`, for a dev checkout.
+#
+# Never raises: a missing or malformed build stamp must not stop the stack
+# from starting. Unknown is reported as "unknown", not as an exception.
+
+_build_info_cache = None
+
+
+def _read_buildinfo():
+    info = {}
+    try:
+        with open(os.path.join(ROOT, "BUILDINFO")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    info[k.strip()] = v.strip()
+    except Exception:
+        return {}
+    return info
+
+
+def _git(*args):
+    try:
+        out = subprocess.run(["git", "-C", ROOT, *args],
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def build_info():
+    """{version, build, commit, packaged} -- cached, never raises."""
+    global _build_info_cache
+    if _build_info_cache is not None:
+        return _build_info_cache
+
+    info = _read_buildinfo()
+    if info.get("version"):
+        result = {
+            "version":  info.get("version", "unknown"),
+            "build":    info.get("build", ""),
+            "commit":   info.get("commit", ""),
+            "packaged": True,
+        }
+    else:
+        # `--dirty` matters more than it looks: an uncommitted tree is not any
+        # released version, and labelling it as one is how you end up debugging
+        # a build that does not correspond to any commit anyone else can see.
+        version = _git("describe", "--tags", "--always", "--dirty") or "unknown"
+        # A checkout has no build stamp, and inventing one would make a working
+        # tree look like a release. Say "dev" so the difference is obvious.
+        result = {
+            "version":  version,
+            "build":    "dev",
+            "commit":   _git("rev-parse", "--short", "HEAD"),
+            "packaged": False,
+        }
+
+    _build_info_cache = result
+    return result
+
+
+def version_label(short=False):
+    """Single display string for build identity.
+
+    short=True drops the build stamp for cramped surfaces (window titles,
+    single-line TUI headers). The version and commit are kept because those
+    are what someone reads back to you over the phone.
+    """
+    i = build_info()
+    parts = [i["version"]]
+    if not short and i["build"]:
+        parts.append(i["build"])
+    if i["commit"]:
+        parts.append(i["commit"])
+    return " · ".join(parts)
+
+
 def runtime_bin(name):
     """Path to a sibling component, with the platform's executable suffix."""
     if IS_WINDOWS and not name.endswith(".exe"):

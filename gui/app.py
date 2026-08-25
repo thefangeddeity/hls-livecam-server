@@ -694,6 +694,18 @@ class BottomBar(QFrame):
         lay.addWidget(Divider(vertical=True))
         lay.addSpacing(10)
 
+        # Build label sits with the licence badge rather than the status
+        # readout: it is fixed identity, not changing state.
+        build = QLabel(probes.version_label(short=True))
+        build.setObjectName("Hint")
+        build.setFont(_font(T.T_BADGE))
+        build.setToolTip(f"Build: {probes.version_label()}")
+        lay.addWidget(build)
+
+        lay.addSpacing(10)
+        lay.addWidget(Divider(vertical=True))
+        lay.addSpacing(10)
+
         lic = QLabel("GPL 3.0")
         lic.setObjectName("Hint")
         lic.setFont(_font(T.T_BADGE))
@@ -753,7 +765,10 @@ class BottomBar(QFrame):
 class Dashboard(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("camdash — HLS Livecam Operator")
+        # The build goes in the title so it is readable from the window list
+        # and from a screenshot, without needing the window focused.
+        self.setWindowTitle(
+            f"camdash — HLS Livecam Operator — {probes.version_label(short=True)}")
         self.resize(1400, 900)
         self.setStyleSheet(T.QSS)
         self.last = {}

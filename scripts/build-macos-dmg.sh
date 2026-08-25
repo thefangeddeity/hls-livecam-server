@@ -9,14 +9,48 @@ CONTENTS="$APP/Contents"
 RES="$CONTENTS/Resources"
 RUNTIME="$RES/app"
 MACOS="$CONTENTS/MacOS"
-VERSION="1.0.0-audio"
+# The version is derived from git, never hand-maintained here. A constant in
+# this file drifts from the tags the first time someone forgets to update it,
+# and a confidently wrong version label is worse than none at all.
+VERSION="$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo unknown)"
 BUILD_STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
 GIT_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 GIT_DIRTY="$(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
 
-# The filename carries the build stamp so a stale DMG is obvious at a glance
-# rather than after a wasted trip to the console.
-OUT="$DIST/HLS-Livecam-${VERSION}-${BUILD_STAMP}.dmg"
+# A version is only meaningful if someone else can check out the thing it
+# names. Refuse to package a tree whose contents exist nowhere but this disk:
+# uncommitted edits, or a commit that was never pushed. Both produce a DMG
+# whose label cannot be resolved back to anything, which is the exact failure
+# this labelling is meant to prevent.
+#
+# ALLOW_DIRTY_BUILD=1 overrides for local iteration. The label is marked so an
+# override can never be mistaken for a release.
+PUSHED="$(git -C "$ROOT" branch -r --contains HEAD 2>/dev/null | tr -d ' ' | paste -sd, -)"
+BUILD_TRUST="release"
+
+if [[ "$GIT_DIRTY" != "0" || -z "$PUSHED" ]]; then
+  BUILD_TRUST="untracked"
+  [[ "$GIT_DIRTY" != "0" ]] && echo "  working tree has ${GIT_DIRTY} uncommitted file(s)" >&2
+  [[ -z "$PUSHED" ]]        && echo "  HEAD (${GIT_COMMIT}) is not on any remote branch" >&2
+  if [[ "${ALLOW_DIRTY_BUILD:-0}" != "1" ]]; then
+    echo "ERROR: refusing to build a DMG that cannot be traced to a pushed commit." >&2
+    echo "       Commit and push, or re-run with ALLOW_DIRTY_BUILD=1 to override." >&2
+    exit 1
+  fi
+  echo "  ALLOW_DIRTY_BUILD=1 -- labelling this build as UNTRACKED" >&2
+  VERSION="${VERSION}-UNTRACKED"
+fi
+
+# CFBundleShortVersionString wants dotted integers, so strip the tag's
+# decoration ("mac-v1.1.1" -> "1.1.1"). Falls back to 0.0.0 rather than
+# shipping a plist value the OS may reject outright.
+SHORT_VERSION="$(printf '%s' "$VERSION" | grep -oE '[0-9]+(\.[0-9]+){1,2}' | head -1)"
+[[ -n "$SHORT_VERSION" ]] || SHORT_VERSION="0.0.0"
+
+# The filename carries version, build stamp and commit so a stale DMG is
+# obvious at a glance rather than after a wasted trip to the console, and so
+# it can be matched against the label the installed app shows.
+OUT="$DIST/HLS-Livecam-${VERSION}-${BUILD_STAMP}-${GIT_COMMIT}.dmg"
 
 # Install-time policy, shared with install-macos.py. Empty identity = ad-hoc,
 # which is this fleet's permanent state by decision.
@@ -52,7 +86,9 @@ echo "[1/6] Preflight"
 echo "[2/6] Bundle"
 mkdir -p "$MACOS" "$RUNTIME"
 
-cat > "$CONTENTS/Info.plist" <<'PLIST'
+# Unquoted heredoc so the version substitutes. The plist body contains no '$',
+# so nothing else here is at risk of expansion.
+cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -64,8 +100,9 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>hls-livecam</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundleShortVersionString</key><string>1.0.0-audio</string>
-<key>CFBundleVersion</key><string>1.0.0</string>
+<key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
+<key>CFBundleVersion</key><string>${SHORT_VERSION}</string>
+<key>LivecamBuildLabel</key><string>${VERSION} · ${BUILD_STAMP} · ${GIT_COMMIT}</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>HLS Livecam uses the camera to publish the live room video feed.</string>
@@ -89,7 +126,9 @@ ditto "$ROOT/vendor" "$RUNTIME/vendor"
 # viewer a function of committed source instead of local disk state.
 BUILD_HLS_PORT="$(grep -E '^HLS_PORT=' "$ROOT/config.env" 2>/dev/null | cut -d= -f2 | tr -d ' ')"
 [[ -n "$BUILD_HLS_PORT" ]] || BUILD_HLS_PORT=8888
-sed "s|@HLS_PORT@|${BUILD_HLS_PORT}|g" \
+sed -e "s|@HLS_PORT@|${BUILD_HLS_PORT}|g" \
+    -e "s|@VERSION@|${VERSION}|g" \
+    -e "s|@BUILD_LABEL@|${VERSION} · ${BUILD_STAMP} · ${GIT_COMMIT}|g" \
   "$ROOT/web/index.template.html" > "$RUNTIME/web/index.html"
 
 # An unsubstituted placeholder would ship a viewer that cannot reach the
@@ -235,9 +274,16 @@ cat > "$RES/BUILDINFO" <<INFO
 version=${VERSION}
 build=${BUILD_STAMP}
 commit=${GIT_COMMIT}
+trust=${BUILD_TRUST}
 uncommitted_files=${GIT_DIRTY}
 built_by=$(whoami)@$(hostname -s)
 INFO
+
+# Second copy inside the runtime directory. livecam_platform resolves BUILDINFO
+# relative to its own location (bin/..), which is Resources/app -- not
+# Resources -- so the components and the Qt dashboard would otherwise fall back
+# to a `git describe` that cannot work on a machine with no checkout.
+cp "$RES/BUILDINFO" "$RUNTIME/BUILDINFO"
 
 # Purge bytecode before signing. Any __pycache__ generated after the signature
 # invalidates the seal the moment it is written, and a broken seal means the
@@ -260,7 +306,7 @@ mkdir -p "$DIST"
 rm -f "$OUT"
 
 hdiutil create \
-  -volname "HLS Livecam 1.0.0-audio" \
+  -volname "HLS Livecam ${VERSION}" \
   -srcfolder "$STAGE" \
   -ov \
   -format UDZO \

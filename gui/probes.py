@@ -19,6 +19,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -27,6 +28,34 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CAMDASH_PATH = os.path.join(ROOT, "bin", "camdash")
+
+
+def _load_platform():
+    """Shared build-identity/paths module, imported from bin/ alongside camdash.
+
+    Kept optional: the dashboard is a client and must still open on a tree
+    where this module is missing, showing an unknown version rather than
+    refusing to start.
+    """
+    try:
+        if os.path.join(ROOT, "bin") not in sys.path:
+            sys.path.insert(0, os.path.join(ROOT, "bin"))
+        import livecam_platform
+        return livecam_platform
+    except Exception:
+        return None
+
+
+_plat = _load_platform()
+
+
+def version_label(short=False):
+    if _plat is None:
+        return "unknown"
+    try:
+        return _plat.version_label(short=short)
+    except Exception:
+        return "unknown"
 
 
 def _load_camdash():

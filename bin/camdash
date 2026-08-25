@@ -15,6 +15,15 @@ STATE_DIR = os.path.join(ROOT, "state")
 CONFIG    = os.path.join(ROOT, "config.env")
 LIVECAM   = os.path.join(BIN_DIR, "livecam")
 
+# Build identity in the header, so a headless SSH session can answer "which
+# build is this box running?" without hunting for a plist. Optional import:
+# camdash must keep working on a tree where the platform module is absent.
+try:
+    import livecam_platform as _plat
+    BUILD_LABEL = _plat.version_label(short=True)
+except Exception:
+    BUILD_LABEL = "unknown"
+
 def _read_config():
     env = {}
     try:
@@ -1096,9 +1105,6 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     sys_status = base_status if cur_repair in ("IDLE", "OK") else cur_repair
 
     # -- HEADER --
-    safe(scr, 0, 2,
-         f"Webcam Server Stack  \u2022  uptime {up // 3600}h {(up % 3600) // 60}m",
-         base)
     qualifiers = []
     if not svc:
         qualifiers.append("services stopped")
@@ -1109,6 +1115,18 @@ def draw_dashboard(scr, snap, cur_repair, dim=False, editing_buffer=None):
     mid = "\u2022 " + sys_status + (" | " + " | ".join(qualifiers) if qualifiers else "")
     _mid_x = w // 2 - len(mid) // 2
     _hattr = header_attr(sys_status, svc, dark, dim)
+
+    # Left header is drawn after the centre position is known, because it has
+    # to yield to it. The centre block grows as qualifiers appear, moving its
+    # start leftwards, so a fixed width test is not enough -- measured against
+    # 120 columns the build label overlaps the status text outright. Drop the
+    # label rather than corrupt the header; the GUI and the web viewer both
+    # still carry it, and `livecam status` prints it on demand.
+    _uptime = f"uptime {up // 3600}h {(up % 3600) // 60}m"
+    _left = f"Webcam Server Stack  \u2022  {BUILD_LABEL}  \u2022  {_uptime}"
+    if 2 + len(_left) >= _mid_x - 1:
+        _left = f"Webcam Server Stack  \u2022  {_uptime}"
+    safe(scr, 0, 2, _left, base)
     if sys_status == "LIVE" and not dim:
         safe(scr, 0, _mid_x, "\u2022", _hattr | curses.A_BLINK)
         safe(scr, 0, _mid_x + 1,
