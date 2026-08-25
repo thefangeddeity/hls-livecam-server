@@ -165,6 +165,16 @@ same size and colour as the rest of the line. `Source` links to the repo,
 and the warranty disclaimer are the same on every node, and a fleet where
 each viewer words its own licence notice is a fleet with no licence notice.
 
+**macOS: adopt this footer and drop the header clock.** ariana currently
+carries a clock beside the live pill *and* a date over the picture. The line
+at the foot does the same job better and does more with it: it is the only
+place the fleet says who made this, that it is free software, which licence,
+and that there is no warranty. Attribution and a warranty disclaimer are not
+decoration — they are the reason the licence works — and a fleet where each
+viewer words its own is a fleet with none. One line, one font, at the foot,
+identical on every node. The clock rides along at the end of that sentence
+rather than needing furniture of its own.
+
 **This footer date is temporary.** The intended end state is a **VCR-style
 date burned into the video feed, top left** — drawn by the same HUD code that
 already writes the telemetry strip, so it comes from the *frame* and is
