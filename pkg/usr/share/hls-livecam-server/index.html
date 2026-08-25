@@ -528,10 +528,13 @@
       <!-- AUDIO — desktop only -->
       <div class="section desktop-only">
         <div class="section-title">Audio</div>
+        <div class="stat"><span class="k">Rate</span><span class="v" id="audioRate">--</span></div>
+        <div class="stat"><span class="k">Bitrate</span><span class="v" id="audioKbps">--</span></div>
         <div class="info-chip">
-          <span class="label">No audio</span>
-          <span class="badge">COMING SOON</span>
+          <span class="label" id="audioStateLabel">Checking…</span>
+          <span class="badge" id="audioBadge">--</span>
         </div>
+        <button class="btn primary" id="listenBtn" onclick="toggleListen()" disabled>Listen</button>
       </div>
 
 
@@ -1063,6 +1066,72 @@
   }
 
   function reloadStream() { initHLS(); }
+
+  // ── ROOM AUDIO ──
+  // No second stream is fetched. The variant hls.js is already playing
+  // carries the AAC track (the master lists it as an EXT-X-MEDIA rendition
+  // in the AUDIO group), so listening is just unmuting the <video> we have.
+  // macOS had to resolve and load the audio-only rendition separately
+  // because enabling sound there re-fetched the whole video stream to throw
+  // the pictures away; that problem does not exist on this path.
+  //
+  // The element stays muted until a click. Browsers block unmuted autoplay,
+  // and a camera that starts talking the moment a page opens is impolite
+  // besides.
+  var listenBtn       = document.getElementById('listenBtn');
+  var audioRateEl     = document.getElementById('audioRate');
+  var audioKbpsEl     = document.getElementById('audioKbps');
+  var audioStateLabel = document.getElementById('audioStateLabel');
+  var audioBadge      = document.getElementById('audioBadge');
+  var audioReady      = false;
+
+  function toggleListen() {
+    if (!audioReady) return;
+    video.muted = !video.muted;
+    listenBtn.textContent = video.muted ? 'Listen' : 'Mute';
+    listenBtn.className = 'btn' + (video.muted ? ' primary' : '');
+    try { localStorage.setItem('livecamListen', video.muted ? '0' : '1'); } catch (e) {}
+  }
+
+  function pollAudio() {
+    fetch('/api/audio', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; })
+      .then(function(a) {
+        // Unreachable API means unknown, which must not look like a
+        // measurement. Ghost dashes, never a zero and never a guess.
+        if (!a) {
+          audioReady = false;
+          audioStateLabel.textContent = 'Unknown';
+          audioBadge.textContent = '--';
+          audioRateEl.textContent = '--';
+          audioKbpsEl.textContent = '--';
+          listenBtn.disabled = true;
+          return;
+        }
+        var live = (a.state === 'ok');
+        audioReady = live;
+        listenBtn.disabled = !live;
+        audioBadge.textContent = a.state.toUpperCase();
+        audioStateLabel.textContent =
+          a.state === 'ok'       ? 'Room audio' :
+          a.state === 'off'      ? 'Closed while hidden' :
+                                   'No microphone';
+        // Reported, not asserted: these come from what the node told ffmpeg.
+        // The manifest's BANDWIDTH is video+audio combined and would
+        // overstate this badly.
+        audioRateEl.textContent = live ? (a.rate_hz / 1000).toFixed(1) + ' kHz' : '--';
+        audioKbpsEl.textContent = live ? a.kbps + ' kbps' : '--';
+        if (!live && !video.muted) {
+          // Nothing to hear; do not leave the control claiming otherwise.
+          video.muted = true;
+          listenBtn.textContent = 'Listen';
+          listenBtn.className = 'btn primary';
+        }
+      });
+  }
+  pollAudio();
+  setInterval(pollAudio, 5000);
 
   var reloadBtn = document.getElementById('reloadBtn');
   function manualReload() {

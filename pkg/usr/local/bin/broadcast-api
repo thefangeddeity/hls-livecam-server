@@ -185,7 +185,35 @@ def _render_hide_frame(width, height):
     big = _cv2.resize(small, (width, height), interpolation=_cv2.INTER_NEAREST)
     return np.repeat(big[:, :, None], 3, axis=2)
 
-def _start_loopback_publisher(denv):
+# -- Room audio ---------------------------------------------------------
+# Ported from ariana (mac-v1.3.0/1.5.0), but the shape is different here and
+# the difference is the whole reason this is cheap on Linux.
+#
+# macOS had to capture video and audio in ONE avfoundation session, because
+# two clients contending for the camera deadlocked ffmpeg inside
+# avformat_open_input. That forced the Python frame pipeline out entirely
+# and left Blur/Hide as buttons over nothing.
+#
+# We do not have that constraint. Video already goes camera -> broadcast-api
+# -> /dev/video10, so the PUBLISHER's video input is a loopback device that
+# nothing else wants. Audio is simply a second input on the publisher. No
+# contention, no deadlock, and the CV pipeline is untouched -- the seam
+# macOS had to give up is one we already had.
+#
+# Off by default. A node with no microphone, or one pointed somewhere audio
+# would not be welcome, publishes exactly what it does today.
+def _audio_conf(denv):
+    """(enabled, device, backend, bitrate, rate, channels) from device.env."""
+    return (
+        denv.get('AUDIO_ENABLED', '0').strip() not in ('', '0', 'false', 'no'),
+        denv.get('AUDIO_DEVICE', 'hw:0,0').strip(),
+        denv.get('AUDIO_BACKEND', 'alsa').strip(),
+        denv.get('AUDIO_BITRATE', '96k').strip(),
+        denv.get('AUDIO_SAMPLE_RATE', '48000').strip(),
+        denv.get('AUDIO_CHANNELS', '2').strip(),
+    )
+
+def _start_loopback_publisher(denv, mode='show'):
     fr = int(denv.get('FRAMERATE', 15))
     # Keyframe interval, in seconds of video. mediamtx can only cut a segment
     # at a keyframe, so this is what actually determines segment length: at
@@ -198,13 +226,43 @@ def _start_loopback_publisher(denv):
     # package install overwrote it. Sourced from device.env now so it can be
     # retuned without editing code, and committed here so it survives.
     gop_seconds = int(denv.get('GOP_SECONDS', 1))
+    a_on, a_dev, a_backend, a_kbps, a_rate, a_ch = _audio_conf(denv)
+
+    inputs = ['-f', 'v4l2', '-i', LOOPBACK_DEVICE]
+    maps   = ['-map', '0:v:0']
+    acodec = []
+    if a_on:
+        if mode == 'hide':
+            # HIDE MUST SILENCE THE ROOM. The video half is already handled
+            # upstream -- the writer loop feeds static into the loopback --
+            # but audio does not pass through that path, so without this the
+            # microphone would keep publishing while the picture said the
+            # camera was off. That is precisely the control-that-lies failure
+            # ariana found on macOS, and it would be worse here: a viewer
+            # looking at snow would still be heard.
+            #
+            # anullsrc rather than a muted mic: the device is not opened at
+            # all, so it is genuinely closed, not merely turned down.
+            inputs += ['-f', 'lavfi',
+                       '-i', f'anullsrc=channel_layout=stereo:sample_rate={a_rate}']
+        else:
+            inputs += ['-f', a_backend, '-ac', a_ch, '-ar', a_rate,
+                       '-i', a_dev]
+        maps += ['-map', '1:a:0']
+        acodec = ['-c:a', 'aac', '-b:a', a_kbps, '-ar', a_rate, '-ac', a_ch]
+
+    print(f"broadcast-api: publisher mode={mode} audio="
+          + (f"{a_backend}:{a_dev} @{a_kbps}" if a_on and mode != 'hide'
+             else ('silence (hidden)' if a_on else 'off')), flush=True)
+
     return subprocess.Popen([
         'ffmpeg', '-hide_banner', '-loglevel', 'error',
-        '-f', 'v4l2', '-i', LOOPBACK_DEVICE,
+        *inputs,
         '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-vf', f'fps={fr},format=yuv420p',
         '-profile:v', 'high', '-level', '4.0',
         '-b:v', '1500k', '-g', str(max(1, fr * gop_seconds)),
+        *acodec, *maps,
         '-rtsp_transport', 'tcp', '-f', 'rtsp', 'rtsp://127.0.0.1:8554/cam'
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -260,7 +318,9 @@ def _writer_loop():
     _cam_proc = cam_holder[0]
     threading.Thread(target=_drain_loop, args=(cam_holder, denv), daemon=True).start()
 
-    pub_holder = [_start_loopback_publisher(denv)]
+    with _mode_lock:
+        pub_mode = _mode
+    pub_holder = [_start_loopback_publisher(denv, pub_mode)]
     _pub_proc = pub_holder[0]
     time.sleep(1.0)
 
@@ -272,10 +332,33 @@ def _writer_loop():
         with _mode_lock:
             mode = _mode
 
+        # ffmpeg inputs cannot be changed on a running process, so the only
+        # way to open or close the microphone is to restart the publisher.
+        # Crossing the hide boundary is therefore the ONE mode change that
+        # costs a stream blip -- and it is the one worth paying for, because
+        # the alternative is a hidden camera that is still listening.
+        #
+        # show <-> cv does NOT restart anything: that swap happens in the
+        # frames we write into the loopback, which the publisher never
+        # notices. Only privacy moves the process.
+        audio_on = _audio_conf(denv)[0]
+        if audio_on and (mode == 'hide') != (pub_mode == 'hide'):
+            if _shutting_down.is_set():
+                return
+            pub_holder[0].terminate()
+            try:
+                pub_holder[0].wait(timeout=3)   # reap; a zombie reads as alive
+            except Exception:
+                pub_holder[0].kill()
+            pub_mode = mode
+            pub_holder[0] = _start_loopback_publisher(denv, pub_mode)
+            _pub_proc = pub_holder[0]
+            time.sleep(0.5)
+
         if pub_holder[0].poll() is not None:
             if _shutting_down.is_set():
                 return
-            pub_holder[0] = _start_loopback_publisher(denv)
+            pub_holder[0] = _start_loopback_publisher(denv, pub_mode)
             _pub_proc = pub_holder[0]
             time.sleep(0.5)
 
@@ -321,6 +404,38 @@ def bw_mode_get():
 @app.route('/api/bw-mode', methods=['POST'])
 def bw_mode_post():
     return 'false', 200
+
+# Reported, not asserted. The numbers come from what this node actually
+# told ffmpeg, never from the HLS master manifest's BANDWIDTH -- that figure
+# is video+audio combined and overstates audio badly, which is the trap
+# ariana flagged after wiring their own readout to it.
+#
+# Three states, kept distinct on purpose: 'disabled' is a node with no
+# microphone configured, 'off' is a configured microphone that is currently
+# CLOSED because the feed is hidden, and 'ok' is room audio going out. An
+# unlit lamp for the first two is honest; calling either of them 'ok' would
+# be true of the process and false of the room.
+@app.route('/api/audio', methods=['GET'])
+def audio_get():
+    denv = _read_device_env()
+    on, dev, backend, kbps, rate, ch = _audio_conf(denv)
+    with _mode_lock:
+        hidden = (_mode == 'hide')
+    if not on:
+        state = 'disabled'
+    elif hidden:
+        state = 'off'
+    else:
+        state = 'ok'
+    return {
+        'enabled': on,
+        'state': state,
+        'backend': backend if on else None,
+        'device': dev if on else None,
+        'kbps': int(str(kbps).rstrip('kK') or 0) if on else None,
+        'rate_hz': int(rate) if on else None,
+        'channels': int(ch) if on else None,
+    }, 200
 
 @app.route('/api/feed-mode', methods=['GET'])
 def feed_mode_get():

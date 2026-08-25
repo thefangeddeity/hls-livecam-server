@@ -414,6 +414,11 @@ if [ ! -e /dev/video10 ]; then
     exit 1
 fi
 usermod -aG video www-data
+# Room audio: the publisher opens the ALSA capture device as this user,
+# and /dev/snd/* is root:audio. Without this, AUDIO_ENABLED=1 fails with
+# 'Cannot get card index' and nothing but the log says why. Harmless on a
+# node with no microphone -- the group exists either way.
+usermod -aG audio www-data
 echo -e "  ${GREEN}v4l2loopback loaded on /dev/video10. www-data added to video group.${NC}"
 
 systemctl enable mediamtx broadcast-api
