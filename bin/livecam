@@ -400,11 +400,17 @@ write_starter_app() {
   mkdir -p "$STARTER_APP/Contents/MacOS"
   cat > "$STARTER_APP/Contents/MacOS/start" <<EOF
 #!/bin/bash
-exec /usr/bin/osascript <<'APPLESCRIPT'
-tell application "Terminal"
-    do script "exec '${VENV_PY}' '${BIN_DIR}/livecam-supervisor'"
-end tell
-APPLESCRIPT
+# Launched by LaunchServices (\`open\`) or as a Login Item, so this process is
+# already inside the user's GUI session -- which is the entire point of the
+# shim: TCC grants camera access to a process with GUI ancestry and refuses
+# one without, which is why an SSH-launched or launchd-launched supervisor
+# gets a capture that deadlocks in avformat_open_input.
+#
+# Exec the supervisor directly. Driving Terminal by AppleScript to arrive at
+# the same place bought nothing and cost an Automation consent prompt, which
+# blocks silently until someone is at the screen to approve it -- so the
+# Login Item would hang on exactly the unattended boot it exists to handle.
+exec '${VENV_PY}' '${BIN_DIR}/livecam-supervisor'
 EOF
   chmod +x "$STARTER_APP/Contents/MacOS/start"
   cat > "$STARTER_APP/Contents/Info.plist" <<'EOF'

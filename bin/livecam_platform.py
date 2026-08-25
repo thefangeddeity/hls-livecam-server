@@ -235,11 +235,27 @@ def set_enabled(on):
 # ── Process liveness ─────────────────────────────────────────────
 
 def pid_alive(pid):
+    """True when `pid` is a process that can still do work.
+
+    A zombie is deliberately reported as dead. An exited child that its parent
+    has not reaped still occupies a slot in the process table, so
+    `psutil.pid_exists`, `psutil.Process.is_running` and `os.kill(pid, 0)` all
+    report it alive -- and a supervisor built on any of those will sit and
+    watch a defunct component forever, never restarting it. That is the
+    opposite of what a supervisor is for, so it is checked explicitly here
+    rather than left to each caller to remember.
+    """
     if not pid or pid <= 0:
         return False
     try:
         import psutil
-        return psutil.pid_exists(pid)
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.AccessDenied:
+            # Someone else's process: it exists and we cannot inspect it.
+            return True
     except ImportError:
         pass
     if IS_WINDOWS:
@@ -251,13 +267,23 @@ def pid_alive(pid):
             return False
     try:
         os.kill(pid, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
+        # Another user's process. It exists, and it is not our zombie.
         return True
     except Exception:
         return False
+    # Signal 0 succeeds for zombies too, so ask for the process state. If ps
+    # is unavailable or says something unexpected, fall back to "alive" --
+    # a spurious restart is worse than a late one.
+    try:
+        out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return True
+    state = out.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 def read_pidfile(path):

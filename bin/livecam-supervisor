@@ -162,6 +162,12 @@ def write_mediamtx_yml(cfg):
 
 # ── Component control ────────────────────────────────────────────
 
+# Popen handles for everything this supervisor spawned, so they can be waited
+# on. Without a wait, an exited child lingers as a zombie and every liveness
+# check keeps reporting it alive.
+_children = set()
+
+
 def venv_python():
     cand = (os.path.join(P.ROOT, ".venv", "Scripts", "python.exe") if P.IS_WINDOWS
             else os.path.join(P.ROOT, ".venv", "bin", "python"))
@@ -179,6 +185,7 @@ def start_mediamtx(cfg):
                             stdout=open_log("mediamtx.log"),
                             stderr=subprocess.STDOUT)
     P.write_pidfile(MMTX_PID, proc.pid)
+    _children.add(proc)
     log(f"started mediamtx (pid {proc.pid})")
     return proc
 
@@ -189,6 +196,7 @@ def start_api():
                             stdout=open_log("broadcast-api.log"),
                             stderr=subprocess.STDOUT)
     P.write_pidfile(API_PID, proc.pid)
+    _children.add(proc)
     log(f"started broadcast-api (pid {proc.pid})")
     return proc
 
@@ -211,7 +219,26 @@ def stop_all():
 
 # ── Reconcile loop ───────────────────────────────────────────────
 
+def reap():
+    """Clear exited children out of the process table.
+
+    Components are spawned with Popen and, until this ran, were never waited
+    on. An exited child therefore stayed a zombie -- still listed, still
+    answering signal 0 -- so every liveness check said it was fine and the
+    supervisor watched a defunct component indefinitely instead of restarting
+    it. pid_alive() now discounts zombies as well, but reaping is the actual
+    fix: a reaped child leaves the table, and its pid stops being a question.
+    """
+    for proc in list(_children):
+        try:
+            if proc.poll() is not None:   # poll() reaps
+                _children.discard(proc)
+        except Exception:
+            _children.discard(proc)
+
+
 def reconcile(was_enabled):
+    reap()
     enabled = P.is_enabled()
     if enabled != was_enabled:
         log(f"enabled flag -> {'on' if enabled else 'off'}")
