@@ -1047,8 +1047,28 @@
 
   /* ── Unhoused preferences ─────────────────────────────────────── */
 
-  .prefs { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
-  .prefs .chk { margin-top: 0; }
+  .theme-key {
+    display: block; width: 100%;
+    padding: 11px; border-radius: 8px;
+    font-size: 12px; font-weight: 500; letter-spacing: .02em;
+    cursor: pointer;
+    background: linear-gradient(180deg, #2c2c30, #232326);
+    border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35);
+  }
+  html[data-theme="light"] .theme-key {
+    background: linear-gradient(180deg, #fff, #ededf0);
+    border-color: #cfcfd4;
+    box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0,0,0,.10);
+  }
+  .theme-key:active {
+    background: linear-gradient(180deg, #191a1c, #212124);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
+  }
+  html[data-theme="light"] .theme-key:active {
+    background: linear-gradient(180deg, #d9d9de, #e6e6ea);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.18);
+  }
 
   @media (max-width: 420px) {
     .split { grid-template-columns: 1fr 62px; gap: 8px; }
@@ -1269,12 +1289,11 @@
       </div>
 
       <!-- Unhoused: a viewer preference, not part of any media path. -->
-      <div class="prefs">
-        <label class="chk">
-          <input type="checkbox" id="themeCheck" onchange="toggleTheme()">
-          <span class="box"></span><span class="eng">Light theme</span>
-        </label>
-      </div>
+      <!-- A key, not a tickbox. A checkbox states a condition and leaves you
+           to work out what ticking it does; a button can just say it. The
+           label names the theme you will get, not the one you are in. -->
+      <button type="button" class="theme-key eng" id="themeBtn"
+              onclick="toggleTheme()">Light theme</button>
 
     </div>
   </aside>
@@ -1913,17 +1932,26 @@
   }
 
 
+  /* The key names the theme you will GET, not the one you are in -- that is
+     the whole advantage of a button over a tickbox here, and it is only true
+     if the label is repainted on every change including the first. */
+  function paintThemeKey() {
+    var btn = document.getElementById('themeBtn');
+    if (!btn) return;
+    var light = document.documentElement.dataset.theme === 'light';
+    btn.textContent = light ? 'Dark theme' : 'Light theme';
+    btn.setAttribute('aria-label', 'Switch to ' + (light ? 'dark' : 'light') + ' theme');
+  }
+
   function toggleTheme() {
     var light = document.documentElement.dataset.theme === 'light';
     light = !light;
     document.documentElement.dataset.theme = light ? 'light' : 'dark';
-    localStorage.setItem('hlsls-theme', light ? 'light' : 'dark');
-    var cb = document.getElementById('themeCheck');
-    if (cb) cb.checked = light;
+    try { localStorage.setItem('hlsls-theme', light ? 'light' : 'dark'); } catch (e) {}
+    paintThemeKey();
   }
   (function() {
-    var cb = document.getElementById('themeCheck');
-    if (cb) cb.checked = document.documentElement.dataset.theme === 'light';
+    paintThemeKey();
   })();
 
   // Foveal layer took over B&W Blur's control and its endpoint, since it is
