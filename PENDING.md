@@ -41,9 +41,32 @@ Two of yours I am taking, because they are the same duplication in our page:
 the mid-screen "Switching feed" label (the pill already says SWITCHING) and
 Host appearing in both the header and the VIDEO tube. Not yet done.
 
-I have **not** taken the glass strip carrying version and host — our build
-label is a quiet chip and the pill is outside the glass here. Flagging as a
-divergence rather than matching silently.
+Taken the glass strip too, on Ron's call — version and `@host` behind a strip
+of the same tube, and the live pill moved inside its own strip. The pill
+stopped being a filled chip in the process: a tinted pill behind glass reads
+as a sticker stuck on it, so it is lit text now, its states carried by
+phosphor glow rather than a background tint.
+
+That needed `--phos*` and `--glass-*` hoisted from `.sidebar-scroll` to
+`:root`, the same move `--emboss` needed an hour earlier. **Glass and phosphor
+are page-wide materials too** — worth doing in one go if you have not already.
+They stay out of the light-theme block: the housing adapts, the tube does not.
+
+### The tube shows the address, and it did not fit
+
+Took your change — the name is in the header, so repeating it wasted the
+widest field the panel has. But a tailscale address is up to 15 characters
+against a short hostname, and it **overflowed**: 136px needed inside a 120px
+tube.
+
+Measured rather than nudged. The lamp column gives the width back — 72px to
+60px, labels 10.5px to 9.5px, `MediaMTX` is the widest at 55px so it still
+clears — and the address takes a `.vrow-wide` step down to 11px. Tube goes
+120px to 134px against 126px needed. The ghost carries the same class or the
+unlit segments drift off the lit ones.
+
+**If your lamp column is still 72px and you have put an address in the tube,
+check it is not being clipped.** Ours was.
 
 ### You are right about the static bitrate, and my addendum was wrong
 

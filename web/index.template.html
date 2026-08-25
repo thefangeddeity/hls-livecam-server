@@ -133,8 +133,21 @@
   }
   .brand:hover .brand-mark { opacity: 1; }
 
-  .brand .sep { color: var(--text-muted); font-weight: 400; }
-  .brand .host { color: var(--text-dim); font-weight: 500; }
+  /* A strip of tube set into the header, same glass as the panels below, so
+     the page reads as one instrument. The build label and the live pill are
+     the only live values up here, and live values belong behind glass. */
+  header .hdr-vfd {
+    display: inline-flex; align-items: center; gap: 8px;
+    border-radius: 5px; padding: 4px 9px;
+    background: linear-gradient(180deg, var(--glass-a) 0%,
+                var(--glass-b) 62%, var(--glass-a) 100%);
+    border: 1px solid #040809;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05),
+                inset 0 0 20px rgba(0,0,0,.75);
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  }
+  header .hdr-vfd .vlit { font-size: 11px; }
+  header .hdr-vfd .hdr-host { opacity: .78; }
   .status-bar {
     display: flex;
     align-items: center;
@@ -143,19 +156,21 @@
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
   }
+  /* Inside the header tube, so it is lit text rather than a filled chip --
+     a tinted pill behind glass reads as a sticker stuck on it. */
   .live-pill {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
+    font-family: var(--mono);
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text-dim);
-    transition: all 0.2s;
+    letter-spacing: .08em;
+    color: var(--phos-label);
+    background: none;
+    border: none;
+    padding: 0;
+    transition: color .2s, text-shadow .2s;
   }
   .live-pill::before {
     content: '';
@@ -163,11 +178,19 @@
     border-radius: 50%;
     background: var(--text-muted);
   }
-  .live-pill.live { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
+  .live-pill.live {
+    color: var(--danger);
+    text-shadow: 0 0 1px var(--danger),
+                 0 0 7px color-mix(in srgb, var(--danger) 52%, transparent);
+  }
   .live-pill.live::before { background: var(--danger); animation: pulse 1.4s ease-in-out infinite; }
-  .live-pill.reconnecting { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
+  .live-pill.reconnecting {
+    color: var(--warn);
+    text-shadow: 0 0 1px var(--warn),
+                 0 0 7px color-mix(in srgb, var(--warn) 52%, transparent);
+  }
   .live-pill.reconnecting::before { background: var(--warn); }
-  .live-pill.dark-mode { color: var(--text-muted); background: var(--panel-2); border-color: var(--border); }
+  .live-pill.dark-mode { color: var(--phos-label); text-shadow: none; }
   .live-pill.dark-mode::before { background: var(--text-muted); animation: none; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
 
@@ -537,6 +560,15 @@
     --emboss-strong: #a2a2a8;
     --emboss-dim:    #6a6a70;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Glass and phosphor are page-wide too: the header carries a strip of the
+       same tube. Absent from the light-theme block on purpose -- the housing
+       adapts, the tube does not. */
+    --phos:       #3fe8cd;
+    --phos-ghost: rgba(63,232,205,.12);
+    --phos-label: rgba(63,232,205,.40);
+    --glass-a:    #070d0e;
+    --glass-b:    #0b1416;
   }
   html[data-theme="light"] {
     --emboss:        #5c5c63;
@@ -552,15 +584,6 @@
     --border-soft:   #242427;
     --led-on:        #30d158;
     --led-off:       #3a3a3e;
-
-    /* Phosphor colourway. One variable drives glass, ghost and lit text, so
-       switching between blue-green / green / amber / ice is a one-line
-       change. Default blue-green. */
-    --phos:       #3fe8cd;
-    --phos-ghost: rgba(63,232,205,.12);
-    --phos-label: rgba(63,232,205,.40);
-    --glass-a:    #070d0e;
-    --glass-b:    #0b1416;
   }
 
   /* The housing is furniture and adapts to the page theme. The tube never
@@ -663,6 +686,12 @@
   }
   .vunit { font-size: 8px; letter-spacing: .1em; opacity: .7; margin-left: 3px; }
 
+  /* An address is the longest thing either tube shows. It takes a step down
+     so it fits without shrinking every other reading to match. The ghost
+     carries the same class or the unlit segments drift off the lit ones. */
+  .vrow.vrow-wide .vghost,
+  .vrow.vrow-wide .vlit { font-size: 11px; letter-spacing: .03em; }
+
   .vind {
     display: flex; gap: 6px; margin-top: 6px; padding-top: 5px;
     border-top: 1px solid rgba(255,255,255,.04);
@@ -680,11 +709,16 @@
 
   /* ── Tube + lamp column ───────────────────────────────────────── */
 
-  .split { display: grid; grid-template-columns: 1fr 72px; gap: 10px; align-items: start; }
+  /* Measured, not eyeballed. A tailscale address is up to 15 characters --
+     far longer than the hostname this field used to carry -- and at the old
+     72px lamp column it needed 136px inside a 120px tube. The lamp column
+     gives the width back: "MediaMTX" is the widest label there and needs
+     55px at 9.5px, so 60px still clears it with room. */
+  .split { display: grid; grid-template-columns: 1fr 60px; gap: 8px; align-items: start; }
   .leds  { display: flex; flex-direction: column; gap: 7px; padding-top: 2px; }
   .led   {
-    display: flex; align-items: center; gap: 7px;
-    font-size: 10.5px; line-height: 15px; white-space: nowrap;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 9.5px; line-height: 15px; white-space: nowrap;
   }
   .led .n {
     color: var(--emboss);
@@ -925,7 +959,7 @@
   .prefs .chk { margin-top: 0; }
 
   @media (max-width: 420px) {
-    .split { grid-template-columns: 1fr 70px; gap: 9px; }
+    .split { grid-template-columns: 1fr 62px; gap: 8px; }
     .led   { font-size: 10px; }
   }
 </style>
@@ -937,15 +971,15 @@
     <img class="brand-mark" src="/brand.png"
          srcset="/brand.png 1x, /brand@2x.png 2x" alt="" width="20" height="20">
     <span class="eng brand-name">HLS Livecam</span>
-    <span class="sep">//</span>
-    <span class="host"></span>
-    <!-- Substituted at render time from `git describe`. Hovering gives the
-         build stamp and commit, which is what distinguishes two installs of
-         the same tag. -->
-    <span class="build-tag" title="@BUILD_LABEL@">@VERSION@</span>
+    <!-- A strip of the same tube the panels use. Version is substituted at
+         render time from `git describe`; hovering gives the build stamp and
+         commit, which is what distinguishes two installs of the same tag. -->
+    <span class="hdr-vfd" title="@BUILD_LABEL@">
+      <span class="vlit">@VERSION@</span><span class="vlit hdr-host" id="hdrHost"></span>
+    </span>
   </div>
   <div class="status-bar">
-    <span class="live-pill" id="liveIndicator">CONNECTING</span>
+    <span class="hdr-vfd"><span class="live-pill" id="liveIndicator">CONNECTING</span></span>
   </div>
 </header>
 
@@ -1002,9 +1036,9 @@
 
         <div class="split">
           <div class="vfd">
-            <div class="vrow">
-              <span class="vlab">Host</span>
-              <span class="vval"><span class="vghost">▩▩▩▩▩▩▩▩</span><span class="vlit" id="hostVal"></span></span>
+            <div class="vrow vrow-wide">
+              <span class="vlab">IP</span>
+              <span class="vval"><span class="vghost">888.888.888.888</span><span class="vlit" id="hostVal"></span></span>
             </div>
             <div class="vrow">
               <span class="vlab">Res</span>
@@ -1189,22 +1223,30 @@
 
   var hostEl = document.getElementById('hostVal');
   var protoEl = document.getElementById('protoVal');
-  if (hostEl) hostEl.textContent = window.location.hostname;
   // Hostname, not window.location.hostname — over loopback that is "127.0.0.1"
   // and over Tailscale it is the tailnet IP. /api/info reports the node's real
   // name; the URL only says how you happened to reach it. Matches Linux's
   // `@tanzania`. Trailing .local trimmed for the same reason.
-  var brandHostEl = document.querySelector('.brand .host');
+  var brandHostEl = document.getElementById('hdrHost');
   if (brandHostEl) {
-    brandHostEl.textContent = '@' + window.location.hostname;   // fallback until /api/info answers
-    fetch('/api/info', { cache: 'no-store' })
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .catch(function() { return null; })
-      .then(function(j) {
-        if (j && j.hostname) brandHostEl.textContent = '@' + j.hostname.replace(/\.local$/, '');
-        if (j && j.msg_max_len) applyMsgLimit(j.msg_max_len);
-      });
+    brandHostEl.textContent = '@' + window.location.hostname;   // until /api/info answers
   }
+  fetch('/api/info', { cache: 'no-store' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .catch(function() { return null; })
+    .then(function(j) {
+      if (!j) return;
+      if (j.hostname && brandHostEl) {
+        brandHostEl.textContent = '@' + j.hostname.replace(/\.local$/, '');
+      }
+      /* The tube shows the tailscale address, not the name -- the name is in
+         the header now, and repeating it wasted the widest field the panel
+         has. The address is what you need when a feed misbehaves. Left blank
+         when there is no tailnet, so the ghost segments show rather than a
+         LAN address pretending to be one. */
+      if (hostEl) hostEl.textContent = j.tailscale || '';
+      if (j.msg_max_len) applyMsgLimit(j.msg_max_len);
+    });
   document.title = 'HLS Livecam — ' + window.location.hostname;
   if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
 
