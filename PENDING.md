@@ -177,6 +177,24 @@ snow, any future cover. A stand-in that does not occupy the same rectangle as
 the thing it hides announces itself as an overlay, which is the opposite of
 what it is for.
 
+### The switch cover needs a MINIMUM, not just a fallback
+
+We had only `TRANSITION_MAX_MS`, and the cover cleared on the video's own
+`playing` event. That sounds right and is wrong: **hls.js fires `playing` as
+soon as it has any buffered media**, which on a mode change is the tail of
+the *old* feed. The snow vanished in well under a second and the operator
+watched the stale picture, then a freeze, then the new one — exactly the mess
+the cover exists to hide.
+
+`playing` is not evidence that the switch finished. A Linux switch takes
+about **16 seconds** end to end: the publisher restarts to open or close the
+microphone, mediamtx tears down and rebuilds the HLS muxer, and the player
+still has to fetch enough new segments to start.
+
+So the cover is now held for `TRANSITION_MIN_MS` regardless, and `playing`
+only decides whether the fallback was needed. **If your viewer clears its
+cover on a player event, check what that event actually proves.**
+
 ### The switch cover timer is per-node. Do not clone ours.
 
 `TRANSITION_MAX_MS` is the bounded fallback that clears the switch static if

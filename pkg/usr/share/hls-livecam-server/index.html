@@ -1089,6 +1089,26 @@
   // without limit.
   var TRANSITION_MAX_MS = 17000;
 
+  // MINIMUM, and this is the number that actually matters on Linux.
+  //
+  // The cover used to clear on the video's own 'playing' event, which sounds
+  // right and is wrong here: hls.js fires 'playing' as soon as it has ANY
+  // buffered media, which on a mode change is the tail of the old feed. So
+  // the snow vanished in well under a second and the operator watched the
+  // stale picture, then a freeze, then the new one -- exactly the mess the
+  // cover exists to hide.
+  //
+  // A Linux switch takes about 16 seconds end to end: the publisher restarts
+  // to open or close the microphone, mediamtx tears down and rebuilds the
+  // HLS muxer, and the player has to fetch enough new segments to start.
+  // 'playing' is not evidence that any of that finished. So the cover is
+  // held for the full duration regardless, and 'playing' only decides
+  // whether we needed the fallback.
+  //
+  // Per-node, NOT a fleet constant: macOS switches in under 10 seconds and
+  // must not clone this. See PENDING.md.
+  var TRANSITION_MIN_MS = 16000;
+
   function fadeOut() {
     video.style.opacity = '0';
     if (fadeInTimer) clearTimeout(fadeInTimer);
@@ -1103,9 +1123,21 @@
     faulted = false;
     updateCover();
 
-    var done = false;
+    var startedAt = Date.now();
+    var done = false, holding = false;
     function finish() {
       if (done) return;
+      // Hold the snow for the whole switch even if the player claims to be
+      // playing already. One pending timer only -- finish() is called from
+      // both 'playing' and the fallback, and stacking timers would fire a
+      // burst of them at the end.
+      var left = TRANSITION_MIN_MS - (Date.now() - startedAt);
+      if (left > 0) {
+        if (!holding) { holding = true; setTimeout(function () {
+          holding = false; finish();
+        }, left); }
+        return;
+      }
       done = true;
       video.removeEventListener('playing', onPlaying);
       if (fadeInTimer) { clearTimeout(fadeInTimer); fadeInTimer = null; }
@@ -1113,9 +1145,9 @@
       switching = false;
       updateCover();   // a fault raised mid-switch keeps the snow up
     }
-    // Clear the static when the new stream actually starts, with a bounded
-    // fallback so a switch that never recovers cannot strand the overlay on
-    // screen forever.
+    // 'playing' no longer clears the cover on its own -- it only starts the
+    // remainder of the minimum. The bounded fallback stays so a switch that
+    // never recovers cannot strand the overlay on screen forever.
     function onPlaying() { setTimeout(finish, 250); }
     video.addEventListener('playing', onPlaying);
     fadeInTimer = setTimeout(finish, TRANSITION_MAX_MS);
