@@ -581,6 +581,13 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     telemetry_spacing = 3
 
     tx = 18
+    # Back to 42 after a detour through 96 and 56. The strip was being
+    # cropped in the web viewer, and moving it up the frame was treating the
+    # symptom: nothing was wrong with the render, the viewer was choosing to
+    # crop the picture (object-fit: cover) after we drew on it. The viewer
+    # now uses object-fit: contain, so the whole frame is shown and this
+    # number can be about composition again rather than about dodging
+    # somebody's window shape.
     ty = h - 42
 
     # Right-aligned companion to the DETECTING banner: which CV tools are

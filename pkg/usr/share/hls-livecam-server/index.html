@@ -147,7 +147,14 @@
   }
   video {
     width: 100%; height: 100%;
-    object-fit: cover;
+    /* contain, not cover (PM, run-21). cover fills the box by cropping top
+       and bottom off the frame, and the first casualty was the telemetry
+       strip the CV pipeline burns into the picture -- we were chasing the
+       HUD up the frame to dodge a crop the viewer was choosing to make.
+       contain fits the whole frame instead, so nothing drawn into it can be
+       eaten by the shape of someone's window. Letterbox bars are the price,
+       and they are the correct price: this is a camera feed, not wallpaper. */
+    object-fit: contain;
     display: block;
     background: #000;
     transition: opacity 1s ease;
@@ -225,22 +232,130 @@
     color: rgba(255,255,255,0.3);
   }
 
+
+  /* ══ INSTRUMENT PANEL ══════════════════════════════════════════════
+     Ported verbatim from ariana's sidebar-v3 mockup (Claude/Reports/
+     macOS/HLSLS). Tokens, sizes, gradients and shadows are theirs; the
+     only deviations are the two the PM asked for, marked TWEAK below.
+
+     The rule the whole thing rests on -- three materials, kept apart:
+       engraved  every label. One gray, one carved shadow, cast into the
+                 housing. It cannot light up, gray out, or turn green.
+       lamps     all state. Because the label never moves, the eye tracks
+                 bulbs instead of re-reading words.
+       phosphor  all live values, behind glass, over ghost segments. An
+                 unknown reading shows the ghosts alone -- never a zero,
+                 never a guess.
+     Nothing outside the glass is ever phosphor-coloured; nothing inside
+     it is ever gray. The tube does not invert in light theme -- a vacuum
+     tube has no light mode. The housing adapts; the glass does not. */
+  :root {
+    --housing: #1b1b1d; --housing-hi: rgba(255,255,255,.045); --housing-lo: #141416;
+    --border-soft: #242427;
+    --emboss: #8a8a90; --emboss-strong: #a2a2a8; --emboss-dim: #6a6a70;
+    --led-on: #30d158; --led-off: #3a3a3e;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --phos: #3fe8cd; --phos-ghost: rgba(63,232,205,.12); --phos-label: rgba(63,232,205,.40);
+    --glass-a: #070d0e; --glass-b: #0b1416;
+  }
+  .panel {
+    background: linear-gradient(180deg,#1f1f22 0%,var(--housing) 34%,var(--housing-lo) 100%);
+    border: 1px solid var(--border-soft); border-radius: 11px; padding: 13px 14px 14px;
+    box-shadow: inset 0 1px 0 var(--housing-hi), 0 1px 2px rgba(0,0,0,.4);
+  }
+  .eng { color: var(--emboss); text-shadow: 0 1px 0 rgba(255,255,255,.055), 0 -1px 0 rgba(0,0,0,.55); }
+  .panel-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .11em; margin: 0 0 11px; }
+  .sub-title { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .13em; margin: 0 0 8px; color: var(--emboss-dim); text-shadow: 0 1px 0 rgba(255,255,255,.04); }
+
+  .vfd { position: relative; border-radius: 5px; padding: 8px 9px 9px;
+    background: linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
+    border: 1px solid #040809; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75); overflow: hidden; }
+  .vfd::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(180deg,rgba(0,0,0,.15) 0 1px,transparent 1px 3px); opacity: .55; }
+  .vfd::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 42%; pointer-events: none; background: linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,0)); }
+  .vrow { position: relative; display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 8px; height: 20px; }
+  .vrow + .vrow { margin-top: 1px; }
+  .vlab { font-family: var(--mono); font-size: 8.5px; letter-spacing: .13em; color: var(--phos-label); text-transform: uppercase; line-height: 20px; }
+  .vval { position: relative; text-align: right; line-height: 20px; height: 20px; }
+  .vghost, .vlit { font-family: var(--mono); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: .05em; white-space: nowrap; line-height: 20px; }
+  .vghost { position: absolute; inset: 0; text-align: right; color: var(--phos-ghost); pointer-events: none; user-select: none; }
+  .vlit { position: relative; color: var(--phos); text-shadow: 0 0 1px var(--phos), 0 0 7px color-mix(in srgb,var(--phos) 52%,transparent), 0 0 15px color-mix(in srgb,var(--phos) 24%,transparent); }
+  .vunit { font-size: 8px; letter-spacing: .1em; opacity: .7; margin-left: 3px; }
+  .vind { display: flex; gap: 8px; margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,.04); }
+  .vind i { font-family: var(--mono); font-style: normal; font-size: 7.5px; letter-spacing: .12em; color: var(--phos-ghost); white-space: nowrap; flex: 0 0 auto; }
+  .vind i.on { color: var(--phos); text-shadow: 0 0 6px color-mix(in srgb,var(--phos) 52%,transparent); }
+
+  .split { display: grid; grid-template-columns: 1fr 86px; gap: 11px; align-items: start; }
+  .leds { display: flex; flex-direction: column; gap: 7px; padding-top: 2px; }
+  .led { display: flex; align-items: center; gap: 7px; font-size: 10.5px; line-height: 15px; white-space: nowrap; }
+  .led .n { color: var(--emboss); text-shadow: 0 1px 0 rgba(255,255,255,.05), 0 -1px 0 rgba(0,0,0,.5); }
+  .bulb { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--led-off); box-shadow: inset 0 1px 1px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.05); }
+  .led.on .bulb, .bulb.on { background: var(--led-on); box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5); }
+
+  .pdiv { height: 1px; background: #242428; margin: 12px -14px; box-shadow: 0 1px 0 rgba(255,255,255,.03); }
+  .btnrow { display: flex; gap: 7px; }
+  .pbtn { flex: 1; text-align: center; font-size: 11.5px; font-weight: 500; padding: 8px 4px; border-radius: 7px;
+    background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); color: #d6d6da; cursor: pointer; font-family: inherit; }
+  .pbtn.pressed { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); color: #fff; border-color: #3c3c44; }
+  .pbtn:disabled, .pbtn.pending { color: var(--emboss-dim); cursor: not-allowed; background: linear-gradient(180deg,#242427,#1e1e21); border-color: #2c2c31; box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }
+  .pbtn .badge2 { display: block; font-family: var(--mono); font-size: 7px; letter-spacing: .1em; color: var(--phos-label); margin-top: 2px; }
+
+  .chk { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 9px; color: var(--emboss-strong); cursor: pointer; }
+  .chk input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .chk.pending { color: var(--emboss-dim); cursor: not-allowed; }
+  .chk.pending .box { opacity: .5; }
+  .box { width: 13px; height: 13px; border-radius: 3.5px; flex: 0 0 auto; background: linear-gradient(180deg,#1a1a1c,#212124); border: 1px solid #3a3a40; box-shadow: inset 0 1px 2px rgba(0,0,0,.55); position: relative; }
+  .chk input:checked + .box { background: linear-gradient(180deg,#3f8cff,#2f6fdc); border-color: #2f6fdc; box-shadow: 0 0 5px rgba(63,140,255,.4), inset 0 1px 0 rgba(255,255,255,.3); }
+  .chk input:checked + .box::after { content: ""; position: absolute; left: 3.5px; top: 1px; width: 4px; height: 7px; border: solid #fff; border-width: 0 1.6px 1.6px 0; transform: rotate(42deg); }
+
+  .buzz2 { width: 100%; border-radius: 8px; padding: 11px; font-size: 12.5px; font-weight: 600; color: #fff; cursor: pointer; font-family: inherit;
+    background: linear-gradient(180deg,#ff5a49,#e5341f); border: 1px solid #b8271a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 1px 2px rgba(0,0,0,.45), 0 0 14px rgba(255,68,51,.18);
+    display: flex; align-items: center; justify-content: center; gap: 7px; }
+
+  /* TWEAK (PM): the mockup put the checkbox alone on its line. Both media
+     panels now run [tiny modem button] ... [checkbox], button left and
+     checkbox hard right, so the two boxes teach each other. */
+  .modemrow { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+  .modemrow .chk { margin-top: 0; margin-left: auto; }
+  .modem { width: 54px; height: 32px; border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; cursor: pointer; font-family: inherit;
+    background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
+  .modem:disabled { cursor: not-allowed; opacity: .55; }
+  .modem:active { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
+  .modem .cap2 { font-family: var(--mono); font-size: 7.5px; letter-spacing: .1em; color: var(--emboss); }
+  .listen { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+  .listen .cap, .modemrow .cap { font-size: 10px; color: var(--emboss-dim); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .modemrow .chk { white-space: nowrap; }
+  .talk { margin-top: 9px; border-radius: 7px; padding: 8px 10px; font-size: 10.5px; letter-spacing: .09em; display: flex; align-items: center; gap: 8px;
+    background: linear-gradient(180deg,#26262a,#1e1e21); border: 1px solid #32323a; box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+  .msg2 { width: 100%; border-radius: 7px; padding: 9px 10px; min-height: 74px; font-size: 11.5px; color: #c7c7cc; font-family: inherit; resize: none;
+    background: linear-gradient(180deg,#161618,#1b1b1e); border: 1px solid #2e2e33; box-shadow: inset 0 1px 3px rgba(0,0,0,.5); }
+  .msg2.empty { color: #6e6e74; }
+  .msg2:focus { outline: none; border-color: #3f8cff; }
+  .prefs { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
+  .prefs .chk { margin-top: 0; }
+
   /* ── DESKTOP SIDEBAR ── */
   .sidebar {
     width: 260px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
+    background: none;
+    border: 0;
+    box-shadow: none;
     display: flex;
     flex-direction: column;
-    padding: 18px;
-    gap: 18px;
+    padding: 0;
+    gap: 0;
     overflow-y: auto;
-    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #2e2e33 transparent;
     flex-shrink: 0;
     height: 100%;
   }
+  .sidebar::-webkit-scrollbar { width: 6px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb { background: #2e2e33; border-radius: 3px; }
+  .sidebar-scroll { display: flex; flex-direction: column; gap: 11px; }
   .section {
     display: flex; flex-direction: column; gap: 8px;
     background: var(--panel);
@@ -468,74 +583,107 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-scroll">
 
-      <!-- MESSAGE -->
-      <div class="section message-section">
-        <div class="section-title">Message <span id="msgHint" class="msg-hint"></span></div>
-        <div class="feed-mode-label">Leave a note for viewers</div>
-        <div class="msg-box-wrap">
-          <textarea class="msg-box empty" id="msgBox" readonly>(no message)</textarea>
-          <div class="char-count" id="charCount" style="display:none">0/120</div>
+      <!-- ══ VIDEO ══ -->
+      <div class="panel">
+        <div class="panel-title eng">Video</div>
+        <div class="split">
+          <div class="vfd">
+            <div class="vrow"><span class="vlab">Host</span><span class="vval"><span class="vghost">▩▩▩▩▩▩▩▩</span><span class="vlit" id="hostVal"></span></span></div>
+            <div class="vrow"><span class="vlab">Res</span><span class="vval"><span class="vghost">8888×888</span><span class="vlit" id="resVal"></span></span></div>
+            <div class="vrow"><span class="vlab">Fps</span><span class="vval"><span class="vghost">88.8</span><span class="vlit" id="fpsVal"></span></span></div>
+            <div class="vind">
+              <i id="indLive">LIVE</i><i id="indRec">REC</i><i id="indAv">A/V</i><i id="indCv">CV</i>
+            </div>
+          </div>
+          <div class="leds">
+            <div class="led" id="ledCamera"><span class="bulb"></span><span class="n">Camera</span></div>
+            <div class="led" id="ledMtxV"><span class="bulb"></span><span class="n">MediaMTX</span></div>
+            <div class="led" id="ledRtspV"><span class="bulb"></span><span class="n">RTSP</span></div>
+            <div class="led" id="ledHlsV"><span class="bulb"></span><span class="n">HLS</span></div>
+          </div>
         </div>
+        <div class="pdiv"></div>
+        <div class="btnrow">
+          <button class="pbtn" id="showBtn" onclick="setFeedMode('show')">Show</button>
+          <button class="pbtn" id="cvBtn" onclick="setFeedMode('cv')">CV</button>
+          <button class="pbtn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
+        </div>
+        <!-- TWEAK (PM): modem button left, checkbox hard right. -->
+        <div class="modemrow">
+          <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
+            <span class="bulb" id="repairLamp"></span><span class="cap2">RPR</span>
+          </button>
+          <label class="chk" id="fovealChk"><input type="checkbox" id="fovealCheck" onchange="toggleFoveal()"><span class="box"></span><span class="eng">Foveal layer</span></label>
+        </div>
+        <div class="modemrow" id="sceneRow">
+          <button class="modem" id="sceneReregisterBtn" onclick="reregisterScene()" title="Re-register camera">
+            <span class="bulb" id="sceneLamp"></span><span class="cap2">REG</span>
+          </button>
+          <span class="chk" id="sceneChip" style="cursor:default"><span class="eng">Scene</span><span class="vlit" id="sceneBadge" style="font-size:9px"></span></span>
+        </div>
+      </div>
+
+      <!-- ══ AUDIO ══ -->
+      <div class="panel">
+        <div class="panel-title eng">Audio</div>
+        <div class="split">
+          <div class="vfd">
+            <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
+            <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost">888</span><span class="vlit" id="audioKbps"></span></span></div>
+            <div class="vind">
+              <i id="indStereo">STEREO</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+            </div>
+          </div>
+          <div class="leds">
+            <div class="led" id="ledMic"><span class="bulb"></span><span class="n">Mic</span></div>
+            <div class="led" id="ledMtxA"><span class="bulb"></span><span class="n">MediaMTX</span></div>
+            <div class="led" id="ledRtspA"><span class="bulb"></span><span class="n">RTSP</span></div>
+            <div class="led" id="ledHlsA"><span class="bulb"></span><span class="n">HLS</span></div>
+          </div>
+        </div>
+
+        <div class="pdiv"></div>
+        <div class="sub-title eng">Listen</div>
+        <!-- TWEAK (PM): the transport is a tiny modem button with a light,
+             and Mute audio sits hard right on the same line. -->
+        <div class="modemrow">
+          <button class="modem" id="listenBtn" onclick="toggleListen()" disabled title="Listen to the room">
+            <span class="bulb" id="listenLamp"></span><span class="cap2" id="listenCap">LSN</span>
+          </button>
+          <span class="cap eng" id="audioStateLabel">Checking…</span>
+          <label class="chk"><input type="checkbox" id="muteAudioCheck" onchange="toggleMuteAudio()"><span class="box"></span><span class="eng">Mute audio</span></label>
+        </div>
+
+        <div class="pdiv"></div>
+        <div class="sub-title eng">Send</div>
+        <div class="btnrow">
+          <button class="pbtn pending" id="talkBtn" disabled title="No talkback on this node">
+            <span class="bulb"></span> TALK<span class="badge2">SOON</span>
+          </button>
+          <button class="pbtn" id="buzzBtn" onclick="sendBuzz()">🔔 BUZZ</button>
+        </div>
+        <div class="modemrow">
+          <label class="chk"><input type="checkbox" id="muteCheck" onchange="toggleMute()"><span class="box"></span><span class="eng">Mute buzzes</span></label>
+        </div>
+      </div>
+
+      <!-- ══ MESSAGE ══ -->
+      <div class="panel">
+        <div class="panel-title eng">Message <span id="msgHint" class="msg-hint"></span></div>
+        <textarea class="msg2 empty" id="msgBox" readonly>(no message)</textarea>
+        <div class="char-count" id="charCount" style="display:none">0/120</div>
         <div class="msg-actions" id="msgActions" hidden>
-          <button class="btn" id="saveBtn" onclick="sendMessage()">Save</button>
-          <button class="btn" id="clearBtn" onclick="clearMessage()">Clear</button>
-          <button class="btn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
+          <button class="pbtn" id="saveBtn" onclick="sendMessage()">Save</button>
+          <button class="pbtn" id="clearBtn" onclick="clearMessage()">Clear</button>
+          <button class="pbtn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
         </div>
+        <label class="chk"><input type="checkbox" id="lockCheck" onchange="toggleLock()"><span class="box"></span><span class="eng">Lock message</span></label>
       </div>
 
-      <!-- CONTROLS — always visible -->
-      <div class="section">
-        <div class="section-title">Controls</div>
-        <div class="controls-stack">
-          <div class="feed-mode-label">Show, enhance, or hide feed</div>
-          <div class="feed-mode-grid">
-            <button class="btn" id="showBtn" onclick="setFeedMode('show')">Show</button>
-            <button class="btn" id="cvBtn" onclick="setFeedMode('cv')">CV Mode</button>
-            <button class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
-          </div>
-          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
-          <label class="mute-label">
-            <input type="checkbox" id="themeCheck" onchange="toggleTheme()"> Light theme
-          </label>
-          <label class="mute-label">
-            <input type="checkbox" id="fovealCheck" onchange="toggleFoveal()"> Foveal Layer
-          </label>
-          <div class="info-chip" id="sceneChip">
-            <span class="label">Scene model</span>
-            <span class="badge" id="sceneBadge">UNREGISTERED</span>
-          </div>
-          <button class="btn" id="sceneReregisterBtn" onclick="reregisterScene()" hidden>Re-register camera</button>
-          <label class="mute-label">
-            <input type="checkbox" id="lockCheck" onchange="toggleLock()"> Lock message
-          </label>
-          <label class="mute-label">
-            <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
-          </label>
-          <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
-        </div>
+      <div class="prefs">
+        <label class="chk"><input type="checkbox" id="themeCheck" onchange="toggleTheme()"><span class="box"></span><span class="eng">Light theme</span></label>
       </div>
-
-      <!-- STREAM INFO — desktop only -->
-      <div class="section desktop-only">
-        <div class="section-title">Stream</div>
-        <div class="stat"><span class="k">Host</span><span class="v" id="hostVal">--</span></div>
-        <div class="stat"><span class="k">Resolution</span><span class="v">1280 × 720</span></div>
-        <div class="stat"><span class="k">Framerate</span><span class="v" id="fpsVal">--</span></div>
-      </div>
-
-      <!-- AUDIO — desktop only -->
-      <div class="section desktop-only">
-        <div class="section-title">Audio</div>
-        <div class="stat"><span class="k">Rate</span><span class="v" id="audioRate">--</span></div>
-        <div class="stat"><span class="k">Bitrate</span><span class="v" id="audioKbps">--</span></div>
-        <div class="info-chip">
-          <span class="label" id="audioStateLabel">Checking…</span>
-          <span class="badge" id="audioBadge">--</span>
-        </div>
-        <button class="btn primary" id="listenBtn" onclick="toggleListen()" disabled>Listen</button>
-      </div>
-
-
+      <button class="pbtn" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
 
     </div>
   </aside>
@@ -839,9 +987,11 @@
   var hideOverlay = document.getElementById('hideOverlay');
 
   function updateFeedButtons() {
-    showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
-    cvBtn.className = 'btn' + (feedMode === 'cv' ? '' : ' primary');
-    hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
+    showBtn.className = 'pbtn' + (feedMode === 'show' ? ' pressed' : '');
+    cvBtn.className   = 'pbtn' + (feedMode === 'cv'   ? ' pressed' : '');
+    hideBtn.className = 'pbtn' + (feedMode === 'hide' ? ' pressed' : '');
+    var iCv = document.getElementById('indCv');
+    if (iCv) iCv.className = (feedMode === 'cv') ? 'on' : '';
     // Hide publishes static, which on its own is indistinguishable from a
     // dead stream -- deliberately so, since that is what it is imitating.
     // This notice is the only thing that separates the two, now that a
@@ -851,6 +1001,35 @@
     // pattern as B&W was on Blur before the CV Mode pivot. Greyed out
     // (disabled) anywhere but CV Mode, same as B&W's precedent.
     fovealCheck.disabled = (feedMode !== 'cv');
+    var fk = document.getElementById('fovealChk');
+    if (fk) fk.className = 'chk' + (fovealCheck.disabled ? ' pending' : '');
+    paintLamps();
+  }
+
+  // ── LAMPS ──
+  // Only what we can actually measure lights up. MediaMTX and RTSP have no
+  // probe on this node -- there is no /api/pipeline here yet -- so they stay
+  // dark rather than green. A lamp that can never fail is indistinguishable
+  // from a broken one, which is the whole reason the panel has lamps.
+  function paintLamps() {
+    var live = (liveInd && liveInd.textContent === 'LIVE');
+    function set(id, on) {
+      var el = document.getElementById(id);
+      if (el) el.className = 'led' + (on ? ' on' : '');
+    }
+    set('ledHlsV', live); set('ledHlsA', live);
+    set('ledCamera', live && feedMode !== 'hide');
+    set('ledMic', live && audioReady);
+    var iLive = document.getElementById('indLive');
+    if (iLive) iLive.className = live ? 'on' : '';
+    var iAv = document.getElementById('indAv');
+    if (iAv) iAv.className = audioReady ? 'on' : '';
+    var iMute = document.getElementById('indMute');
+    if (iMute) iMute.className = video.muted ? 'on' : '';
+    var lamp = document.getElementById('repairLamp');
+    if (lamp) lamp.className = 'bulb' + (faulted ? ' on' : '');
+    var res = document.getElementById('resVal');
+    if (res && video.videoWidth) res.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
   }
 
   // ── FOVEAL LAYER — server-side, modifier on CV Mode ──
@@ -883,7 +1062,8 @@
   // ── SCENE MODEL — three-state: registered / stale / unregistered ──
   function applySceneState(state) {
     sceneBadge.textContent = state.toUpperCase();
-    sceneBadge.className = 'badge scene-' + state;
+    var lamp = document.getElementById('sceneLamp');
+    if (lamp) lamp.className = 'bulb' + (state === 'registered' ? ' on' : '');
     // Re-register only makes sense once something exists to re-register
     // against -- the endpoint itself rejects the call otherwise.
     sceneReregisterBtn.hidden = (state === 'unregistered');
@@ -963,6 +1143,7 @@
   // ── HLS ──
   function setStatus(text, mode) {
     liveInd.textContent = text;
+    setTimeout(paintLamps, 0);
     liveInd.className = 'live-pill' + (mode ? ' ' + mode : '');
     if (mode === 'live') {
       reconnectBtn.hidden = true;
@@ -1079,14 +1260,29 @@
   var audioRateEl     = document.getElementById('audioRate');
   var audioKbpsEl     = document.getElementById('audioKbps');
   var audioStateLabel = document.getElementById('audioStateLabel');
-  var audioBadge      = document.getElementById('audioBadge');
   var audioReady      = false;
 
   function toggleListen() {
     if (!audioReady) return;
     video.muted = !video.muted;
-    listenBtn.textContent = video.muted ? 'Listen' : 'Mute';
-    listenBtn.className = 'btn' + (video.muted ? ' primary' : '');
+    paintListen();
+    try { localStorage.setItem('livecamListen', video.muted ? '0' : '1'); } catch (e) {}
+  }
+
+  // The button never changes its word -- engraved labels do not move. The
+  // lamp is the only thing that carries the state.
+  function paintListen() {
+    var lamp = document.getElementById('listenLamp');
+    if (lamp) lamp.className = 'bulb' + (!video.muted && audioReady ? ' on' : '');
+    var mc = document.getElementById('muteAudioCheck');
+    if (mc) mc.checked = video.muted;
+    paintLamps();
+  }
+
+  function toggleMuteAudio() {
+    var mc = document.getElementById('muteAudioCheck');
+    video.muted = mc.checked;
+    paintListen();
     try { localStorage.setItem('livecamListen', video.muted ? '0' : '1'); } catch (e) {}
   }
 
@@ -1100,31 +1296,30 @@
         if (!a) {
           audioReady = false;
           audioStateLabel.textContent = 'Unknown';
-          audioBadge.textContent = '--';
-          audioRateEl.textContent = '--';
-          audioKbpsEl.textContent = '--';
+          audioRateEl.textContent = '';
+          audioKbpsEl.textContent = '';
           listenBtn.disabled = true;
+          paintListen();
           return;
         }
         var live = (a.state === 'ok');
         audioReady = live;
         listenBtn.disabled = !live;
-        audioBadge.textContent = a.state.toUpperCase();
         audioStateLabel.textContent =
-          a.state === 'ok'       ? 'Room audio' :
+          a.state === 'ok'       ? 'Sound in room' :
           a.state === 'off'      ? 'Closed while hidden' :
                                    'No microphone';
+        var iSt = document.getElementById('indStereo');
+        if (iSt) iSt.className = (live && a.channels === 2) ? 'on' : '';
         // Reported, not asserted: these come from what the node told ffmpeg.
         // The manifest's BANDWIDTH is video+audio combined and would
         // overstate this badly.
-        audioRateEl.textContent = live ? (a.rate_hz / 1000).toFixed(1) + ' kHz' : '--';
-        audioKbpsEl.textContent = live ? a.kbps + ' kbps' : '--';
-        if (!live && !video.muted) {
-          // Nothing to hear; do not leave the control claiming otherwise.
-          video.muted = true;
-          listenBtn.textContent = 'Listen';
-          listenBtn.className = 'btn primary';
-        }
+        audioRateEl.innerHTML = live
+          ? (a.rate_hz / 1000).toFixed(1) + '<span class="vunit">KHZ</span>' : '';
+        audioKbpsEl.innerHTML = live
+          ? a.kbps + '<span class="vunit">KBPS</span>' : '';
+        if (!live && !video.muted) video.muted = true;   // nothing to hear
+        paintListen();
       });
   }
   pollAudio();
@@ -1190,7 +1385,10 @@
     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
       var tick = function() { frames++; video.requestVideoFrameCallback(tick); };
       video.requestVideoFrameCallback(tick);
-      setInterval(function() { fpsEl.textContent = frames + ' fps'; frames = 0; }, 1000);
+      setInterval(function() {
+        fpsEl.innerHTML = frames + '<span class="vunit">FPS</span>';
+        frames = 0; paintLamps();
+      }, 1000);
       return;
     }
     var lastCount = 0;
