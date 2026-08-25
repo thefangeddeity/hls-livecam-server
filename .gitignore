@@ -43,3 +43,4 @@ dist/
 # Local Claude Code state
 .claude/
 web/cams/cams.json
+state/feed_mode
