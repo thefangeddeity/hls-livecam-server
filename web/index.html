@@ -720,6 +720,34 @@
     display: flex; align-items: center; gap: 8px; font-size: 11px;
     margin-top: 9px; color: var(--emboss-strong); cursor: pointer;
   }
+  /* One line, its two occupants pushed to opposite ends. */
+  .peer-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-top: 9px;
+  }
+  .peer-row .chk { margin-top: 0; min-width: 0; }
+
+  .btn-tiny {
+    flex: 0 0 auto;
+    font-size: 9.5px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 4px 9px; border-radius: 5px;
+    background: linear-gradient(180deg, #2c2c30, #232326);
+    border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35);
+    cursor: pointer;
+  }
+  html[data-theme="light"] .btn-tiny {
+    background: linear-gradient(180deg, #fff, #ededf0);
+    border-color: #cfcfd4;
+    box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0,0,0,.10);
+  }
+  .btn-tiny:active {
+    background: linear-gradient(180deg, #191a1c, #212124);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
+  }
+  .btn-tiny[hidden] { display: none; }
+
   .chkrow { display: flex; gap: 10px; }
   .chkrow .chk { flex: 1; min-width: 0; }
   .chk.pending { color: var(--emboss-dim); cursor: not-allowed; }
@@ -950,13 +978,19 @@
         </div>
 
         <!-- B&W Blur's slot, retargeted the same way. A modifier on CV cannot
-             be togglable before CV exists. -->
-        <label class="chk pending" id="fovealRow" title="Modifier on CV mode — not yet available">
-          <input type="checkbox" id="fovealCheck" disabled>
-          <span class="box"></span><span class="eng">Foveal layer</span>
-        </label>
-
-        <button class="btn primary" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
+             be togglable before CV exists. Reload sits at the far end of the
+             same line: both are small, both act on the feed above them, and
+             it was previously hidden until an error -- which meant the one
+             control that fixes a stuck player only appeared once the player
+             had already given up. -->
+        <div class="peer-row">
+          <label class="chk pending" id="fovealRow" title="Modifier on CV mode — not yet available">
+            <input type="checkbox" id="fovealCheck" disabled>
+            <span class="box"></span><span class="eng">Foveal layer</span>
+          </label>
+          <button type="button" class="btn-tiny eng" id="reconnectBtn"
+                  onclick="reloadStream()" title="Reload the video stream">Reload</button>
+        </div>
       </div>
 
       <!-- ══ AUDIO ══════════════════════════════════════════════════ -->
@@ -1382,7 +1416,6 @@
     if (mode === 'live' && !isDark) {
       errorOverlay.classList.remove('visible');
       liftDarkOverlay();
-      reconnectBtn.hidden = true;
       if (!liveAt) {
         liveAt = Date.now();
         if (uptimeInterval) clearInterval(uptimeInterval);
@@ -1399,7 +1432,6 @@
   function showError() {
     if (isDark) return;
     errorOverlay.classList.add('visible');
-    reconnectBtn.hidden = false;
   }
 
   function updateUptime() {
