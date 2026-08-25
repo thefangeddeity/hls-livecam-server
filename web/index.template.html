@@ -1281,7 +1281,24 @@
   var switchCount = document.getElementById('switchCount');
   var countInterval = null;
 
+  /* True from the moment a switch is requested until the feed is back.
+     Restarting the publisher makes hls.js error by design -- suppressing the
+     error UI during that window is the difference between reporting a fault
+     and narrating an intended action. Without it, "Signal lost / Retrying"
+     lands on top of "Switching feed", and the two contradict each other. */
+  var feedSwitching = false;
+
+  function beginFeedSwitch() {
+    feedSwitching = true;
+    errorOverlay.classList.remove('visible');   // drop any error already up
+  }
+
+  function endFeedSwitch() {
+    feedSwitching = false;
+  }
+
   function fadeOut() {
+    beginFeedSwitch();
     video.style.opacity = '0';
     if (countInterval) clearInterval(countInterval);
     var secs = HOLD_SECONDS;
@@ -1295,6 +1312,7 @@
     setTimeout(function() {
       video.style.opacity = '1';
       switchOverlay.classList.remove('visible');
+      endFeedSwitch();
     }, HOLD_SECONDS * 1000);
   }
 
@@ -1335,7 +1353,11 @@
     if (mode === feedMode) return;
     /* Switching the tube off is the whole transition, so the switch-cover
        countdown would just be a second, slower animation on top of it. */
-    if (mode === 'hide') { applyFeedModeVisual('hide', true); }
+    if (mode === 'hide') {
+      beginFeedSwitch();
+      applyFeedModeVisual('hide', true);
+      setTimeout(endFeedSwitch, HOLD_SECONDS * 1000);
+    }
     else { if (feedMode === 'hide') applyFeedModeVisual(mode, true); fadeOut(); }
     showBtn.disabled = true; hideBtn.disabled = true;
     fetch('/api/feed-mode', { method: 'POST', body: mode })
@@ -1431,6 +1453,7 @@
 
   function showError() {
     if (isDark) return;
+    if (feedSwitching) return;   // expected drop, already being narrated
     errorOverlay.classList.add('visible');
   }
 
@@ -1445,7 +1468,13 @@
 
   function scheduleRetry(ms) {
     if (retryTimer) clearTimeout(retryTimer);
-    setStatus('RECONNECTING', 'reconnecting');
+    /* Same reasoning as showError: during a deliberate switch the retry is
+       part of the plan, so the pill should say what is happening rather than
+       flag a fault. 'reconnecting' is also dropped as the mode, which keeps
+       the pill from turning amber and the HLS lamp from turning red for a
+       transition the operator asked for. */
+    if (feedSwitching) setStatus('SWITCHING');
+    else setStatus('RECONNECTING', 'reconnecting');
     retryTimer = setTimeout(initHLS, ms);
   }
 
@@ -1872,6 +1901,8 @@
   function videoHlsState() {
     var t = ((liveInd && liveInd.textContent) || '').trim().toUpperCase();
     if (t === 'LIVE') return 'ok';
+    /* SWITCHING is deliberately absent from the failure list: the feed is
+       between states because someone asked it to be, which is not a fault. */
     if (t === 'UNSUPPORTED' || t === 'RECONNECTING' || t === 'ERROR') return 'fail';
     return 'pending';
   }
