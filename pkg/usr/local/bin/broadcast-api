@@ -6,7 +6,7 @@ Studio model: pyfakewebcam writes frames to v4l2loopback (/dev/video10).
 Publisher ffmpeg reads from loopback, pushes to mediamtx. Non-blocking.
 """
 from flask import Flask, request, abort
-import os, subprocess, time, sys, threading, signal
+import os, subprocess, time, sys, threading, signal, socket
 import numpy as np
 import pyfakewebcam
 sys.path.insert(0, '/usr/share/hls-livecam-server')
@@ -138,6 +138,11 @@ _hide_frame     = None
 
 # -- Camera frame cache --
 _cam_frame      = None
+# When the last whole frame arrived. The only honest way to say the camera
+# stage is alive: the process being up proves nothing -- a capture wedged in
+# a v4l2 ioctl is running, burning CPU and delivering nothing, and every
+# liveness check calls that healthy.
+_cam_frame_at   = 0.0
 _cam_frame_lock = threading.Lock()
 
 # Hide publishes VHS static (PM, run-21). It previously published flat black,
@@ -288,6 +293,7 @@ def _drain_loop(cam_holder, denv):
             if len(raw) == FRAME_BYTES:
                 with _cam_frame_lock:
                     _cam_frame = raw
+                    globals()['_cam_frame_at'] = time.time()
             else:
                 time.sleep(2.0)
                 if _shutting_down.is_set():
@@ -404,6 +410,72 @@ def bw_mode_get():
 @app.route('/api/bw-mode', methods=['POST'])
 def bw_mode_post():
     return 'false', 200
+
+def _tcp_established_to(port):
+    """True if some socket on this host is ESTABLISHED to 127.0.0.1:<port>.
+
+    Read from /proc/net/tcp rather than by opening a connection of our own:
+    connecting proves the port ACCEPTS, which is a weaker claim than somebody
+    actually being connected. The publisher having a live session to mediamtx
+    is the thing worth lighting a lamp for.
+    """
+    want = f"0100007F:{port:04X}"          # 127.0.0.1, big-endian hex
+    try:
+        with open('/proc/net/tcp') as f:
+            next(f, None)
+            for line in f:
+                p = line.split()
+                if len(p) > 3 and p[2] == want and p[3] == '01':   # 01 = ESTABLISHED
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _port_listening(port):
+    try:
+        s = socket.socket(); s.settimeout(0.4)
+        s.connect(('127.0.0.1', port)); s.close()
+        return True
+    except Exception:
+        return False
+
+
+# Every stage reports from something that MEASURES it, never from "is the
+# process running". A stage we cannot measure returns 'pending' -- unknown
+# has to look different from failed, and both from off, or the lamps are
+# decoration. hls is deliberately absent: the viewer's own attempt to play
+# is better evidence than this server's opinion of its own endpoint.
+_PIPELINE_CACHE = {'at': 0.0, 'val': None}
+
+@app.route('/api/pipeline', methods=['GET'])
+def pipeline_get():
+    now = time.time()
+    if _PIPELINE_CACHE['val'] and now - _PIPELINE_CACHE['at'] < 2.0:
+        return _PIPELINE_CACHE['val'], 200
+
+    with _mode_lock:
+        mode = _mode
+    with _cam_frame_lock:
+        fresh = (now - _cam_frame_at) < 3.0 if _cam_frame_at else False
+
+    denv = _read_device_env()
+    a_on = _audio_conf(denv)[0]
+
+    out = {
+        # Hidden is 'off', not 'down': the camera is deliberately not being
+        # published. Calling that a fault would be as wrong as calling it ok.
+        'camera':   'off' if mode == 'hide' else ('ok' if fresh else 'down'),
+        'mediamtx': 'ok' if _port_listening(8554) else 'down',
+        'rtsp':     'ok' if _tcp_established_to(8554) else 'down',
+        'mic':      ('disabled' if not a_on else
+                     'off' if mode == 'hide' else 'ok'),
+        'hls':      'pending',
+    }
+    _PIPELINE_CACHE['at'] = now
+    _PIPELINE_CACHE['val'] = out
+    return out, 200
+
 
 # Reported, not asserted. The numbers come from what this node actually
 # told ffmpeg, never from the HLS master manifest's BANDWIDTH -- that figure

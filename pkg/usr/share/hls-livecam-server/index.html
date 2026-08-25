@@ -1045,19 +1045,35 @@
   }
 
   // ── LAMPS ──
-  // Only what we can actually measure lights up. MediaMTX and RTSP have no
-  // probe on this node -- there is no /api/pipeline here yet -- so they stay
-  // dark rather than green. A lamp that can never fail is indistinguishable
-  // from a broken one, which is the whole reason the panel has lamps.
+  // Every lamp reports from something that measures its stage. HLS is the
+  // one the browser can judge for itself -- our own attempt to load and play
+  // beats the server's opinion of its own endpoint -- so it comes from the
+  // pill. The rest come from /api/pipeline. A stage the server cannot
+  // measure returns 'pending' and stays dark: unknown must look different
+  // from failed, and both from off, or the lamps are decoration.
+  var pipeline = null;
+
+  function pollPipeline() {
+    fetch('/api/pipeline', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; })
+      .then(function(p) { pipeline = p; paintLamps(); });
+  }
+  pollPipeline();
+  setInterval(function() { if (!document.hidden) pollPipeline(); }, 4000);
+
   function paintLamps() {
     var live = (liveInd && liveInd.textContent === 'LIVE');
     function set(id, on) {
       var el = document.getElementById(id);
       if (el) el.className = 'led' + (on ? ' on' : '');
     }
+    function stage(name) { return pipeline && pipeline[name] === 'ok'; }
     set('ledHlsV', live); set('ledHlsA', live);
-    set('ledCamera', live && feedMode !== 'hide');
-    set('ledMic', live && audioReady);
+    set('ledCamera', stage('camera'));
+    set('ledMic', stage('mic'));
+    set('ledMtxV', stage('mediamtx')); set('ledMtxA', stage('mediamtx'));
+    set('ledRtspV', stage('rtsp'));    set('ledRtspA', stage('rtsp'));
     var iLive = document.getElementById('indLive');
     if (iLive) iLive.className = live ? 'on' : '';
     var iAv = document.getElementById('indAv');
