@@ -754,7 +754,25 @@ def info():
             version = _vf.read().strip()
     except Exception:
         version = ''
-    return {'hostname': hostname, 'tailscale': tailscale, 'version': version}
+    # Product identity is shipped data, not a string baked into the viewer.
+    # tina runs the lightcv fork off this same broadcast-api, so a hardcoded
+    # "HLS Livecam Server" in the footer would have it claiming to be
+    # something it is not -- and the licence notice is the one line on the
+    # page that must not be wrong about what it is licensing.
+    # Three lines: long name, short name, source URL.
+    product, product_short = 'HLS Livecam Server', 'HLSLS'
+    source = 'https://github.com/thefangeddeity/hls-livecam-server'
+    try:
+        with open('/usr/share/hls-livecam-server/PRODUCT') as _pf:
+            _p = [ln.strip() for ln in _pf if ln.strip()]
+        if len(_p) > 0: product = _p[0]
+        if len(_p) > 1: product_short = _p[1]
+        if len(_p) > 2: source = _p[2]
+    except Exception:
+        pass
+    return {'hostname': hostname, 'tailscale': tailscale, 'version': version,
+            'product': product, 'product_short': product_short,
+            'source': source}
 
 def _shutdown(signum, frame):
     """Stop cleanly: no respawns, no surviving children, prompt exit.

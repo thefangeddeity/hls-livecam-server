@@ -746,10 +746,10 @@
 </div>
 
 <footer class="page-foot">
-  <span>HLS Livecam Server by The Fanged Deity &mdash; free software under the
+  <span><span id="prodName">HLS Livecam Server</span> by The Fanged Deity &mdash; free software under the
     <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>
     or later, with NO WARRANTY whatsoever. You get what you get.
-    <a href="https://github.com/thefangeddeity/hls-livecam-server" target="_blank" rel="noopener">Source</a>.</span>
+    <a id="srcLink" href="https://github.com/thefangeddeity/hls-livecam-server" target="_blank" rel="noopener">Source</a>.</span>
   <span id="tsOverlay">--</span>
 </footer>
 
@@ -797,8 +797,16 @@
     // The tab has to identify the node without the page being visible: with
     // several of these open at once the favicon and the first word are all
     // you get, so the host name leads.
+    // The footer names the product and links its own repo. A node running
+    // the fork must not sign the licence notice with the other project's
+    // name, and Source has to point where its code actually is.
+    var pn = document.getElementById('prodName');
+    if (pn && info.product) pn.textContent = info.product;
+    var sl = document.getElementById('srcLink');
+    if (sl && info.source) sl.href = info.source;
     var Host = host ? host.charAt(0).toUpperCase() + host.slice(1) : '';
-    document.title = (Host ? Host + ' | ' : '') + 'HLSLS' + (build ? ' ' + build : '');
+    document.title = (Host ? Host + ' | ' : '')
+      + (info.product_short || 'HLSLS') + (build ? ' ' + build : '');
   }).catch(function(){
     // /api/info unreachable: name the node from the URL and say nothing
     // about a build we cannot read. A wrong version in a tab is worse than
