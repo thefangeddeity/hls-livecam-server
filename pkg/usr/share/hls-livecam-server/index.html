@@ -791,11 +791,15 @@
     // Build label in the header tube: what this is, and which node it is.
     // Platform-prefixed so a screenshot from any fleet member identifies
     // itself without anyone having to recognise the layout.
+    var host = (info.hostname || window.location.hostname || '').split('.')[0];
+    var build = info.version ? 'linux-v' + info.version : '';
     var bl = document.getElementById('buildLabel');
-    if (bl) {
-      var host = (info.hostname || window.location.hostname || '').split('.')[0];
-      bl.textContent = (info.version ? 'linux-v' + info.version + ' ' : '') + '@' + host;
-    }
+    if (bl) bl.textContent = (build ? build + ' ' : '') + '@' + host;
+    // The tab has to identify the node without the page being visible: with
+    // several of these open at once the favicon and the first word are all
+    // you get, so the host name leads.
+    var Host = host ? host.charAt(0).toUpperCase() + host.slice(1) : '';
+    document.title = (Host ? Host + ' | ' : '') + 'HLSLS' + (build ? ' ' + build : '');
     document.title = 'Cam @' + (info.hostname || window.location.hostname);
   }).catch(function(){
     document.title = 'Cam @' + window.location.hostname;
