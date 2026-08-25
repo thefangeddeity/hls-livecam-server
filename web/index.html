@@ -852,9 +852,10 @@
 
   /* ── Listen ───────────────────────────────────────────────────── */
 
-  .listen { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+  .listen { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
   .transport {
-    width: 54px; height: 32px; border-radius: 7px; flex: 0 0 auto;
+    width: 46px; height: 30px; border-radius: 7px; flex: 0 0 auto;
+    gap: 5px;
     display: flex; align-items: center; justify-content: center;
     background: linear-gradient(180deg, #2c2c30, #232326);
     border: 1px solid #34343a; cursor: pointer;
@@ -866,17 +867,49 @@
   }
   .transport svg { fill: #d6d6da; }
   html[data-theme="light"] .transport svg { fill: #2c2c30; }
-  .listen .cap { font-size: 10.5px; color: var(--emboss-dim); line-height: 1.3; }
+  /* Mute is a key with a lamp, not a tickbox: it belongs to the transport
+     beside it, and its state is carried by the bulb like every other state
+     on this panel. */
+  .mute-key {
+    display: flex; align-items: center; gap: 5px; flex: 0 0 auto;
+    height: 30px; padding: 0 9px; border-radius: 7px;
+    font-size: 9px; letter-spacing: .1em; cursor: pointer;
+    background: linear-gradient(180deg, #2c2c30, #232326);
+    border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35);
+  }
+  html[data-theme="light"] .mute-key {
+    background: linear-gradient(180deg, #fff, #ededf0);
+    border-color: #cfcfd4;
+    box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0,0,0,.10);
+  }
+  /* Pressed in while muting, like the feed keys -- the lamp says which way. */
+  .mute-key[aria-pressed="true"] {
+    background: linear-gradient(180deg, #191a1c, #212124);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
+    border-color: #3c3c44;
+  }
+  html[data-theme="light"] .mute-key[aria-pressed="true"] {
+    background: linear-gradient(180deg, #d9d9de, #e6e6ea);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.18);
+  }
+  .mute-key[aria-pressed="true"] .bulb {
+    background: #ff453a;
+    box-shadow: 0 0 6px rgba(255,69,58,.7), inset 0 0 2px rgba(255,255,255,.4);
+  }
+  .transport .bulb { transition: background .12s, box-shadow .12s; }
+  .listen.is-playing .transport .bulb {
+    background: var(--led-on);
+    box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5);
+  }
 
   /* A groove cut into the housing with a raised metal thumb -- the same
      material story as the buttons, not a browser slider dropped in. The
      filled portion is brighter housing, never phosphor: phosphor lives
      behind glass and this is on the panel face. */
-  .vol-row { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
-
   .vol {
     -webkit-appearance: none; appearance: none;
-    flex: 1; min-width: 0; height: 18px;
+    flex: 1 1 auto; min-width: 0; height: 18px;
     background: none; cursor: pointer;
   }
   .vol::-webkit-slider-runnable-track {
@@ -912,13 +945,9 @@
     background: linear-gradient(180deg, #fff, #e6e6ea); border-color: #c2c2c8;
   }
 
-  /* Muted is not the same as zero, so the groove dims rather than moving. */
-  .vol-row.is-muted .vol { opacity: .4; }
-
-  .vol-read {
-    font-family: var(--mono); font-size: 9px; letter-spacing: .06em;
-    min-width: 22px; text-align: right; flex: 0 0 auto;
-  }
+  /* Muted is not the same as zero, so the groove dims rather than moving:
+     the level you set is the level you get back. */
+  .listen.is-muted .vol { opacity: .4; }
 
   .talk {
     margin-top: 9px; border-radius: 7px; padding: 8px 10px;
@@ -1150,26 +1179,31 @@
         <div class="divider"></div>
         <div class="sub-title">Listen</div>
 
+        <!-- One row, read left to right in the order you reach for it:
+             start it, set the level, silence it. The LISTEN heading already
+             says what the row is, so the old "Sound in room" caption was
+             spending the panel's scarcest axis on a restatement. -->
         <div class="listen" id="roomAudio">
-          <button type="button" class="transport" id="audioToggle" aria-label="Play or pause room audio">
-            <svg id="audioIcon" width="12" height="13" viewBox="0 0 12 13" aria-hidden="true">
+          <button type="button" class="transport" id="audioToggle"
+                  aria-label="Play or pause room audio">
+            <span class="bulb"></span>
+            <svg id="audioIcon" width="11" height="12" viewBox="0 0 12 13" aria-hidden="true">
               <rect x="1" y="1" width="3.4" height="11" rx="1"></rect>
               <rect x="7.6" y="1" width="3.4" height="11" rx="1"></rect>
             </svg>
           </button>
-          <div class="cap">Sound in room</div>
-          <!-- Hidden: hls.js attaches to this, the transport button drives it.
-               The native controls duplicated a control the panel already has. -->
-          <audio id="roomAudioPlayer" preload="none" playsinline hidden></audio>
-        </div>
 
-        <!-- Sits between the transport and the mute, because that is the
-             order you reach for them: start it, set it, silence it. -->
-        <div class="vol-row">
           <input type="range" id="audioVol" class="vol"
                  min="0" max="100" step="1" value="100"
                  aria-label="Room audio volume">
-          <span class="vol-read eng" id="audioVolRead">100</span>
+
+          <button type="button" class="mute-key" id="muteAudio"
+                  aria-pressed="true" aria-label="Mute room audio">
+            <span class="bulb"></span><span class="eng">MUTE</span>
+          </button>
+
+          <!-- hls.js attaches here; the keys either side drive it. -->
+          <audio id="roomAudioPlayer" preload="none" playsinline hidden></audio>
         </div>
 
         <div class="divider"></div>
@@ -1197,16 +1231,10 @@
         <!-- The two mutes are one set: each silences the side of the panel
              above it, incoming and outgoing, so they sit together rather than
              one per sub-section. -->
-        <div class="chkrow">
-          <label class="chk">
-            <input type="checkbox" id="muteAudio" checked>
-            <span class="box"></span><span class="eng">Mute audio</span>
-          </label>
-          <label class="chk">
-            <input type="checkbox" id="muteCheck" onchange="toggleMute()">
-            <span class="box"></span><span class="eng">Mute buzzes</span>
-          </label>
-        </div>
+        <label class="chk">
+          <input type="checkbox" id="muteCheck" onchange="toggleMute()">
+          <span class="box"></span><span class="eng">Mute buzzes</span>
+        </label>
 
         <span id="audioStatus" aria-live="polite" hidden></span>
       </div>
@@ -2025,7 +2053,12 @@
     window.location.protocol + '//' +
     window.location.hostname + ':8888/cam/index.m3u8';
 
-  var muteBox = document.getElementById('muteAudio');
+  var muteKey  = document.getElementById('muteAudio');
+  var listenEl = document.getElementById('roomAudio');
+  /* Mute is a key now, not a checkbox, so the truth lives here rather than in
+     an element's .checked. aria-pressed is kept in step for assistive tech
+     and drives the pressed styling. */
+  var audioMuted = true;
   var audio   = document.getElementById('roomAudioPlayer');
   var status  = document.getElementById('audioStatus');
 
@@ -2034,7 +2067,7 @@
   var rtspLed = document.getElementById('audioRtspLed');
   var hlsLed  = document.getElementById('audioHlsLed');
 
-  if (!muteBox || !audio) return;
+  if (!muteKey || !audio) return;
 
   var hlsAudio = null;
 
@@ -2189,6 +2222,7 @@
   });
 
   function setMuted(muted) {
+    audioMuted  = muted;
     audio.muted = muted;
     try {
       localStorage.setItem('hls-livecam-mute-audio', muted ? '1' : '0');
@@ -2210,8 +2244,8 @@
   // Default to muted. Autoplay with sound is blocked without a user gesture,
   // and an appliance dashboard that starts talking on load is worse than one
   // that waits to be asked.
-  muteBox.checked = savedMute !== '0';
-  audio.muted     = muteBox.checked;
+  audioMuted  = savedMute !== '0';
+  audio.muted = audioMuted;
   // Full scale. The room mic is quiet at source (measured mean -39 dB), so
   // there is no headroom to give away here -- the <audio> element's own
   // slider is the place to turn it down, and it cannot go above 1.0.
@@ -2220,8 +2254,6 @@
      stream starts so the first audible moment is already at the chosen
      level rather than jumping to it. */
   var volEl     = document.getElementById('audioVol');
-  var volReadEl = document.getElementById('audioVolRead');
-  var volRow    = volEl ? volEl.closest('.vol-row') : null;
 
   var savedVol = null;
   try { savedVol = localStorage.getItem('hls-livecam-volume'); } catch (e) {}
@@ -2234,7 +2266,6 @@
 
   audio.volume = startVol / 100;
   if (volEl) volEl.value = startVol;
-  if (volReadEl) volReadEl.textContent = startVol;
 
   function applyVolume(v, persist) {
     /* Math.max/min propagate NaN rather than clamping it, and assigning NaN
@@ -2242,7 +2273,6 @@
     if (!isFinite(v)) return;
     v = Math.max(0, Math.min(100, v));
     audio.volume = v / 100;
-    if (volReadEl) volReadEl.textContent = v;
     if (persist) {
       try { localStorage.setItem('hls-livecam-volume', String(v)); } catch (e) {}
     }
@@ -2255,7 +2285,10 @@
     volEl.addEventListener('change', function () { applyVolume(parseInt(volEl.value, 10), true); });
   }
 
-  muteBox.addEventListener('change', function () { setMuted(muteBox.checked); });
+  muteKey.addEventListener('click', function () {
+    setMuted(!audioMuted);
+    paintTransport();
+  });
 
   /* Transport. The native <audio> controls were removed: they duplicated the
      mute this panel already has, and their volume slider could only ever cut
@@ -2269,10 +2302,20 @@
 
   function paintTransport() {
     if (iconEl) iconEl.innerHTML = audio.paused ? PLAY_ICON : PAUSE_ICON;
-    indicator(document.getElementById('indMute'), muteBox.checked || audio.paused);
-    /* Muted dims the groove rather than dragging it to zero: the level you
-       chose is still the level you get back when you unmute. */
-    if (volRow) volRow.classList.toggle('is-muted', muteBox.checked);
+    /* The tube's MUTE segment reports exactly one thing: whether the room
+       is inaudible here. That is true when the key is down OR the transport
+       is stopped -- a paused stream is silent whatever the key says, and a
+       segment that lit only for the key would be reading the control
+       instead of the state. */
+    var silent = audioMuted || audio.paused;
+    indicator(document.getElementById('indMute'), silent);
+
+    if (muteKey) muteKey.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
+    if (listenEl) {
+      /* Muting dims the groove rather than dragging it to zero. */
+      listenEl.classList.toggle('is-muted', audioMuted);
+      listenEl.classList.toggle('is-playing', !audio.paused);
+    }
   }
 
   if (toggleBtn) {
@@ -2286,7 +2329,6 @@
   }
   audio.addEventListener('play',  paintTransport);
   audio.addEventListener('pause', paintTransport);
-  muteBox.addEventListener('change', paintTransport);
   paintTransport();
 
   audio.addEventListener('playing', function () {
@@ -2320,7 +2362,7 @@
 
       hlsAudio.on(Hls.Events.MANIFEST_PARSED, function () {
         stage(hlsLed, 'ok');
-        if (muteBox.checked) { setAudioState('Room audio'); return; }
+        if (audioMuted) { setAudioState('Room audio'); return; }
         audio.play().catch(function () { setAudioState('Tap to enable'); });
       });
 
@@ -2338,7 +2380,7 @@
       audio.src = url;
       audio.addEventListener('loadedmetadata', function () {
         stage(hlsLed, 'ok');
-        if (muteBox.checked) { setAudioState('Room audio'); return; }
+        if (audioMuted) { setAudioState('Room audio'); return; }
         audio.play().catch(function () { setAudioState('Tap to enable'); });
       }, { once: true });
       return;
