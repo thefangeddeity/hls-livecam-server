@@ -114,6 +114,78 @@ curl -X POST http://localhost/api/buzz
 
 ---
 
+## Feed modes
+
+Three modes, set from the viewer, the Qt dashboard or camdash, and persisted
+across restarts in `/var/lib/hls-livecam/feed_mode`. When that file is missing
+or unreadable the node falls back to **`cv`** — never to `show`. A privacy
+control on a camera pointed at a family's living space does not get to fail
+open.
+
+| mode | what is published |
+|---|---|
+| `show` | the camera |
+| `cv` | the camera, processed (see CV Mode) |
+| `hide` | **VHS static**, plus silence |
+
+`cloak` is accepted as a permanent alias for `cv` on `/api/feed-mode`. Not a
+transition window — every node in the fleet talks to every other node's
+endpoints and no two ship on the same day.
+
+### Hide publishes static, not black
+
+Rendered server-side, so the web viewer, the Qt dashboard, camdash and anyone
+opening the HLS URL directly all get it — no per-surface wiring, and no
+surface can miss the memo and show something else. It is derived from nothing:
+no camera frame touches that path.
+
+**Static is not expensive, and the widely-repeated claim that it is comes from
+an unconstrained encoder.** Measured on tanzania, at the publisher's real
+settings:
+
+| | render | published |
+|---|---|---|
+| black | ~0 ms (cached array) | 40 kb/s |
+| static | +3.6 ms/frame | **1560 kb/s** |
+| the live feed, for scale | — | ~1500 kb/s (`-b:v 1500k`) |
+
+So static costs **the same as the live feed**, not more, because `-b:v` is
+doing rate control. Encode a noise clip with no bitrate cap and you will
+measure 1.6–1.8 Mb/s and conclude static is costly; put the cap back and the
+difference disappears. Two things make it cheap: the `-b:v` ceiling, and
+generating the noise small (224×126) and scaling up **nearest-neighbour**, so
+the encoder sees large flat blocks rather than per-pixel noise.
+
+The viewer keeps a "camera is switched off" notice on top of the snow. Static
+on its own is exactly what a dead feed looks like — that notice is the only
+thing separating deliberate from broken.
+
+### Room audio
+
+Off by default. Set `AUDIO_ENABLED=1` in `/etc/hls-livecam/device.env` along
+with `AUDIO_DEVICE` (default `hw:0,0`), and the publisher gains a second input
+and publishes AAC alongside the video as an `EXT-X-MEDIA` rendition.
+
+The service user must be in the `audio` group — `/dev/snd/*` is `root:audio`,
+and the setup wizard adds it. Without it ffmpeg fails with `Cannot get card
+index` and only the log says why.
+
+**Hide closes the microphone.** Hidden swaps the ALSA input for `anullsrc`, so
+the device is never opened — not muted, closed. `GET /api/audio` reports
+`disabled` (no mic configured), `off` (configured but closed because hidden)
+or `ok`, and reports the rate and bitrate this node actually gave ffmpeg,
+never the manifest's `BANDWIDTH` (which is video+audio combined and overstates
+audio badly).
+
+**Stage the input before trusting it.** Both fleet nodes shipped with mics
+that looked broken and were not — one with +60 dB of stacked gain railing the
+input, one muted at 0. `mean_volume` alone will not tell you which you have;
+**flat factor and DC offset** will. A railed input reads flat factor ~88 and
+DC ~0.34, real audio reads flat factor 0.000 and DC ~0. Persist with
+`alsactl store` once it is right.
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |
