@@ -144,7 +144,43 @@ def _set_capture_state(state, detail=''):
         _pipeline_state['detail']  = detail
 
 # ── Mode state ───────────────────────────────────────────────────
-_mode      = 'show'
+#
+# Persisted, and defaulting to hidden when absent. The mode used to live only
+# in memory, so any restart -- a crash, a reboot, an update -- silently
+# reopened the camera. A privacy control that quietly resets itself is the
+# same failure as one that never worked; the whole point of Hide is that it
+# stays hidden until someone says otherwise.
+#
+# Fail closed: an unreadable or missing file means hidden, never showing.
+MODE_FILE = os.path.join(STATE_DIR, "feed_mode")
+
+
+def _read_mode():
+    try:
+        with open(MODE_FILE) as f:
+            v = f.read().strip()
+        return v if v in ('show', 'cv', 'hide') else 'hide'
+    except Exception:
+        return 'hide'
+
+
+def _write_mode(value):
+    # Same temp+fsync+replace as the enabled flag: a power cut mid-write must
+    # not leave a truncated file, which would read back as hidden anyway --
+    # but deliberately, not by luck.
+    try:
+        tmp = MODE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(value + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, MODE_FILE)
+    except Exception as exc:
+        print(f'broadcast-api: could not persist feed mode: {exc}',
+              file=sys.stderr, flush=True)
+
+
+_mode      = _read_mode()
 _mode_lock = threading.Lock()
 # Bumped on every mode change. The writer loop captures it when it spawns a
 # publisher and tears that publisher down as soon as the value moves, which is
@@ -672,6 +708,8 @@ def feed_mode_post():
         _mode = new_mode
         if changed:
             _mode_generation += 1
+    if changed:
+        _write_mode(new_mode)
     return new_mode, 200
 
 
