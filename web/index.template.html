@@ -2225,13 +2225,21 @@
 
   var savedVol = null;
   try { savedVol = localStorage.getItem('hls-livecam-volume'); } catch (e) {}
-  var startVol = savedVol === null ? 100 : Math.max(0, Math.min(100, parseInt(savedVol, 10) || 0));
+  /* `parseInt(x, 10) || 0` turns anything unparseable into 0, i.e. silence --
+     so a corrupted entry would open the viewer mute-looking-but-not-muted,
+     which is the hardest kind of "no audio" to diagnose. Fall back to full;
+     a viewer that opens silent looks broken, one that opens loud does not. */
+  var parsedVol = parseInt(savedVol, 10);
+  var startVol  = isFinite(parsedVol) ? Math.max(0, Math.min(100, parsedVol)) : 100;
 
   audio.volume = startVol / 100;
   if (volEl) volEl.value = startVol;
   if (volReadEl) volReadEl.textContent = startVol;
 
   function applyVolume(v, persist) {
+    /* Math.max/min propagate NaN rather than clamping it, and assigning NaN
+       to audio.volume throws. Reject it before it reaches the element. */
+    if (!isFinite(v)) return;
     v = Math.max(0, Math.min(100, v));
     audio.volume = v / 100;
     if (volReadEl) volReadEl.textContent = v;
