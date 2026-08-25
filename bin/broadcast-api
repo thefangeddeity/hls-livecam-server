@@ -800,7 +800,11 @@ def info():
             tailscale = m.group(1)
     except Exception:
         pass
-    return {'hostname': hostname, 'tailscale': tailscale}
+    # The viewer sizes its message box from this and clamps its own input to
+    # it. Serving the limit rather than duplicating 120 in the page keeps one
+    # definition: the box cannot end up sized for a length the server will
+    # then truncate.
+    return {'hostname': hostname, 'tailscale': tailscale, 'msg_max_len': MAX_LEN}
 
 
 # ── Static web serving (replaces nginx) ──────────────────────────
