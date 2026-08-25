@@ -76,13 +76,30 @@ if [ -f /usr/local/etc/mediamtx.yml ]; then
     chown root:root /usr/local/etc/mediamtx.yml
 fi
 
-# --- Fix sudoers file ownership ---------------------------------
-for f in /etc/sudoers.d/hls-livecam-dark /etc/sudoers.d/camdash-smart; do
+# --- sudoers drop-ins -------------------------------------------
+# Fix ownership on the ones that are here, and SAY SO when one is not.
+# These are written by hls-livecam-setup, not by dpkg, so this script
+# cannot recreate them -- it does not know which user to grant. Until
+# run-21 the prerm deleted them on every upgrade and this loop silently
+# skipped the gap, which is how a node ended up needing `sudo camdash`
+# to see its own disk. Silence was the bug; the guard in prerm is the fix.
+MISSING_SUDOERS=""
+for f in /etc/sudoers.d/hls-livecam-dark \
+         /etc/sudoers.d/hls-livecam-services \
+         /etc/sudoers.d/camdash-smart; do
     if [ -f "$f" ]; then
         chown root:root "$f"
         chmod 440 "$f"
+    else
+        MISSING_SUDOERS="$MISSING_SUDOERS $(basename "$f")"
     fi
 done
+if [ -n "$MISSING_SUDOERS" ]; then
+    echo ""
+    echo -e "${YELLOW}Missing sudoers drop-ins:${NC}$MISSING_SUDOERS"
+    echo "  Without them camdash cannot read SMART and the dark/service"
+    echo "  controls will prompt for a password. Run: sudo hls-livecam-setup"
+fi
 
 echo ""
 echo -e "${GREEN}hls-livecam-server installed.${NC}"

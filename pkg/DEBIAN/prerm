@@ -1,12 +1,45 @@
 #!/bin/bash
 set -e
 
-# NOTE: This script intentionally does NOT stop nginx.
-# The v2.0.0 prerm called `systemctl stop nginx`, which tears down
-# the system-wide nginx process and any unrelated sites it serves.
-# We only remove our own site config and reload.
-echo "Removing hls-livecam nginx site..."
+# dpkg calls this on BOTH removal and upgrade:
+#
+#   prerm remove
+#   prerm upgrade <new-version>
+#   prerm deconfigure ...
+#
+# Until run-21 this script ignored $1 and did the full teardown every time,
+# so every `dpkg -i` upgrade silently deleted the sudoers drop-ins that
+# `hls-livecam-setup` writes and left the services DISABLED. postinst only
+# ever fixes the ownership of those files *if they still exist*; it never
+# recreates them. The visible symptom was camdash losing SMART on tina and
+# needing to be run under sudo -- traced back here, two upgrades later.
+#
+# So: teardown belongs to removal. An upgrade stops the services, because
+# their files are about to be replaced underneath them, and touches nothing
+# else.
+# Only `remove` is a real teardown. `deconfigure` is temporary and
+# `upgrade` is not a removal at all, whatever the old script assumed.
+case "$1" in
+  remove) REMOVING=yes ;;
+  *)      REMOVING=no ;;
+esac
 
+# Stop our own services in both cases -- on upgrade because the binaries
+# are about to change, on removal because they are going away. Never stop
+# nginx: the v2.0.0 prerm did, which tears down the system-wide process and
+# every unrelated site it serves.
+systemctl unmask ffmpeg-cam 2>/dev/null || true
+systemctl stop ffmpeg-cam 2>/dev/null || true
+systemctl stop mediamtx 2>/dev/null || true
+systemctl stop broadcast-api 2>/dev/null || true
+
+if [ "$REMOVING" = no ]; then
+    echo "hls-livecam-server: upgrade in progress, services stopped."
+    systemctl daemon-reload 2>/dev/null || true
+    exit 0
+fi
+
+echo "Removing hls-livecam nginx site..."
 rm -f /etc/nginx/sites-enabled/hls-livecam
 rm -f /etc/nginx/sites-available/hls-livecam
 
@@ -14,17 +47,13 @@ rm -f /etc/nginx/sites-available/hls-livecam
 # we still want removal to continue, hence the `|| true`.
 nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
 
-# Stop and disable our own services only.
-systemctl unmask ffmpeg-cam 2>/dev/null || true
-systemctl stop ffmpeg-cam 2>/dev/null || true
 systemctl disable ffmpeg-cam 2>/dev/null || true
-systemctl stop mediamtx 2>/dev/null || true
 systemctl disable mediamtx 2>/dev/null || true
-systemctl stop broadcast-api 2>/dev/null || true
 systemctl disable broadcast-api 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
 
-# Remove sudoers entries written by hls-livecam-setup.
+# Remove sudoers entries written by hls-livecam-setup. Removal only -- see
+# the note at the top of this file for what doing it on upgrade cost.
 rm -f /etc/sudoers.d/hls-livecam-dark
 rm -f /etc/sudoers.d/hls-livecam-services
 # camdash-smart may have been written by setup — remove it too.

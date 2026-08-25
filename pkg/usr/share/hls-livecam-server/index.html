@@ -226,23 +226,6 @@
     font-size: 12px;
     color: rgba(255,255,255,0.3);
   }
-  /* Above the static (z 20), not under it: a fault now shows snow with the
-     explanation on top of it. The scrim is lighter than it was, and the
-     blur is gone -- both existed to hide a black frame, and there is no
-     black frame behind this any more. */
-  .error-overlay {
-    position: absolute; inset: 0;
-    display: none;
-    flex-direction: column;
-    align-items: center; justify-content: center;
-    gap: 8px;
-    background: rgba(0,0,0,0.45);
-    color: #fff;
-    z-index: 25;
-  }
-  .error-overlay.visible { display: flex; }
-  .error-overlay .title { font-size: 15px; font-weight: 600; color: var(--danger); }
-  .error-overlay .sub { font-size: 12px; color: rgba(255,255,255,0.7); }
 
   /* ── DESKTOP SIDEBAR ── */
   .sidebar {
@@ -482,10 +465,6 @@
       <div class="hide-title">No signal</div>
       <div class="hide-sub">The camera is switched off</div>
     </div>
-    <div class="error-overlay" id="errorOverlay">
-      <div class="title">Signal lost</div>
-      <div class="sub">Retrying…</div>
-    </div>
   </div>
 
   <aside class="sidebar" id="sidebar">
@@ -574,7 +553,6 @@
   var HLS_URL = 'http://' + window.location.hostname + ':8888/cam/index.m3u8';
   var video        = document.getElementById('video');
   var liveInd      = document.getElementById('liveIndicator');
-  var errorOverlay = document.getElementById('errorOverlay');
   var darkOverlay  = document.getElementById('darkOverlay');
   var showBtn      = document.getElementById('showBtn');
   var cvBtn        = document.getElementById('cvBtn');
@@ -830,15 +808,12 @@
     video.style.opacity = '0';
     if (fadeInTimer) clearTimeout(fadeInTimer);
     // A mode change tears the hls.js session down and rebuilds it, so the
-    // player errors BY DESIGN inside this window. Surfacing that as "Signal
-    // lost / Retrying" contradicts the "Switching feed" notice already on
-    // screen -- two explanations for one blank frame, and the wrong one
-    // blames the system for the operator's own request. Suppress the error
-    // surface for the length of the cover and clear anything already up.
-    // (The pre-existing feedMode === 'hide' guard in showError() was this
-    // same bug caught in one specific case; this generalises it.)
+    // player errors BY DESIGN inside this window. Suppressing the fault path
+    // for the length of the cover keeps the pill from reading RECONNECTING
+    // and the Reconnect button from appearing for a change the operator
+    // just asked for. (The pre-existing feedMode === 'hide' guard in
+    // showError() was this same bug caught in one specific case.)
     switching = true;
-    errorOverlay.classList.remove('visible');
     reconnectBtn.hidden = true;
     faulted = false;
     updateCover();
@@ -867,10 +842,10 @@
     showBtn.className  = 'btn' + (feedMode === 'show'  ? '' : ' primary');
     cvBtn.className = 'btn' + (feedMode === 'cv' ? '' : ' primary');
     hideBtn.className  = 'btn' + (feedMode === 'hide'  ? '' : ' primary');
-    // Hide publishes a black frame, which on its own is indistinguishable
-    // from a dead stream. Say plainly that it is deliberate -- and keep it
-    // distinct from the "Signal lost / Retrying..." error overlay, which
-    // means something is actually wrong.
+    // Hide publishes static, which on its own is indistinguishable from a
+    // dead stream -- deliberately so, since that is what it is imitating.
+    // This notice is the only thing that separates the two, now that a
+    // genuine fault raises the same snow and says nothing over it.
     hideOverlay.classList.toggle('visible', feedMode === 'hide');
     // Foveal Layer is a modifier on CV Mode, not a mode of its own -- same
     // pattern as B&W was on Blur before the CV Mode pivot. Greyed out
@@ -990,7 +965,6 @@
     liveInd.textContent = text;
     liveInd.className = 'live-pill' + (mode ? ' ' + mode : '');
     if (mode === 'live') {
-      errorOverlay.classList.remove('visible');
       reconnectBtn.hidden = true;
       // Genuinely back: drop the fault cover. A switch cover, if one is
       // still open, clears on its own 'playing' event instead.
@@ -1009,22 +983,20 @@
     }
   }
 
+  // No longer shows anything itself. The snow is the notification, and the
+  // pill in the header already reads RECONNECTING -- a red panel repeating
+  // that in words, over the top of the snow, was the loudest thing on the
+  // page for the most ordinary event there is. All this does now is raise
+  // the cover and offer the one control that fixes a stuck stream.
   function showError() {
-    // Hide mode publishes black deliberately. If the stream also drops while
-    // it is on, "Signal lost / Retrying..." contradicts the "camera is
-    // switched off" notice already on screen -- two different explanations
-    // for the same blank frame. The deliberate one wins; the stream recovers
-    // on its own either way.
+    // Hide already publishes its own static and says, in words, that this is
+    // deliberate. A fault cover on top would bury that notice under the very
+    // texture it is explaining.
     if (feedMode === 'hide') return;
     // Inside a switch cover the error is our own doing -- see fadeOut().
-    if (switching) {
-      errorOverlay.classList.remove('visible');
-      reconnectBtn.hidden = true;
-      return;
-    }
+    if (switching) { reconnectBtn.hidden = true; return; }
     faulted = true;
     updateCover();
-    errorOverlay.classList.add('visible');
     reconnectBtn.hidden = false;
   }
 
