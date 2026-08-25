@@ -691,7 +691,7 @@
     <!-- Substituted at render time from `git describe`. Hovering gives the
          build stamp and commit, which is what distinguishes two installs of
          the same tag. -->
-    <span class="build-tag" title="mac-v1.2.1">mac-v1.2.1</span>
+    <span class="build-tag" title="mac-v1.3.0">mac-v1.3.0</span>
   </div>
   <div class="status-bar">
     <span class="live-pill" id="liveIndicator">CONNECTING</span>
@@ -763,17 +763,6 @@
         </div>
       </div>
 
-      <!-- BUZZ — the button and its mute belong together; they were split
-           across the controls list with unrelated toggles between them. -->
-      <div class="section">
-        <div class="section-title">Buzz</div>
-        <div class="controls-stack">
-          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
-          <label class="mute-label">
-            <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
-          </label>
-        </div>
-      </div>
 
       <!-- STREAM INFO — desktop only -->
       <div class="section desktop-only stream-section">
@@ -839,7 +828,19 @@
         </div>
       </div>
 
-
+      <!-- BUZZ — last. The button and its mute belong together (they were
+           split across the controls list with unrelated toggles between
+           them), and it sits below the media panels because it is the one
+           control that reaches out to the room rather than describing it. -->
+      <div class="section">
+        <div class="section-title">Buzz</div>
+        <div class="controls-stack">
+          <button class="btn buzz-btn" id="buzzBtn" onclick="sendBuzz()">📳 Buzz</button>
+          <label class="mute-label">
+            <input type="checkbox" id="muteCheck" onchange="toggleMute()"> Mute Buzzes
+          </label>
+        </div>
+      </div>
 
     </div>
   </aside>
@@ -1571,7 +1572,10 @@
   // that waits to be asked.
   muteBox.checked = savedMute !== '0';
   audio.muted     = muteBox.checked;
-  audio.volume    = 0.8;
+  // Full scale. The room mic is quiet at source (measured mean -39 dB), so
+  // there is no headroom to give away here -- the <audio> element's own
+  // slider is the place to turn it down, and it cannot go above 1.0.
+  audio.volume    = 1.0;
 
   muteBox.addEventListener('change', function () { setMuted(muteBox.checked); });
 

@@ -329,6 +329,38 @@ def _start_combined_av_publisher():
     rtsp_port = str(_cfg.get('RTSP_PORT', '8554')).strip() or '8554'
     rtsp_url = f'rtsp://127.0.0.1:{rtsp_port}/cam'
 
+    # Optional capture-side gain. A room mic is quiet by nature -- measured
+    # here at roughly -39 dB mean -- and a browser cannot make up the
+    # difference, because an <audio> element's volume caps at 1.0 and only
+    # ever attenuates. Raising it at the source is the only thing that makes
+    # every client louder.
+    #
+    # Two knobs, both off by default so an existing node sounds exactly as it
+    # did until someone opts in:
+    #
+    #   AUDIO_GAIN_DB   fixed gain, limited so that boosting a quiet room
+    #                   does not clip when someone finally speaks near the
+    #                   mic. alimiter, not hard clipping, because clipped
+    #                   speech is worse than quiet speech.
+    #   AUDIO_FILTER    raw ffmpeg -af chain for anything more involved,
+    #                   e.g. dynaudnorm for constant perceived loudness.
+    #                   Wins if both are set.
+    audio_filter = []
+    raw_filter = str(_cfg.get('AUDIO_FILTER', '')).strip()
+    gain_db_raw = str(_cfg.get('AUDIO_GAIN_DB', '')).strip()
+    if raw_filter:
+        audio_filter = ['-af', raw_filter]
+    elif gain_db_raw:
+        try:
+            gain_db = float(gain_db_raw)
+        except ValueError:
+            print(f'broadcast-api: ignoring non-numeric AUDIO_GAIN_DB='
+                  f'{gain_db_raw!r}', file=sys.stderr, flush=True)
+        else:
+            if gain_db:
+                audio_filter = ['-af',
+                                f'volume={gain_db}dB,alimiter=limit=0.95']
+
     cmd = [
         FFMPEG,
         '-hide_banner',
@@ -357,6 +389,7 @@ def _start_combined_av_publisher():
         '-b:a', '96k',
         '-ar', '48000',
         '-ac', '2',
+        *audio_filter,
 
         '-rtsp_transport', 'tcp',
         '-f', 'rtsp',
