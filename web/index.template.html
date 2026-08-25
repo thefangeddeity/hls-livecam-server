@@ -1214,7 +1214,7 @@
               <span class="vval"><span class="vghost">888</span><span class="vlit" id="audioBits"></span></span>
             </div>
             <div class="vind">
-              <i id="indStereo">STEREO</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
           </div>
 
@@ -2371,13 +2371,15 @@
 
   function paintTransport() {
     if (iconEl) iconEl.innerHTML = audio.paused ? PLAY_ICON : PAUSE_ICON;
-    /* The tube's MUTE segment reports exactly one thing: whether the room
-       is inaudible here. That is true when the key is down OR the transport
-       is stopped -- a paused stream is silent whatever the key says, and a
-       segment that lit only for the key would be reading the control
-       instead of the state. */
-    var silent = audioMuted || audio.paused;
-    indicator(document.getElementById('indMute'), silent);
+    /* STOP and MUTE are different states and get a segment each. Folding
+       them into one "inaudible" lamp lost the distinction the panel exists
+       to make: a stopped transport is fetching nothing, while a muted one is
+       still pulling the stream and simply silent in this browser. They also
+       clear differently -- pressing play does not unmute, and unmuting does
+       not start playback -- so one segment could never say which of the two
+       to undo. */
+    indicator(document.getElementById('indStop'), audio.paused);
+    indicator(document.getElementById('indMute'), audioMuted);
 
     if (muteKey) muteKey.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
     if (listenEl) {
