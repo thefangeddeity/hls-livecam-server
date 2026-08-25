@@ -326,7 +326,21 @@ hdiutil create \
   -format UDZO \
   "$OUT" >/dev/null
 
+# Drop a copy where it can be picked up without digging through dist/ or
+# retyping a stamped filename. Best-effort: a missing or unwritable Desktop
+# must not fail a build that has already succeeded.
+DROP="$HOME/Desktop/HLSLS"
+if mkdir -p "$DROP" 2>/dev/null && cp -f "$OUT" "$DROP/" 2>/dev/null; then
+  DROPPED="$DROP/$(basename "$OUT")"
+else
+  DROPPED=""
+  echo "  note: could not copy to $DROP (build itself is fine)" >&2
+fi
+
 echo
 echo "BUILD COMPLETE"
-echo "DMG: $OUT"
-echo "SIZE: $(du -h "$OUT" | awk '{print $1}')"
+echo "DMG:    $OUT"
+[[ -n "$DROPPED" ]] && echo "COPY:   $DROPPED"
+echo "SIZE:   $(du -h "$OUT" | awk '{print $1}')"
+echo "SHA256: $(shasum -a 256 "$OUT" | awk '{print $1}')"
+echo "LABEL:  ${VERSION} · ${BUILD_STAMP} · ${GIT_COMMIT} (${BUILD_TRUST})"
