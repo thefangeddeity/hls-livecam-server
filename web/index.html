@@ -115,6 +115,24 @@
     font-weight: 600;
     letter-spacing: -0.01em;
   }
+  /* The title is cast into the housing like every label in the panel below,
+     so the page reads as one instrument rather than a header bolted to one.
+     It takes .eng for the colour and carved shadow; only the tracking is
+     tuned here, because .brand's -0.01em was set for a brighter weight and
+     engraved text needs the extra air to stay legible. */
+  .brand .brand-name { letter-spacing: .01em; }
+
+  /* The mark is a raster and cannot be engraved, so it is dimmed slightly to
+     sit at the same visual weight rather than outshining the text beside it.
+     Full strength on hover, for the rare moment someone wants to look at it. */
+  .brand .brand-mark {
+    width: 20px; height: 20px; flex: 0 0 auto;
+    border-radius: 4px;
+    opacity: .82;
+    transition: opacity .15s;
+  }
+  .brand:hover .brand-mark { opacity: 1; }
+
   .brand .sep { color: var(--text-muted); font-weight: 400; }
   .brand .host { color: var(--text-dim); font-weight: 500; }
   .status-bar {
@@ -495,18 +513,30 @@
    * is ever gray.
    */
 
+  /* Engraved is a page-wide material, not a sidebar-local one: the header
+     title is cast into the same housing as the panel labels. These live on
+     :root so .eng resolves anywhere -- defined here once rather than
+     duplicated, because two copies drift. */
+  :root {
+    --emboss:        #8a8a90;
+    --emboss-strong: #a2a2a8;
+    --emboss-dim:    #6a6a70;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  html[data-theme="light"] {
+    --emboss:        #5c5c63;
+    --emboss-strong: #3a3a40;
+    --emboss-dim:    #85858c;
+  }
+
   .sidebar-scroll {
     --housing:       #1b1b1d;
     --housing-hi:    rgba(255,255,255,.045);
     --housing-lo:    #141416;
     --housing-top:   #1f1f22;
     --border-soft:   #242427;
-    --emboss:        #8a8a90;
-    --emboss-strong: #a2a2a8;
-    --emboss-dim:    #6a6a70;
     --led-on:        #30d158;
     --led-off:       #3a3a3e;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
     /* Phosphor colourway. One variable drives glass, ghost and lit text, so
        switching between blue-green / green / amber / ice is a one-line
@@ -527,9 +557,6 @@
     --housing-lo:    #e2e2e5;
     --housing-top:   #f5f5f7;
     --border-soft:   #d2d2d6;
-    --emboss:        #5c5c63;
-    --emboss-strong: #3a3a40;
-    --emboss-dim:    #85858c;
     --led-off:       #c2c2c7;
   }
 
@@ -892,7 +919,9 @@
 
 <header>
   <div class="brand">
-    <span>HLS Livecam</span>
+    <img class="brand-mark" src="/brand.png"
+         srcset="/brand.png 1x, /brand@2x.png 2x" alt="" width="20" height="20">
+    <span class="eng brand-name">HLS Livecam</span>
     <span class="sep">//</span>
     <span class="host"></span>
     <!-- Substituted at render time from `git describe`. Hovering gives the
@@ -1386,8 +1415,16 @@
           var wasHidden = (feedMode === 'hide');
           feedMode = mode;
           updateFeedButtons();
-          /* Another viewer (or camdash) changed it. Animate only when the
-             on/off state actually flipped. */
+          /* Another viewer (or camdash) changed it. The publisher restarts
+             server-side either way, so this page's stream drops and hls.js
+             errors -- exactly as it does for a local switch. It needs the
+             same suppression window, or a mode change made elsewhere raises
+             "Signal lost" here while the feed is merely changing.
+             (tanzania's PENDING flagged the general shape of this: any viewer
+             that reloads or loses its player on a mode change has it, not
+             only one that initiated the change.) */
+          beginFeedSwitch();
+          setTimeout(endFeedSwitch, HOLD_SECONDS * 1000);
           if (wasHidden !== (mode === 'hide')) applyFeedModeVisual(mode, true);
         }
         if (feedModeFirstPoll) {

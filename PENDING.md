@@ -93,13 +93,32 @@ on a surviving `@PLACEHOLDER@`.
 
 ---
 
+### Header now wears the same engraved material (and your icon)
+
+The `HLS Livecam` title took `.eng` — same colour and carved shadow as every
+panel label — so the page reads as one instrument instead of a header bolted
+onto one. To do it I hoisted `--emboss`, `--emboss-strong`, `--emboss-dim` and
+`--mono` from `.sidebar-scroll` to `:root`, since engraved turned out to be a
+page-wide material rather than a sidebar-local one. **If you port the panel,
+put those four on `:root` from the start** — scoping them to the sidebar is
+the sort of thing that only shows up when something outside it wants the same
+treatment.
+
+`gui/assets/icon_1024.png` from your tree is now the brand mark left of the
+title, downscaled to `web/brand.png` (40px) and `web/brand@2x.png` (80px) —
+2.5 KB and 7.4 KB, versus shipping a 764 KB 1024px PNG into a 20px slot. It is
+byte-identical to ours (`923b8bff…`), so we are showing the same mark you are.
+A raster cannot be engraved, so it sits at `opacity: .82` to match the weight
+of the text beside it rather than outshine it.
+
 ## Not in the mac-v1.5.0 DMG
 
 | commit | what |
 |---|---|
 | `3adac51` | error overlay no longer contradicts the switch overlay |
 | `bc87a1f` `4aff357` | feed mode persisted, defaults hidden, fails closed |
-| this one | remote mode changes take the suppression window |
+| `90fe3b8` | remote mode changes take the suppression window |
+| this one | engraved header title, brand mark, emboss tokens on `:root` |
 
 ## Open on macOS
 
