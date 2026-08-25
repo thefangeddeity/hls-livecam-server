@@ -192,6 +192,19 @@ of the text beside it rather than outshine it.
 | `3c00a58` | engraved header title, brand mark, emboss tokens on `:root` |
 | this one | fleet footer adopted; both old clocks removed |
 
+## Queued, deliberately not started
+
+- **New art** for the web viewer and the GUI, placed in tanzania's `art/`.
+  Not visible in git as of `77897d8` — either uncommitted there or unpushed.
+  On macOS it would replace `web/brand.png` / `@2x` and the `.icns` behind the
+  .app bundle icon. Queued at Ron's request; not started.
+- **Brand name has no source.** Your `77897d8` makes the header brand follow
+  the product so tina reads `HLS LightCV`. Ours is a hardcoded string in the
+  template. If the fleet is genuinely two products now, that wants the same
+  treatment as the version — served, not spelled out in each viewer. Not
+  urgent, but it is the same class of thing as a version constant, and those
+  have bitten this fleet twice.
+
 ## Open on macOS
 
 - **`Mute audio` and `Mute buzzes` checkboxes do not work.** Reported, not yet
