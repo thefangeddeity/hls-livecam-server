@@ -396,8 +396,9 @@
   .chk.pending { color: var(--emboss-dim); cursor: not-allowed; }
   .chk.pending .box { opacity: .5; }
   .box { width: 13px; height: 13px; border-radius: 3.5px; flex: 0 0 auto; background: linear-gradient(180deg,#1a1a1c,#212124); border: 1px solid #3a3a40; box-shadow: inset 0 1px 2px rgba(0,0,0,.55); position: relative; }
-  .chk input:checked + .box { background: linear-gradient(180deg,#3f8cff,#2f6fdc); border-color: #2f6fdc; box-shadow: 0 0 5px rgba(63,140,255,.4), inset 0 1px 0 rgba(255,255,255,.3); }
-  .chk input:checked + .box::after { content: ""; position: absolute; left: 3.5px; top: 1px; width: 4px; height: 7px; border: solid #fff; border-width: 0 1.6px 1.6px 0; transform: rotate(42deg); }
+  .chk input:checked + .box { background: var(--led-on); border-color: color-mix(in srgb,var(--led-on) 70%,#000);
+    box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5); }
+  html[data-theme="light"] .chk input:checked + .box { box-shadow: 0 0 5px rgba(48,209,88,.5), inset 0 0 2px rgba(255,255,255,.6); }
 
   .buzz2 { width: 100%; border-radius: 8px; padding: 11px; font-size: 12.5px; font-weight: 600; color: #fff; cursor: pointer; font-family: inherit;
     background: linear-gradient(180deg,#ff5a49,#e5341f); border: 1px solid #b8271a;
@@ -446,7 +447,11 @@
     background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
   .modem:disabled { cursor: not-allowed; opacity: .55; }
+  /* Pressed is pressed, whichever key it is -- the same depth the mode
+     buttons above use, so the whole panel has one idea of what "in" looks
+     like rather than one per control type. */
   .modem:active { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
+  html[data-theme="light"] .modem:active { background: linear-gradient(180deg,#dcdad0,#e9e8e1); box-shadow: inset 0 2px 4px rgba(88,110,117,.28); }
   .modem .cap2 { font-family: var(--mono); font-size: 7.5px; letter-spacing: .1em; color: var(--emboss); }
   .vol { -webkit-appearance: none; appearance: none; flex: 1 1 auto; min-width: 52px;
     height: 32px; background: none; cursor: pointer; }
@@ -492,16 +497,51 @@
   /* No message is the unlit state: ghost segments, the same rule the tubes
      follow -- never a blank, never a placeholder pretending to be content. */
   .msg2.empty { color: var(--phos-ghost); text-shadow: none; }
-  .msg2:focus { outline: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.05),
-    inset 0 0 20px rgba(0,0,0,.75), 0 0 0 1px color-mix(in srgb,var(--phos) 45%,transparent); }
+  /* EDIT MODE IS REVERSE VIDEO. A 1980s console did not draw a focus ring;
+     it inverted the field, and you knew at a glance which one had the
+     cursor because the whole block had swapped. It is also the only signal
+     on this panel that cannot be missed at a distance, which matters for a
+     field whose contents go out to every viewer.
+     The scanlines stay -- they are the screen, not the content -- but they
+     darken instead of lighten, because they are now sitting on a lit
+     ground. */
+  .msg2:focus {
+    outline: none;
+    color: var(--glass-a);
+    caret-color: var(--glass-a);
+    text-shadow: none;
+    font-weight: 600;
+    background:
+      repeating-linear-gradient(180deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px),
+      linear-gradient(180deg,var(--phos) 0%,color-mix(in srgb,var(--phos) 88%,#000) 100%);
+    border-color: color-mix(in srgb,var(--phos) 70%,#000);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.25),
+                0 0 12px color-mix(in srgb,var(--phos) 45%,transparent);
+  }
+  /* Selection is the panel's own colour, never the browser's blue -- a
+     system highlight inside a display is the one bit of OS furniture that
+     survives everywhere else being rebuilt. Reverse video is already
+     inverted, so selecting inside it inverts back: ground-on-segment. */
+  .msg2::selection { background: var(--phos); color: var(--glass-a); }
+  .msg2:focus::selection { background: var(--glass-a); color: var(--phos); }
+
   html[data-theme="light"] .msg2 {
     border-color: #c9c0a6; text-shadow: none; font-weight: 600;
     background:
       repeating-linear-gradient(180deg,rgba(101,123,131,.08) 0 1px,transparent 1px 3px),
       linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.85), inset 0 0 18px rgba(101,123,131,.16); }
-  html[data-theme="light"] .msg2:focus { box-shadow: inset 0 1px 0 rgba(255,255,255,.85),
-    inset 0 0 18px rgba(101,123,131,.16), 0 0 0 1px rgba(29,51,46,.35); }
+  /* Same inversion in light theme: dark segments on a lit ground become the
+     lit ground on dark segments. No bloom -- an LCD does not glow, it just
+     swaps which parts block the backlight. */
+  html[data-theme="light"] .msg2:focus {
+    color: var(--glass-a);
+    caret-color: var(--glass-a);
+    background:
+      repeating-linear-gradient(180deg,rgba(255,255,255,.10) 0 1px,transparent 1px 3px),
+      linear-gradient(180deg,var(--phos) 0%,color-mix(in srgb,var(--phos) 86%,#000) 100%);
+    border-color: color-mix(in srgb,var(--phos) 75%,#000);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 1px 3px rgba(88,110,117,.30); }
   .prefs { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
   .prefs .chk { margin-top: 0; }
 
@@ -645,7 +685,7 @@
   .msg-actions { display: grid; gap: 6px; grid-template-columns: 1fr 1fr 1fr;
     max-width: 100%; margin-top: 10px; }
   .msg-actions[hidden] { display: none; }
-  .msg-actions .btn { padding: 6px 6px; font-size: 12px; }
+  .msg-actions .pbtn { padding: 6px 4px; font-size: 11px; }
 
   .msg-hint {
     font-size: 11px; color: var(--text-muted);
@@ -1196,6 +1236,13 @@
   applyTheme();
 
   function sendBuzz() {
+    // Stays pressed in, lamp lit, for as long as the buzz is actually going
+    // out -- the same pushed/unpushed language Show/CV/Hide use. A key that
+    // springs back the instant you release it says nothing about whether the
+    // thing it does happened.
+    buzzBtn.classList.add('pressed');
+    var bl = buzzBtn.querySelector('.bulb');
+    if (bl) bl.className = 'bulb on';
     buzzBtn.disabled = true;
     fetch('/api/buzz', { method: 'POST' })
       .then(function(r) { return r.ok ? r.text() : null; })
@@ -1203,6 +1250,11 @@
       .then(function(ts) {
         if (ts) { lastBuzzTs = ts.trim(); triggerBuzz(); }
         buzzBtn.disabled = false;
+        setTimeout(function () {
+          buzzBtn.classList.remove('pressed');
+          var b2 = buzzBtn.querySelector('.bulb');
+          if (b2) b2.className = 'bulb';
+        }, 600);
       });
   }
 
