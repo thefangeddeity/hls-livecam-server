@@ -1330,9 +1330,22 @@
   setInterval(pollSceneStatus, 10000);
 
   // ── FEED MODE — server-side ──
+  // Static covers a transition INTO a picture; the CRT power-off covers a
+  // transition into darkness. They are different events and they must not
+  // both fire: switching off should not be preceded by sixteen seconds of
+  // snow, and switching on should not pretend the set was ever off.
+  //
+  // Going TO hide gets the power-off alone (updateFeedButtons drives it).
+  // Going to show or cv gets the cover, including from hide -- the stream
+  // genuinely takes the same ~16s to re-establish either way, and without a
+  // cover there the viewer stares at a frozen black frame and then a jump.
+  function coverFor(target) {
+    if (target !== 'hide') fadeOut();
+  }
+
   function setFeedMode(mode) {
     if (mode === feedMode) return;
-    fadeOut();
+    coverFor(mode);
     showBtn.disabled = true; cvBtn.disabled = true; hideBtn.disabled = true;
     fetch('/api/feed-mode', {
       method: 'POST',
@@ -1363,7 +1376,7 @@
           // here and the cover becomes universal.
           feedMode = m.trim();
           updateFeedButtons();
-          fadeOut();
+          coverFor(feedMode);
           setTimeout(reloadStream, 1000);
         }
       });
