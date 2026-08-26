@@ -232,6 +232,8 @@ def _start_loopback_publisher(denv, mode='show'):
     # retuned without editing code, and committed here so it survives.
     gop_seconds = int(denv.get('GOP_SECONDS', 1))
     a_on, a_dev, a_backend, a_kbps, a_rate, a_ch = _audio_conf(denv)
+    if a_on and mode != 'hide':
+        _stage_capture_level(denv)
 
     # A/V SYNC: ONE CLOCK, NOT TWO RECONCILED.
     #
@@ -310,8 +312,31 @@ def _start_loopback_publisher(denv, mode='show'):
         # async is a ceiling in samples per second, not a boolean -- ~400 is
         # needed for 0.8% at 48kHz, so 1 (the usual copy-paste) silently
         # does nothing.
-        acodec = ['-c:a', 'aac', '-b:a', a_kbps, '-ar', a_rate, '-ac', a_ch,
-                  '-af', 'aresample=async=2000:min_hard_comp=0.050:first_pts=0']
+        # LEVEL, not sync. These do not resample, so they cannot affect the
+        # drift arrangement above -- the aresample chain that used to sit
+        # here made drift WORSE and is gone; see the note at the top.
+        #
+        # Ported from ariana, which runs volume=12.0dB,alimiter=limit=0.95.
+        # The make-up gain belongs HERE rather than in the ALSA mixer: gain
+        # applied in hardware that is too high cannot be undone, because it
+        # clips at the converter and those samples no longer exist. Staged
+        # low in hardware and lifted digitally, a peak that would have
+        # clipped is caught by the limiter instead. alimiter and not hard
+        # clipping, because clipped speech is worse than quiet speech.
+        #
+        #   AUDIO_GAIN_DB  digital make-up gain, default 12
+        #   AUDIO_FILTER   raw -af chain if more is wanted; wins if set
+        a_filter = denv.get('AUDIO_FILTER', '').strip()
+        if not a_filter:
+            try:
+                _g = float(denv.get('AUDIO_GAIN_DB', '12') or 0)
+            except ValueError:
+                _g = 0.0
+            if _g:
+                a_filter = f'volume={_g}dB,alimiter=limit=0.95'
+        acodec = ['-c:a', 'aac', '-b:a', a_kbps, '-ar', a_rate, '-ac', a_ch]
+        if a_filter and mode != 'hide':
+            acodec += ['-af', a_filter]
 
     print(f"broadcast-api: publisher mode={mode} audio="
           + (f"{a_backend}:{a_dev} @{a_kbps}" if a_on and mode != 'hide'
@@ -327,6 +352,37 @@ def _start_loopback_publisher(denv, mode='show'):
         *acodec, *maps,
         '-rtsp_transport', 'tcp', '-f', 'rtsp', 'rtsp://127.0.0.1:8554/cam'
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def _stage_capture_level(denv):
+    """Force the ALSA capture gain to a known-sane value.
+
+    PulseAudio owns this card for the desktop session and reapplies its own
+    levels behind us, so `alsactl store` does not hold: tanzania was found
+    back at +30dB Capture with +30dB Mic Boost, railing the input -- mean
+    -4.9dB with peaks pinned at 0.0, which is clipped before any filter can
+    help. Hardware gain that is too high cannot be undone downstream. So
+    this runs at every publisher start and the question of who touched the
+    mixer last stops mattering.
+
+    AUDIO_MIXER_LEVELS is a comma-separated control=value list, e.g.
+    'Capture=26,Internal Mic Boost=0'. Empty disables the whole thing for a
+    node whose mixer is somebody else's business.
+    """
+    spec = denv.get('AUDIO_MIXER_LEVELS', '').strip()
+    if not spec:
+        return
+    card = denv.get('AUDIO_MIXER_CARD', '0').strip() or '0'
+    for pair in spec.split(','):
+        if '=' not in pair:
+            continue
+        ctl, val = pair.split('=', 1)
+        try:
+            subprocess.run(['amixer', '-c', card, 'sset', ctl.strip(), val.strip()],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=5)
+        except Exception as e:
+            print(f'broadcast-api: could not set {ctl.strip()}={val.strip()}: {e}',
+                  file=sys.stderr, flush=True)
 
 def _start_cam_reader(denv):
     device = denv.get('VIDEO_DEVICE', '/dev/video0')
