@@ -927,7 +927,8 @@
     background: #ff453a;
     box-shadow: 0 0 6px rgba(255,69,58,.7), inset 0 0 2px rgba(255,255,255,.4);
   }
-  .transport .bulb { transition: background .12s, box-shadow .12s; }
+  .transport .bulb,
+  .mute-key .bulb { transition: background .12s, box-shadow .12s; }
   .listen.is-playing .transport .bulb {
     background: var(--led-on);
     box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5);
@@ -1104,8 +1105,8 @@
     <!-- A strip of the same tube the panels use. Version is substituted at
          render time from `git describe`; hovering gives the build stamp and
          commit, which is what distinguishes two installs of the same tag. -->
-    <span class="hdr-vfd" title="mac-v1.6.0">
-      <span class="vlit">mac-v1.6.0</span><span class="vlit hdr-host" id="hdrHost"></span>
+    <span class="hdr-vfd" title="mac-v1.7.0">
+      <span class="vlit">mac-v1.7.0</span><span class="vlit hdr-host" id="hdrHost"></span>
     </span>
   </div>
   <div class="status-bar">
@@ -1178,8 +1179,8 @@
           <!-- Blur's slot, retargeted rather than removed. Inert until the CV
                port lands; wiring it to feed-mode now would ship a button that
                changes state and nothing else. -->
-          <button type="button" class="btn pending" id="cvBtn" disabled
-                  title="Computer vision mode — not yet available">CV<span class="badge">SOON</span></button>
+          <button type="button" class="btn" id="cvBtn" onclick="setFeedMode('cv')"
+                  title="Computer vision mode">CV</button>
           <button type="button" class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
         </div>
 
@@ -1400,7 +1401,7 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION  = 'mac-v1.6.0';
+  var BUILD_VERSION  = 'mac-v1.7.0';
   var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
@@ -1524,7 +1525,7 @@
     // lands, and 'cv' is never returned as the current mode.
     showBtn.className = 'btn' + (feedMode === 'show' ? ' pressed' : '');
     hideBtn.className = 'btn' + (feedMode === 'hide' ? ' pressed' : '');
-    if (cvBtn) cvBtn.className = 'btn pending';
+    if (cvBtn) cvBtn.className = 'btn' + (feedMode === 'cv' ? ' pressed' : '');
   }
   // Cloak/hide are rendered server-side: broadcast-api burns the block-art
   // effect directly into the encoded HLS frames, so every viewer (and the
@@ -1627,6 +1628,7 @@
     }
     else { if (feedMode === 'hide') applyFeedModeVisual(mode, true); fadeOut(); }
     showBtn.disabled = true; hideBtn.disabled = true;
+    if (cvBtn) cvBtn.disabled = true;
     fetch('/api/feed-mode', { method: 'POST', body: mode })
       .then(function(r) { return r.ok ? r.text() : null; })
       .then(function(text) {
@@ -1638,6 +1640,7 @@
       .catch(function() {})
       .then(function() {
         showBtn.disabled = false; hideBtn.disabled = false;
+        if (cvBtn) cvBtn.disabled = false;
       });
   }
 
@@ -2249,6 +2252,7 @@
     /* Tube indicators. A/V is lit only when the stream really carries an
        audio track, which is the one claim the manifest can settle. */
     indicator(document.getElementById('indAv'), p.audio_track);
+    indicator(document.getElementById('indCv'), p.cv);
     indicator(document.getElementById('indStereo'), p.audio_channels === 2);
 
     /* The server's own detail string is the useful thing to surface on hover:

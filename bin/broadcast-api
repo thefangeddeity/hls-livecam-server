@@ -352,43 +352,13 @@ def _drain_loop(cam_holder):
 
 
 
-def _start_combined_av_publisher(mode='show'):
+def audio_filter_args():
+    """Capture-side gain, shared by every publisher that opens the mic.
+
+    Factored out when CV mode added a second publisher: two copies of a
+    filter chain is two places for the gain to drift apart, and the one
+    that drifts is always the one nobody is listening to.
     """
-    One AVFoundation session for camera + microphone.
-
-    The resulting RTSP track contains:
-      video: H.264 1280x720 @ configured FPS
-      audio: AAC 48 kHz stereo @ 96 kb/s
-
-    This deliberately bypasses the old Python frame-processing writer
-    path. The API server remains alive for control/message endpoints,
-    while media capture/publishing is handled by this single process.
-    """
-    fr = int(_cfg.get('FRAMERATE', 15))
-    video_idx = _resolve_avf_index()
-    audio_idx = str(
-        _cfg.get('AUDIO_DEVICE', 'Built-in Microphone')
-    ).strip() or 'Built-in Microphone'
-
-    rtsp_port = str(_cfg.get('RTSP_PORT', '8554')).strip() or '8554'
-    rtsp_url = f'rtsp://127.0.0.1:{rtsp_port}/cam'
-
-    # Optional capture-side gain. A room mic is quiet by nature -- measured
-    # here at roughly -39 dB mean -- and a browser cannot make up the
-    # difference, because an <audio> element's volume caps at 1.0 and only
-    # ever attenuates. Raising it at the source is the only thing that makes
-    # every client louder.
-    #
-    # Two knobs, both off by default so an existing node sounds exactly as it
-    # did until someone opts in:
-    #
-    #   AUDIO_GAIN_DB   fixed gain, limited so that boosting a quiet room
-    #                   does not clip when someone finally speaks near the
-    #                   mic. alimiter, not hard clipping, because clipped
-    #                   speech is worse than quiet speech.
-    #   AUDIO_FILTER    raw ffmpeg -af chain for anything more involved,
-    #                   e.g. dynaudnorm for constant perceived loudness.
-    #                   Wins if both are set.
     audio_filter = []
     raw_filter = str(_cfg.get('AUDIO_FILTER', '')).strip()
     gain_db_raw = str(_cfg.get('AUDIO_GAIN_DB', '')).strip()
@@ -435,6 +405,180 @@ def _start_combined_av_publisher(mode='show'):
             '-map', '0:v:0',
             '-map', '0:a:0',
         ]
+
+    return audio_filter
+
+
+# ── CV mode ──────────────────────────────────────────────────────
+#
+# Show and hide are one ffmpeg: devices straight to RTSP, nothing in between.
+# CV needs Python between the camera and the encoder, and combined A/V left no
+# seam for that -- which is why Blur and Hide became buttons over nothing.
+#
+# The seam is reopened as a split rather than by reverting combined A/V:
+#
+#   ffmpeg A   avfoundation camera -> rawvideo on stdout
+#   python     CVProcessor.process() per frame
+#   ffmpeg B   rawvideo on stdin + the microphone -> RTSP
+#
+# Two AVFoundation clients, but on *different devices*. The deadlock this
+# stack lost hours to was two clients contending for the CAMERA; the camera
+# is opened once here, by A, and B only ever opens the microphone. Audio
+# therefore survives CV mode instead of being dropped for it.
+#
+# Measured on ariana (i5-6287U, 2 physical cores) before any of this was
+# wired: 43.3 ms median per frame at 1280x720, 65% of the 66.7 ms budget at
+# 15fps. The reduced-resolution analysis path the Linux notes call for is not
+# needed here.
+_cv_procs  = []
+_cv_thread = None
+_cv_stop   = threading.Event()
+
+
+def _read_exact(src, n):
+    """Read exactly n bytes, or return None at end of stream.
+
+    An unbuffered pipe returns SHORT reads -- read(n) gives whatever has
+    arrived, not n bytes. Treating a short read as end-of-stream stops the
+    pump on its first frame, which is precisely what it did: zero frames
+    through, no error, and a CV mode that published nothing while every
+    process involved looked healthy.
+    """
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = src.read(n - len(buf))
+        if not chunk:
+            return None                # real EOF
+        buf += chunk
+    return bytes(buf)
+
+
+def _cv_pump(src, dst, proc):
+    """Read raw frames from A, process, write to B. Owns neither process."""
+    nbytes = FRAME_W * FRAME_H * 3
+    dropped = 0
+    while not _cv_stop.is_set():
+        raw = _read_exact(src, nbytes)
+        if raw is None:
+            break                      # A exited or was killed
+        try:
+            frame = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
+            out, _meta = proc.process(frame)
+            dst.write(np.ascontiguousarray(out).tobytes())
+        except BrokenPipeError:
+            break                      # B exited; the loop above will notice
+        except Exception as exc:
+            # A frame that will not process must not take the stream down.
+            # Pass it through untouched and keep going -- a brief unprocessed
+            # frame is a far better failure than a stopped feed.
+            dropped += 1
+            if dropped in (1, 10, 100):
+                print(f'broadcast-api: CV frame passthrough after '
+                      f'{type(exc).__name__}: {exc} [{dropped} so far]',
+                      file=sys.stderr, flush=True)
+            try:
+                dst.write(raw)
+            except Exception:
+                break
+
+
+def _start_cv_publisher():
+    """Camera -> CVProcessor -> RTSP, with the microphone joined at the muxer."""
+    global _cv_thread
+    fr = int(_cfg.get('FRAMERATE', 15))
+    video_idx = _resolve_avf_index()
+    audio_idx = str(_cfg.get('AUDIO_DEVICE', 'Built-in Microphone')).strip() \
+        or 'Built-in Microphone'
+    rtsp_port = str(_cfg.get('RTSP_PORT', '8554')).strip() or '8554'
+    rtsp_url = f'rtsp://127.0.0.1:{rtsp_port}/cam'
+
+    import cv_processor as _cvp
+    proc = _cvp.CVProcessor(_cfg)
+
+    a = subprocess.Popen([
+        FFMPEG, '-hide_banner', '-loglevel', 'error',
+        '-f', 'avfoundation', '-framerate', str(fr),
+        '-video_size', f'{FRAME_W}x{FRAME_H}',
+        '-pixel_format', 'uyvy422',
+        '-use_wallclock_as_timestamps', '1',
+        '-i', f'{video_idx}:none',
+        '-f', 'rawvideo', '-pix_fmt', 'bgr24', 'pipe:1',
+    ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+       stderr=_open_ffmpeg_log(), bufsize=0)
+
+    b = subprocess.Popen([
+        FFMPEG, '-hide_banner', '-loglevel', 'error',
+        '-f', 'rawvideo', '-pix_fmt', 'bgr24',
+        '-s', f'{FRAME_W}x{FRAME_H}', '-framerate', str(fr),
+        '-use_wallclock_as_timestamps', '1',
+        '-i', 'pipe:0',
+        '-f', 'avfoundation', '-i', f':{audio_idx}',
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-vf', 'format=yuv420p', '-profile:v', 'high', '-level', '4.0',
+        '-b:v', '1500k', '-g', str(fr),
+        '-c:a', 'aac', '-b:a', '96k', '-ar', '48000', '-ac', '2',
+        *audio_filter_args(),
+        '-rtsp_transport', 'tcp', '-f', 'rtsp', rtsp_url,
+    ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+       stderr=_open_ffmpeg_log(), bufsize=0)
+
+    _cv_stop.clear()
+    _cv_thread = threading.Thread(target=_cv_pump, args=(a.stdout, b.stdin, proc),
+                                  daemon=True, name='cv-pump')
+    _cv_thread.start()
+    _cv_procs[:] = [a, b]
+    print(f'broadcast-api: CV capture: camera={video_idx} -> CVProcessor -> '
+          f'{rtsp_url} (audio={audio_idx})', file=sys.stderr, flush=True)
+    return b        # B holds the RTSP socket, so B is what the watchdog polls
+
+
+def _stop_cv_publisher():
+    _cv_stop.set()
+    for pr in _cv_procs:
+        try: _kill_hard(pr)
+        except Exception: pass
+    _cv_procs[:] = []
+
+
+def _start_combined_av_publisher(mode='show'):
+    """
+    One AVFoundation session for camera + microphone.
+
+    The resulting RTSP track contains:
+      video: H.264 1280x720 @ configured FPS
+      audio: AAC 48 kHz stereo @ 96 kb/s
+
+    This deliberately bypasses the old Python frame-processing writer
+    path. The API server remains alive for control/message endpoints,
+    while media capture/publishing is handled by this single process.
+    """
+    fr = int(_cfg.get('FRAMERATE', 15))
+    video_idx = _resolve_avf_index()
+    audio_idx = str(
+        _cfg.get('AUDIO_DEVICE', 'Built-in Microphone')
+    ).strip() or 'Built-in Microphone'
+
+    rtsp_port = str(_cfg.get('RTSP_PORT', '8554')).strip() or '8554'
+    rtsp_url = f'rtsp://127.0.0.1:{rtsp_port}/cam'
+
+    # Optional capture-side gain. A room mic is quiet by nature -- measured
+    # here at roughly -39 dB mean -- and a browser cannot make up the
+    # difference, because an <audio> element's volume caps at 1.0 and only
+    # ever attenuates. Raising it at the source is the only thing that makes
+    # every client louder.
+    #
+    # Two knobs, both off by default so an existing node sounds exactly as it
+    # did until someone opts in:
+    #
+    #   AUDIO_GAIN_DB   fixed gain, limited so that boosting a quiet room
+    #                   does not clip when someone finally speaks near the
+    #                   mic. alimiter, not hard clipping, because clipped
+    #                   speech is worse than quiet speech.
+    #   AUDIO_FILTER    raw ffmpeg -af chain for anything more involved,
+    #                   e.g. dynaudnorm for constant perceived loudness.
+    #                   Wins if both are set.
+    audio_filter = audio_filter_args()
 
     cmd = [
         FFMPEG,
@@ -559,7 +703,10 @@ def _writer_loop():
             with _mode_lock:
                 spawn_mode = _mode
                 spawn_gen  = _mode_generation
-            proc = _start_combined_av_publisher(spawn_mode)
+            if spawn_mode == 'cv':
+                proc = _start_cv_publisher()
+            else:
+                proc = _start_combined_av_publisher(spawn_mode)
             _cam_proc = proc
             _pub_proc = proc
 
@@ -597,6 +744,7 @@ def _writer_loop():
                     _set_capture_state(
                         'fail', 'capture hung opening the camera/microphone')
                     _kill_hard(proc)
+                    _stop_cv_publisher()
                 else:
                     print(
                         f'broadcast-api: combined AV capture exited '
@@ -642,9 +790,11 @@ def _writer_loop():
                     print(f'broadcast-api: feed mode changed to {_mode}; '
                           f'restarting publisher', file=sys.stderr, flush=True)
                     _kill_hard(proc)
+                    _stop_cv_publisher()
                     break
                 time.sleep(0.25)
             rc = proc.returncode
+            _stop_cv_publisher()      # no-op unless CV was the one running
 
             _set_capture_state('fail', f'capture exited ({rc}); restarting')
             print(
@@ -878,6 +1028,7 @@ def pipeline():
         # The microphone opened iff the capture session did; they are one
         # AVFoundation session and audio is a mapped output stream.
         'mode':     mode_now,
+        'cv':       mode_now == 'cv',
         'mic':      capture,
         'audio_rate_hz':  audio_rate,
         'audio_channels': audio_ch,
