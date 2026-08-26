@@ -435,20 +435,13 @@
   html[data-theme="light"] .modem.pressed { background: linear-gradient(180deg,#dededf,#eaeaee);
     box-shadow: inset 0 2px 4px rgba(0,0,0,.18); }
   .modem:disabled .cap2 { color: var(--emboss-dim); }
-  /* BUZZ matches the other keys in size and shape, and keeps its colour.
-     It is the loudest action on the page -- it shakes and sounds every
-     viewer's screen -- and a key that does that should not look like a key
-     that reloads a stream. Same geometry, different face. */
-  .modem.alert { border-color: #7a2a20;
-    background: linear-gradient(180deg,#4a1b15,#361009);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 1px 1px rgba(0,0,0,.35); }
-  .modem.alert .cap2 { color: #ff8f7f; }
-  .modem.alert .bulb { background: #b8493a; }
-  .modem.alert:active { background: linear-gradient(180deg,#2b0d08,#3d130c);
-    box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
-  html[data-theme="light"] .modem.alert { border-color: #e0a79c;
-    background: linear-gradient(180deg,#fff1ee,#ffe2dc); }
-  html[data-theme="light"] .modem.alert .cap2 { color: #b23a26; }
+  /* BUZZ is a plain key in both themes (PM). The tinted face read as a
+     glowing button on a metal panel -- an emissive control among machined
+     ones, which is the one thing this housing does not do. It is now the
+     same key as the rest and its weight comes from where it sits, not from
+     colour. Noted rather than argued: the loudest action on the page no
+     longer looks different from the one that reloads a stream, so if it
+     ever gets hit by accident, this is the place to look. */
   .modem { min-width: 54px; height: 32px; padding: 0 7px; border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; cursor: pointer; font-family: inherit;
     background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
@@ -948,7 +941,7 @@
           <button class="modem" id="talkBtn" disabled title="No talkback on this node yet">
             <span class="bulb"></span><span class="cap2">TALK</span>
           </button>
-          <button class="modem alert" id="buzzBtn" onclick="sendBuzz()"
+          <button class="modem" id="buzzBtn" onclick="sendBuzz()"
                   title="Shake and sound every viewer's screen">
             <span class="bulb"></span><span class="cap2">BUZZ</span>
           </button>
