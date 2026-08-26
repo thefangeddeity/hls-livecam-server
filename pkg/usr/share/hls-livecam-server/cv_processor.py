@@ -282,6 +282,14 @@ _DEFAULTS = {
     # baseline is 0.6 (60% original / 40% sharpie) -- device.env, not
     # hardcoded, since this is exactly as per-camera as CLAHE or unsharp.
     'CV_SHARPIE_BLEND':       0.0,
+    # Temporal denoise weights: current frame, then the two priors. The
+    # fleet default smears more, which suits a clean sensor in a lit room;
+    # a soft sensor wants more of the current frame and less history. These
+    # were a node-local source edit on tina until 6.0.0, which meant every
+    # package upgrade silently reverted its tuning. Node tuning belongs in
+    # device.env, not in the payload.
+    'CV_TEMPORAL_W_CUR':      0.44,
+    'CV_TEMPORAL_W_PREV':     0.28,
 
     # Enhancement on moving subjects. The pipeline skips denoise and sharpen
     # wherever the motion mask is set, on the reasoning that motion blur is
@@ -801,6 +809,8 @@ class CVProcessor:
                 self._detector = None
         self._sharpen_motion = _read_int(denv, 'CV_SHARPEN_MOTION') != 0
         self._denoise_motion = _read_int(denv, 'CV_DENOISE_MOTION') != 0
+        self._temporal_w_cur  = _read_float(denv, 'CV_TEMPORAL_W_CUR')
+        self._temporal_w_prev = _read_float(denv, 'CV_TEMPORAL_W_PREV')
 
         self._artifact_enabled = _read_int(denv, 'CV_ARTIFACT_ENABLED') != 0
         self._artifact_samples = _read_int(denv, 'CV_ARTIFACT_SAMPLES')
@@ -2001,8 +2011,10 @@ class CVProcessor:
             return frame
 
         if len(self._frames) >= 2:
-            avg = cv2.addWeighted(frame, 0.44, self._frames[-1], 0.28, 0)
-            avg = cv2.addWeighted(avg, 1.0, self._frames[-2], 0.28, 0)
+            avg = cv2.addWeighted(frame, self._temporal_w_cur,
+                                  self._frames[-1], self._temporal_w_prev, 0)
+            avg = cv2.addWeighted(avg, 1.0,
+                                  self._frames[-2], self._temporal_w_prev, 0)
         else:
             avg = cv2.addWeighted(frame, 0.5, self._frames[-1], 0.5, 0)
 
