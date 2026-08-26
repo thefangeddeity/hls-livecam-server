@@ -138,6 +138,25 @@ _pipeline_lock  = threading.Lock()
 _pipeline_state = {'capture': 'pending', 'detail': 'starting'}
 
 
+def _gui_session():
+    """True when this process is in an Aqua (GUI) session.
+
+    macOS grants camera access on the responsible process's session, and
+    avfoundation DEADLOCKS rather than erroring when refused -- so a stack
+    started from a shell or over SSH hangs with no message at all. Naming the
+    cause turns a silent hang into a sentence.
+    """
+    try:
+        out = subprocess.run(['launchctl', 'managername'],
+                             capture_output=True, text=True, timeout=5).stdout
+        return out.strip() == 'Aqua'
+    except Exception:
+        return True          # cannot tell; do not cry wolf
+
+
+_GUI_SESSION = _gui_session()
+
+
 def _set_capture_state(state, detail=''):
     with _pipeline_lock:
         _pipeline_state['capture'] = state
@@ -741,7 +760,13 @@ def _writer_loop():
                         file=sys.stderr, flush=True,
                     )
                     _set_capture_state(
-                        'fail', 'capture hung opening the camera/microphone')
+                        'fail',
+                        'capture hung opening the camera/microphone'
+                        + ('' if _GUI_SESSION else
+                           ' -- this stack was started outside a GUI session '
+                           '(launchctl managername is not Aqua), so macOS '
+                           'refuses the camera and avfoundation hangs. Quit '
+                           'it and launch HLS Livecam.app instead.'))
                     _kill_hard(proc)
                     _stop_cv_publisher()
                 else:
