@@ -145,68 +145,11 @@ _cam_frame      = None
 _cam_frame_at   = 0.0
 _cam_frame_lock = threading.Lock()
 
-# Hide publishes VHS static (PM, run-21). It previously published flat black,
-# matching the Windows node's `-f lavfi -i color=black`.
-#
-# Rendered HERE rather than in each client, deliberately. The viewer could
-# draw its own snow over a black stream -- it already owns drawStatic() for
-# feed transitions -- but the Qt dashboard, camdash, and anyone opening the
-# HLS URL directly would each need their own copy, and any surface that
-# missed the memo would show flat black and read it as a dead feed. One
-# server-side renderer covers every consumer, including ones not written yet.
-#
-# It is the same recipe as index.html's drawStatic(), itself ported from the
-# Windows node's draw_switching(): a small grey noise field regenerated each
-# frame, alternate rows dimmed for scanlines, and a dark tracking band
-# rolling slowly up the frame, scaled up with smoothing off.
-#
-# Derived from nothing at all -- no camera frame touches this path. That was
-# the point of replacing _apply_svhs_warp(), which row-shuffled and rolled
-# the *live camera frame*: the torn-scanline look reported in run-6 was real
-# image content. Static must never be made out of the picture it hides.
-#
-# Cost is bounded by construction: the noise is generated at 224x126 (28k
-# samples) and upscaled with INTER_NEAREST, so the encoder sees large flat
-# blocks rather than per-pixel noise, and the publisher's -b:v 1500k caps
-# the bitrate at what the live feed already uses.
-_STATIC_W, _STATIC_H = 224, 126
-_static_frame_n = 0
-
-def _render_hide_frame(width, height):
-    """One frame of VHS snow. Regenerated per call -- it has to move."""
-    global _static_frame_n
-    _static_frame_n += 1
-
-    noise = np.random.randint(0, 256, (_STATIC_H, _STATIC_W),
-                              dtype=np.int16).astype(np.float32)
-    # scanlines: every other row at 72%
-    noise[1::2] *= 0.72
-    # tracking band: a dark bar drifting up the frame, one row per 2 frames
-    band = (_static_frame_n // 2) % _STATIC_H
-    lo, hi = max(0, band - 2), min(_STATIC_H, band + 3)
-    noise[lo:hi] *= 0.35
-
-    small = noise.astype(np.uint8)
-    big = _cv2.resize(small, (width, height), interpolation=_cv2.INTER_NEAREST)
-    return np.repeat(big[:, :, None], 3, axis=2)
-
 # -- Room audio ---------------------------------------------------------
-# Ported from ariana (mac-v1.3.0/1.5.0), but the shape is different here and
-# the difference is the whole reason this is cheap on Linux.
-#
-# macOS had to capture video and audio in ONE avfoundation session, because
-# two clients contending for the camera deadlocked ffmpeg inside
-# avformat_open_input. That forced the Python frame pipeline out entirely
-# and left Blur/Hide as buttons over nothing.
-#
-# We do not have that constraint. Video already goes camera -> broadcast-api
-# -> /dev/video10, so the PUBLISHER's video input is a loopback device that
-# nothing else wants. Audio is simply a second input on the publisher. No
-# contention, no deadlock, and the CV pipeline is untouched -- the seam
-# macOS had to give up is one we already had.
-#
-# Off by default. A node with no microphone, or one pointed somewhere audio
-# would not be welcome, publishes exactly what it does today.
+# Video already goes camera -> broadcast-api -> /dev/video10, so the
+# PUBLISHER's video input is a loopback device nothing else wants and audio
+# is simply a second input on it. Off by default: a node with no microphone
+# publishes exactly what it did before.
 def _audio_conf(denv):
     """(enabled, device, backend, bitrate, rate, channels) from device.env."""
     return (
@@ -217,6 +160,33 @@ def _audio_conf(denv):
         denv.get('AUDIO_SAMPLE_RATE', '48000').strip(),
         denv.get('AUDIO_CHANNELS', '2').strip(),
     )
+
+# Hide publishes BLACK, and the viewer plays a CRT power-off over it.
+#
+# It published VHS snow for a while, on the reasoning that snow says "no
+# signal" where black says nothing. The PM's call is the better one: snow is
+# what a BROKEN feed looks like, and Hide is not broken -- it is switched
+# off, deliberately, by someone. A television that has been turned off does
+# not hiss; it collapses to a line and goes dark. The viewer does that part,
+# and what the stream carries underneath it should be the honest end state.
+#
+# Cheaper too, and by a lot: black encodes at ~40 kb/s against static's
+# ~1560. That is not why it is black -- it is black because that is what off
+# looks like -- but it does mean a hidden feed stops costing what a live one
+# does.
+#
+# Derived from nothing at all: no camera frame touches this path. That was
+# the point of replacing _apply_svhs_warp(), which row-shuffled and rolled
+# the LIVE frame -- the torn-scanline look reported in run-6 was real image
+# content. What hides the picture must never be made out of the picture.
+_BLACK_FRAME = None
+
+def _render_hide_frame(width, height):
+    """Black frame, allocated once and reused."""
+    global _BLACK_FRAME
+    if _BLACK_FRAME is None or _BLACK_FRAME.shape[:2] != (height, width):
+        _BLACK_FRAME = np.zeros((height, width, 3), dtype=np.uint8)
+    return _BLACK_FRAME
 
 def _start_loopback_publisher(denv, mode='show'):
     fr = int(denv.get('FRAMERATE', 15))

@@ -237,6 +237,27 @@
     padding: 4px 10px;
     border-radius: 4px;
   }
+  /* CRT POWER-OFF. Collapse to a scanline, then a lingering dot, then dark.
+     Applied to the WRAP rather than the <video> so mobile and desktop take
+     the identical path -- a transform on a video element is where browsers
+     disagree with each other. Purely presentation: the stream is already
+     black by the time it finishes, so nothing depends on the timing.
+     Honours prefers-reduced-motion, where it simply goes dark. */
+  @keyframes crtOff {
+    0%   { transform: scale(1, 1);      filter: brightness(1);   opacity: 1; }
+    45%  { transform: scale(1, 0.008);  filter: brightness(5);   opacity: 1; }
+    70%  { transform: scale(0.35, 0.006); filter: brightness(7); opacity: 1; }
+    100% { transform: scale(0.0, 0.004); filter: brightness(9);  opacity: 0; }
+  }
+  .video-wrap.crt-off video { animation: crtOff 620ms cubic-bezier(.2,.7,.3,1) forwards; }
+  @media (prefers-reduced-motion: reduce) {
+    .video-wrap.crt-off video { animation: none; opacity: 0; }
+  }
+  /* Once it has collapsed the picture stays gone until the feed comes back.
+     Without this the video springs back to full size the moment the
+     animation ends and the whole effect reads as a glitch. */
+  .video-wrap.crt-dark video { opacity: 0; }
+
   .hide-overlay {
     position: absolute; inset: 0;
     display: none;
@@ -1153,6 +1174,10 @@
   }
 
   var hideOverlay = document.getElementById('hideOverlay');
+  var videoWrap   = document.getElementById('videoContainer');
+  // null until the first mode is known, so the first paint can tell "opened
+  // on a hidden feed" from "just switched off in front of me".
+  var wasHidden   = null;
 
   function updateFeedButtons() {
     showBtn.className = 'pbtn' + (feedMode === 'show' ? ' pressed' : '');
@@ -1164,6 +1189,24 @@
     // dead stream -- deliberately so, since that is what it is imitating.
     // This notice is the only thing that separates the two, now that a
     // genuine fault raises the same snow and says nothing over it.
+    // CRT power-off, but only on an actual flip. Opening a page whose feed
+    // is already hidden starts dark rather than replaying a switch-off
+    // nobody triggered, and a mode changed by another client animates here
+    // only because the on/off state really moved.
+    var hidingNow = (feedMode === 'hide');
+    if (hidingNow !== wasHidden) {
+      if (hidingNow) {
+        if (wasHidden === null) {
+          videoWrap.classList.add('crt-dark');       // already off on arrival
+        } else {
+          videoWrap.classList.add('crt-off');
+          setTimeout(function () { videoWrap.classList.add('crt-dark'); }, 600);
+        }
+      } else {
+        videoWrap.classList.remove('crt-off', 'crt-dark');
+      }
+      wasHidden = hidingNow;
+    }
     hideOverlay.classList.toggle('visible', feedMode === 'hide');
     // Foveal Layer is a modifier on CV Mode, not a mode of its own -- same
     // pattern as B&W was on Blur before the CV Mode pivot. Greyed out
