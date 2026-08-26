@@ -473,10 +473,35 @@
   .modemrow .chk { white-space: nowrap; }
   .talk { margin-top: 9px; border-radius: 7px; padding: 8px 10px; font-size: 10.5px; letter-spacing: .09em; display: flex; align-items: center; gap: 8px;
     background: linear-gradient(180deg,#26262a,#1e1e21); border: 1px solid #32323a; box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
-  .msg2 { width: 100%; border-radius: 7px; padding: 9px 10px; min-height: 74px; font-size: 11.5px; color: #c7c7cc; font-family: inherit; resize: none;
-    background: linear-gradient(180deg,#161618,#1b1b1e); border: 1px solid #2e2e33; box-shadow: inset 0 1px 3px rgba(0,0,0,.5); }
-  .msg2.empty { color: #6e6e74; }
-  .msg2:focus { outline: none; border-color: #3f8cff; }
+  /* The message field is a screen, not a form control. It was the last
+     surface on the panel still made of web furniture -- a grey box with a
+     blue focus ring -- and it broke the illusion every other element was
+     maintaining: this is a message DISPLAY that happens to accept typing,
+     which is exactly what it is. Same glass, same scanlines, same segments.
+     The scanlines ride in the background shorthand because a textarea has
+     no ::after to put them in. */
+  .msg2 { width: 100%; border-radius: 5px; padding: 8px 9px; min-height: 74px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em; line-height: 1.55;
+    resize: none; color: var(--phos); caret-color: var(--phos);
+    text-shadow: 0 0 1px var(--phos), 0 0 7px color-mix(in srgb,var(--phos) 42%,transparent);
+    background:
+      repeating-linear-gradient(180deg,rgba(0,0,0,.15) 0 1px,transparent 1px 3px),
+      linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
+    border: 1px solid #040809;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75); }
+  /* No message is the unlit state: ghost segments, the same rule the tubes
+     follow -- never a blank, never a placeholder pretending to be content. */
+  .msg2.empty { color: var(--phos-ghost); text-shadow: none; }
+  .msg2:focus { outline: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.05),
+    inset 0 0 20px rgba(0,0,0,.75), 0 0 0 1px color-mix(in srgb,var(--phos) 45%,transparent); }
+  html[data-theme="light"] .msg2 {
+    border-color: #c9c0a6; text-shadow: none; font-weight: 600;
+    background:
+      repeating-linear-gradient(180deg,rgba(101,123,131,.08) 0 1px,transparent 1px 3px),
+      linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.85), inset 0 0 18px rgba(101,123,131,.16); }
+  html[data-theme="light"] .msg2:focus { box-shadow: inset 0 1px 0 rgba(255,255,255,.85),
+    inset 0 0 18px rgba(101,123,131,.16), 0 0 0 1px rgba(29,51,46,.35); }
   .prefs { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
   .prefs .chk { margin-top: 0; }
 
@@ -606,14 +631,19 @@
     cursor: default;
   }
   textarea.msg-box.empty { color: var(--text-muted); font-style: italic; }
-  .char-count { text-align: right; font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+  .char-count { text-align: right; font-size: 11px; color: var(--text-muted); margin-top: 6px; }
   .char-count.warn { color: var(--warn); }
   textarea.msg-box.editing {
     border-color: var(--accent);
     background: var(--panel);
     cursor: text; font-style: normal; color: var(--text);
   }
-  .msg-actions { display: grid; gap: 6px; grid-template-columns: 1fr 1fr 1fr; max-width: 100%; }
+  /* Clearance under the screen. Save/Clear/Cancel appear only while editing,
+     so the gap has to be carried by the row that arrives rather than by the
+     screen -- reserving it permanently would leave a hole under the display
+     whenever nobody is typing. */
+  .msg-actions { display: grid; gap: 6px; grid-template-columns: 1fr 1fr 1fr;
+    max-width: 100%; margin-top: 10px; }
   .msg-actions[hidden] { display: none; }
   .msg-actions .btn { padding: 6px 6px; font-size: 12px; }
 
@@ -748,8 +778,6 @@
   html[data-theme="light"] .pbtn.pending, html[data-theme="light"] .pbtn:disabled { background: linear-gradient(180deg,#f4f3ee,#ecebe4); color: #a8a69b; }
   html[data-theme="light"] .box { background: linear-gradient(180deg,#fffefb,#f1f0e9); border-color: #cbc9bd; box-shadow: inset 0 1px 2px rgba(88,110,117,.20); }
   html[data-theme="light"] .talk { background: linear-gradient(180deg,#faf9f4,#f1f0e9); border-color: #e0ded4; }
-  html[data-theme="light"] .msg2 { background: #fffefa; border-color: #e0ded4; color: #073642; box-shadow: inset 0 1px 3px rgba(88,110,117,.10); }
-  html[data-theme="light"] .msg2.empty { color: #a8a69b; }
   html[data-theme="light"] .pdiv { background: #e4e2d8; box-shadow: 0 1px 0 rgba(255,255,255,.9); }
   html[data-theme="light"] .vol::-webkit-slider-runnable-track,
   html[data-theme="light"] .vol::-moz-range-track { background: linear-gradient(180deg,#e4e2d8,#f0efe8); box-shadow: inset 0 1px 2px rgba(88,110,117,.22); }
