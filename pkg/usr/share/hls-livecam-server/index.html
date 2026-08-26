@@ -727,29 +727,39 @@
     --phos: #1d332e;
     --phos-ghost: rgba(29,51,46,.13);
     --phos-label: rgba(88,110,117,.66);
-    --housing: #ffffff; --housing-hi: rgba(0,0,0,.03); --housing-lo: #f4f4f7;
-    --border-soft: #d8d8dd;
-    --emboss: #6e6e73; --emboss-strong: #48484a; --emboss-dim: #9a9aa0;
-    --led-off: #d0d0d6;
+    /* Housing in the same family as the glass. Pure white against a warm
+       base3 screen made the panel look cold and the display look stained --
+       two different whites arguing. The metal is a warm off-white now, a
+       step BELOW base3 so the lit screen stays the brightest thing in the
+       box, and the engraving takes Solarized's own greys rather than Apple's
+       blue-tinted ones. */
+    --housing: #f8f3e7; --housing-hi: rgba(255,255,255,.75); --housing-lo: #f0ead9;
+    --border-soft: #ded5c1;
+    --emboss: #657b83; --emboss-strong: #586e75; --emboss-dim: #93a1a1;
+    --led-off: #cfc8b6;
   }
   html[data-theme="light"] .panel {
-    background: linear-gradient(180deg,#ffffff 0%,var(--housing) 34%,var(--housing-lo) 100%);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(0,0,0,.10);
+    background: linear-gradient(180deg,#fefaf0 0%,var(--housing) 34%,var(--housing-lo) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.85), 0 1px 2px rgba(88,110,117,.14);
   }
   html[data-theme="light"] .eng,
   html[data-theme="light"] .led .n { text-shadow: 0 1px 0 rgba(255,255,255,.9), 0 -1px 0 rgba(0,0,0,.10); }
   html[data-theme="light"] .pbtn,
   html[data-theme="light"] .modem {
-    background: linear-gradient(180deg,#fdfdfe,#eeeef2); border-color: #d3d3d9; color: #33333a;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 1px rgba(0,0,0,.10);
+    background: linear-gradient(180deg,#fdf9ee,#efe9d8); border-color: #d6cdb8; color: #3b4a4a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 1px rgba(88,110,117,.16);
   }
-  html[data-theme="light"] .pbtn.pressed { background: linear-gradient(180deg,#dededf,#eaeaee); box-shadow: inset 0 2px 4px rgba(0,0,0,.18); color: #000; }
-  html[data-theme="light"] .pbtn.pending, html[data-theme="light"] .pbtn:disabled { background: linear-gradient(180deg,#f2f2f5,#ebebef); color: #a8a8ae; }
-  html[data-theme="light"] .box { background: linear-gradient(180deg,#fff,#f0f0f3); border-color: #c3c3ca; box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
-  html[data-theme="light"] .talk { background: linear-gradient(180deg,#f7f7fa,#efeff3); border-color: #d8d8dd; }
-  html[data-theme="light"] .msg2 { background: #fff; border-color: #d8d8dd; color: #1c1c1e; box-shadow: inset 0 1px 3px rgba(0,0,0,.06); }
-  html[data-theme="light"] .msg2.empty { color: #9a9aa0; }
-  html[data-theme="light"] .pdiv { background: #e2e2e7; box-shadow: 0 1px 0 rgba(255,255,255,.9); }
+  html[data-theme="light"] .pbtn.pressed { background: linear-gradient(180deg,#ded6c2,#ebe4d3); box-shadow: inset 0 2px 4px rgba(88,110,117,.28); color: #073642; }
+  html[data-theme="light"] .pbtn.pending, html[data-theme="light"] .pbtn:disabled { background: linear-gradient(180deg,#f4efe2,#ece6d5); color: #a9a08c; }
+  html[data-theme="light"] .box { background: linear-gradient(180deg,#fffdf6,#f1ebda); border-color: #c9bfa8; box-shadow: inset 0 1px 2px rgba(88,110,117,.20); }
+  html[data-theme="light"] .talk { background: linear-gradient(180deg,#faf6ea,#f1ebda); border-color: #ded5c1; }
+  html[data-theme="light"] .msg2 { background: #fffdf5; border-color: #ded5c1; color: #073642; box-shadow: inset 0 1px 3px rgba(88,110,117,.10); }
+  html[data-theme="light"] .msg2.empty { color: #a9a08c; }
+  html[data-theme="light"] .pdiv { background: #e2dac6; box-shadow: 0 1px 0 rgba(255,255,255,.85); }
+  html[data-theme="light"] .vol::-webkit-slider-runnable-track,
+  html[data-theme="light"] .vol::-moz-range-track { background: linear-gradient(180deg,#e2dac6,#efe9d8); box-shadow: inset 0 1px 2px rgba(88,110,117,.22); }
+  html[data-theme="light"] .vol::-webkit-slider-thumb,
+  html[data-theme="light"] .vol::-moz-range-thumb { background: linear-gradient(180deg,#fdf9ee,#e9e2d0); border-color: #c9bfa8; box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(88,110,117,.24); }
   /* A soft outer halo and a lighter rim: the screen looks switched on from
      the outside too, so the eye reads glass rather than a cut-out. The
      scanlines ease off because they were tuned against near-black. */
@@ -768,17 +778,43 @@
   html[data-theme="light"] .vfd::before { background: linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,0)); }
   html[data-theme="light"] .vlit { text-shadow: none; font-weight: 600; }
   html[data-theme="light"] .vind i.on { text-shadow: none; font-weight: 700; }
-  html[data-theme="light"] .live-pill { text-shadow: none; font-weight: 600; }
+  /* The pill lives behind glass, so in light theme it obeys the glass, not
+     the status palette. A bright red LIVE on a base3 ground is an emissive
+     colour on a display that does not emit -- it reads as a sticker on the
+     screen rather than a segment of it. Segments here are dark: LIVE goes
+     Solarized red-brown, RECONNECTING amber-brown, both dark enough to be
+     ink. They keep their hues, so the state is still colour-coded; they just
+     stop pretending to glow. */
+  html[data-theme="light"] .live-pill { text-shadow: none; font-weight: 600; color: var(--phos); }
+  html[data-theme="light"] .live-pill.live { color: #8f2f22; text-shadow: none; }
+  html[data-theme="light"] .live-pill.live::before { background: #8f2f22; }
+  html[data-theme="light"] .live-pill.reconnecting { color: #8a6410; text-shadow: none; }
+  html[data-theme="light"] .live-pill.reconnecting::before { background: #8a6410; }
+  html[data-theme="light"] .live-pill::before { background: rgba(29,51,46,.35); }
+  html[data-theme="light"] .live-pill.dark-mode { color: var(--phos-label); }
+  /* Same reasoning for the tube's own indicator strip: lit means dark ink,
+     unlit means a faint ghost of it. */
+  html[data-theme="light"] .vind i.on { color: var(--phos); }
+  /* The header strip is the same glass and had kept a near-black bezel from
+     the dark theme, which read as a dark chip stuck on a pale masthead. */
+  html[data-theme="light"] header .hdr-vfd {
+    border-color: #cfc7b1;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.85), inset 0 0 10px rgba(101,123,131,.14);
+  }
 
   html[data-theme="light"] {
-    --bg: #f2f2f7;
-    --panel: #ffffff;
-    --panel-2: #e9e9ee;
-    --border: #d1d1d6;
-    --border-strong: #c7c7cc;
-    --text: #1c1c1e;
-    --text-dim: #6e6e73;
-    --text-muted: #8e8e93;
+    /* Solarized light throughout, so the page, the housing and the display
+       are one family. base2 for the ground the panels sit on, base3 for the
+       panels, base00/base01/base1 for text -- the same greys the glass uses
+       for its own labels, which is why the two stop competing. */
+    --bg: #e9e2d0;
+    --panel: #fdf8ec;
+    --panel-2: #efe8d6;
+    --border: #d9d0bb;
+    --border-strong: #cabfa6;
+    --text: #073642;
+    --text-dim: #586e75;
+    --text-muted: #93a1a1;
     --shadow: 0 1px 3px rgba(0,0,0,0.10), 0 4px 14px rgba(0,0,0,0.10);
   }
 </style>
