@@ -852,16 +852,26 @@ def info():
     # something it is not -- and the licence notice is the one line on the
     # page that must not be wrong about what it is licensing.
     # Three lines: long name, short name, source URL.
+    #
+    # /etc wins over /usr/share, and that ordering is the whole point. The
+    # packaged copy is payload: dpkg and pacman replace it on every upgrade,
+    # so a forked node that carries its identity only in /usr/share loses it
+    # the first time someone installs the parent package -- silently, in the
+    # licence line. /etc/hls-livecam is node configuration and no installer
+    # touches it. Identity is a property of the node, not of the payload.
     product, product_short = 'HLS Livecam Server', 'HLSLS'
     source = 'https://github.com/thefangeddeity/hls-livecam-server'
-    try:
-        with open('/usr/share/hls-livecam-server/PRODUCT') as _pf:
-            _p = [ln.strip() for ln in _pf if ln.strip()]
+    for _pp in ('/etc/hls-livecam/PRODUCT',
+                '/usr/share/hls-livecam-server/PRODUCT'):
+        try:
+            with open(_pp) as _pf:
+                _p = [ln.strip() for ln in _pf if ln.strip()]
+        except Exception:
+            continue
         if len(_p) > 0: product = _p[0]
         if len(_p) > 1: product_short = _p[1]
         if len(_p) > 2: source = _p[2]
-    except Exception:
-        pass
+        break
     return {'hostname': hostname, 'tailscale': tailscale, 'version': version,
             'product': product, 'product_short': product_short,
             'source': source}
