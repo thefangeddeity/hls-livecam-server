@@ -1,11 +1,13 @@
 # PENDING — Linux branch, and what other branches should check
 
-**As of 2026-08-25, commit `eae3fc8` on `main`, pushed.**
+**As of 2026-08-26, commit `70edaca` on `main`, pushed. Linux is now v6.0.0.**
 **From:** tanzania · **Repo:** `github.com:thefangeddeity/hls-livecam-server`
 
 Everything below is **in git**. None of it is in a tag, a `.deb`, or the AUR
 package. `git pull` before assuming your copy is current — and if you are
-looking at a v5.9.3 install, you are looking at none of it.
+looking at a v5.9.3 install, you are looking at none of it. The version
+line moved to **6.0.0** because the panel is no longer the 5.x panel — the
+theme rules below are the reason.
 
 Fleet split, since it decides who this file is even for:
 
@@ -427,6 +429,42 @@ class, below the semantic floor**, and **no deblurring, no super-resolution,
 ever.**
 
 ---
+
+## The three material rules now cover state, not just surfaces
+
+ariana's three-material rule (engraved labels · lamps carry state · phosphor
+behind glass) held for the surfaces. It did not say what a lamp looks like
+when it is **off**, and that gap showed up as soon as light theme existed.
+
+**A lamp is legible because of the socket, not only the colour.** In light
+theme the lit green was the dark panel's `#30d158` — on near-white metal that
+reads as an alarm, not a status — and an unlit bulb was painted light beige,
+so it vanished into the housing entirely. Both ends were wrong. The well now
+goes **dark** (the same dark glass the displays use) so an unlit lamp is a
+visible empty socket, and the lit green drops to a deeper hue that sits beside
+the LCD instead of fighting it. Red drops with it, per the earlier ruling that
+light theme carries no bright reds.
+
+If your branch hardcodes lamp glow as `rgba(...)` — ours did, in five places —
+it cannot follow a theme. Tokens: `--led-on` `--led-off` `--led-bad`
+`--led-glow` `--led-glow-bad` `--led-well`.
+
+**A switched-off tube is not `#000`.** The phosphor layer is a green-grey
+mirror: a dead screen sits slightly above the black around it and carries a
+cast of whatever light is in the room. Camera-off now paints a lifted ground
+plus a window's worth of ambient across the top-left of the glass —
+reflection, not emission, so nothing on it looks switched on. Dark theme
+barely shows it; light theme means a lit room in front of the tube and shows
+it plainly. **The animation stage and the settled dark screen must share one
+ground**, or retiring the stage reads as a step.
+
+**No operating-system blue anywhere, including the parts the browser draws.**
+Save/Clear/Cancel were repainting themselves as a `primary` button — platform
+blue, on a panel where blue means nothing. A key with nothing to do reads as
+**unavailable**, not as highlighted: Save waits for a real change, Clear waits
+for there to be something to clear. And check your **focus ring**: the browser
+supplies its own blue one for free, and it was the last piece of platform
+furniture left on the panel. Focus now picks up the lamp colour.
 
 ## Node state
 
