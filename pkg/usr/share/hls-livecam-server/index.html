@@ -409,6 +409,46 @@
      checkbox hard right, so the two boxes teach each other. */
   .modemrow { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
   .modemrow .chk, .modemrow > .modem:last-child { margin-top: 0; margin-left: auto; }
+  /* A bay, not a single button. Foveal fills it today; when the second CV
+     option lands it drops in beside and the two share the width without the
+     row being rebuilt. Room for two, which the PM says is the end of it --
+     three would want a different arrangement anyway. */
+  .togglebay { flex: 1 1 auto; display: flex; gap: 7px; min-width: 0; margin-left: 0; }
+  /* Even keys, the same rule the Show/CV/Hide row above uses. Two today,
+     three when the second CV option lands -- and because every child takes
+     an equal share of the row rather than a fixed width, that arrival needs
+     no layout change at all. Scoped to .even so the LISTEN line, where the
+     transport and MUTE deliberately sit at opposite ends, is untouched. */
+  .modemrow.even > .modem,
+  .modemrow.even > .togglebay { flex: 1 1 0; min-width: 0; margin-left: 0; }
+  .modemrow.even > .modem { justify-content: center; }
+  .modemrow.even .modem.wide { justify-content: center; padding: 0 8px; }
+  .modem.wide { flex: 1 1 auto; min-width: 0; justify-content: flex-start;
+    padding: 0 11px; gap: 9px; }
+  .modem.wide .cap2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Engaged is a pressed key with its lamp lit -- the same language as MUTE,
+     which is the point: the two things on this panel that LATCH should look
+     alike. Disabled is the CV-only case, dimmed and inert like the CV button
+     itself while it is unavailable. */
+  .modem.pressed { background: linear-gradient(180deg,#191a1c,#212124);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6); border-color: #3c3c44; }
+  html[data-theme="light"] .modem.pressed { background: linear-gradient(180deg,#dededf,#eaeaee);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.18); }
+  .modem:disabled .cap2 { color: var(--emboss-dim); }
+  /* BUZZ matches the other keys in size and shape, and keeps its colour.
+     It is the loudest action on the page -- it shakes and sounds every
+     viewer's screen -- and a key that does that should not look like a key
+     that reloads a stream. Same geometry, different face. */
+  .modem.alert { border-color: #7a2a20;
+    background: linear-gradient(180deg,#4a1b15,#361009);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 1px 1px rgba(0,0,0,.35); }
+  .modem.alert .cap2 { color: #ff8f7f; }
+  .modem.alert .bulb { background: #b8493a; }
+  .modem.alert:active { background: linear-gradient(180deg,#2b0d08,#3d130c);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
+  html[data-theme="light"] .modem.alert { border-color: #e0a79c;
+    background: linear-gradient(180deg,#fff1ee,#ffe2dc); }
+  html[data-theme="light"] .modem.alert .cap2 { color: #b23a26; }
   .modem { min-width: 54px; height: 32px; padding: 0 7px; border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; cursor: pointer; font-family: inherit;
     background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
@@ -663,27 +703,30 @@
      Surface anchors are Apple's light-mode system greys rather than a
      per-channel invert of the dark ramp; a blind invert reads bluish, not
      neutral. Status hues (accent/danger/success/warn) are held unchanged. */
-  /* The tube stays a TUBE in light theme. It went Solarized for a round and
-     that was too far: inverting the glass turns the instrument into an LCD,
-     and an LCD is a different object with a different claim -- backlit and
-     flat where this is emissive and deep. The panel's whole identity is a
-     lit screen behind glass.
+  /* In light theme the readout is an LCD, and it is meant to be. Two rounds
+     of trying to keep it a vacuum tube proved the point the other way: a
+     dark glowing screen sunk into a white panel reads as a hole, and
+     brightening the glass while keeping cyan segments read as neither one
+     thing nor the other.
 
-     What was actually wrong is the thing that prompted it: near-black glass
-     dropped into a white housing reads as a HOLE. So the glass lifts to a
-     dark green-black instead of near-black, gains a faint bloom of its own
-     phosphor, and softens its border. The step from housing to screen stops
-     being a cliff without the screen pretending to be paper.
+     So it commits. Solarized base3 behind the glass, base2 for the falloff,
+     and DARK segments over it -- which is what an LCD actually is: a light
+     ground with the segments blocking it. In the dark theme it is a tube and
+     the segments glow; in the light theme it is a panel display and they
+     don't. Same instrument, the way a real one changes character when the
+     room lights come up.
 
-     Phosphor stays phosphor in both themes. Nothing outside the glass is
-     ever segment-coloured, nothing inside it is ever housing gray, and
-     unknown still shows ghosts rather than a zero. */
+     The rule underneath is untouched, and it is the one that matters:
+     nothing outside the glass is ever segment-coloured, nothing inside it is
+     ever housing gray, and unknown still shows ghost segments rather than a
+     zero. */
   html[data-theme="light"] {
-    /* Lifted off black, with a green cast, so the screen reads as lit rather
-       than as a hole cut in the panel. Segments keep their own colour --
-       only the ground moved, and only far enough to soften the step. */
-    --glass-a: #16211f; --glass-b: #1d2b28;
-    --phos-ghost: rgba(63,232,205,.16);
+    /* Solarized base3 lit from behind; segments are LCD-dark over it, with
+       the unlit ones a faint shadow of themselves rather than a colour. */
+    --glass-a: #fdf6e3; --glass-b: #ece5d2;
+    --phos: #1d332e;
+    --phos-ghost: rgba(29,51,46,.13);
+    --phos-label: rgba(88,110,117,.66);
     --housing: #ffffff; --housing-hi: rgba(0,0,0,.03); --housing-lo: #f4f4f7;
     --border-soft: #d8d8dd;
     --emboss: #6e6e73; --emboss-strong: #48484a; --emboss-dim: #9a9aa0;
@@ -710,14 +753,22 @@
   /* A soft outer halo and a lighter rim: the screen looks switched on from
      the outside too, so the eye reads glass rather than a cut-out. The
      scanlines ease off because they were tuned against near-black. */
+  /* A recessed bezel and a soft vignette: the ground is lit, so the depth
+     has to come from the edge rather than from darkness in the middle.
+     Scanlines drop to a hint -- at full strength they read as dirt on a pale
+     screen. Lit segments lose the bloom entirely: glow is what an emissive
+     display does, and this one is being blocked, not lit. */
   html[data-theme="light"] .vfd {
-    border-color: #2b3a37;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.06),
-                inset 0 0 22px rgba(0,0,0,.55),
-                0 0 0 1px rgba(63,232,205,.10),
-                0 2px 10px rgba(63,232,205,.14);
+    border-color: #cfc7b1;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.85),
+                inset 0 0 18px rgba(101,123,131,.16),
+                0 1px 2px rgba(0,0,0,.10);
   }
-  html[data-theme="light"] .vfd::after { opacity: .38; }
+  html[data-theme="light"] .vfd::after { opacity: .14; }
+  html[data-theme="light"] .vfd::before { background: linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,0)); }
+  html[data-theme="light"] .vlit { text-shadow: none; font-weight: 600; }
+  html[data-theme="light"] .vind i.on { text-shadow: none; font-weight: 700; }
+  html[data-theme="light"] .live-pill { text-shadow: none; font-weight: 600; }
 
   html[data-theme="light"] {
     --bg: #f2f2f7;
@@ -803,11 +854,18 @@
           <button class="pbtn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
         </div>
         <!-- TWEAK (PM): modem button left, checkbox hard right. -->
-        <div class="modemrow">
+        <div class="modemrow even">
           <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
             <span class="cap2">RELOAD</span>
           </button>
-          <label class="chk" id="fovealChk"><input type="checkbox" id="fovealCheck" onchange="toggleFoveal()"><span class="box"></span><span class="eng">Foveal layer</span></label>
+          <div class="togglebay" id="toggleBay">
+            <button class="modem wide" id="fovealBtn" onclick="clickFoveal()"
+                    title="Foveal layer -- a modifier on CV Mode">
+              <span class="bulb" id="fovealLamp"></span>
+              <span class="cap2">FOVEAL</span>
+            </button>
+            <input type="checkbox" id="fovealCheck" hidden>
+          </div>
         </div>
       </div>
 
@@ -831,9 +889,12 @@
         </div>
 
         <div class="pdiv"></div>
-        <div class="sub-title eng">Listen</div>
-        <!-- TWEAK (PM): the transport is a tiny modem button with a light,
-             and Mute audio sits hard right on the same line. -->
+        <!-- One box, no sub-headings. LISTEN and SEND split four keys into
+             two groups of two and made the panel look like two boxes wearing
+             one border; the keys are legible without being announced. Every
+             key here is now the same object as RELOAD and FOVEAL upstairs,
+             so the whole panel reads as one instrument rather than three
+             control idioms stacked. -->
         <div class="modemrow">
           <button class="modem" id="listenBtn" onclick="togglePlay()" title="Pause the feed">
             <span class="bulb" id="listenLamp"></span>
@@ -847,13 +908,14 @@
           </button>
         </div>
 
-        <div class="pdiv"></div>
-        <div class="sub-title eng">Send</div>
-        <div class="btnrow">
-          <button class="pbtn pending" id="talkBtn" disabled title="No talkback on this node">
-            <span class="bulb"></span> TALK<span class="badge2">SOON</span>
+        <div class="modemrow even">
+          <button class="modem" id="talkBtn" disabled title="No talkback on this node yet">
+            <span class="bulb"></span><span class="cap2">TALK</span>
           </button>
-          <button class="pbtn" id="buzzBtn" onclick="sendBuzz()">BUZZ</button>
+          <button class="modem alert" id="buzzBtn" onclick="sendBuzz()"
+                  title="Shake and sound every viewer's screen">
+            <span class="bulb"></span><span class="cap2">BUZZ</span>
+          </button>
         </div>
         <div class="modemrow">
           <label class="chk"><input type="checkbox" id="muteCheck" onchange="toggleMute()"><span class="box"></span><span class="eng">Mute buzzes</span></label>
@@ -1341,8 +1403,7 @@
     // pattern as B&W was on Blur before the CV Mode pivot. Greyed out
     // (disabled) anywhere but CV Mode, same as B&W's precedent.
     fovealCheck.disabled = (feedMode !== 'cv');
-    var fk = document.getElementById('fovealChk');
-    if (fk) fk.className = 'chk' + (fovealCheck.disabled ? ' pending' : '');
+    paintFoveal();
     paintLamps();
   }
 
@@ -1390,7 +1451,28 @@
 
   // ── FOVEAL LAYER — server-side, modifier on CV Mode ──
   var fovealOn = false;
-  function updateFovealCheck() { fovealCheck.checked = fovealOn; }
+  function updateFovealCheck() { fovealCheck.checked = fovealOn; paintFoveal(); }
+
+  // The legend never moves; the lamp and the key's own depth carry the state.
+  function paintFoveal() {
+    var b = document.getElementById('fovealBtn');
+    var l = document.getElementById('fovealLamp');
+    if (!b) return;
+    b.disabled = fovealCheck.disabled;
+    var on = fovealCheck.checked && !b.disabled;
+    b.className = 'modem wide' + (on ? ' pressed' : '');
+    if (l) l.className = 'bulb' + (on ? ' on' : '');
+  }
+
+  // The checkbox remains the state; the key is only how you reach it. Kept
+  // that way so applyFoveal(), updateFovealCheck() and the poll all read one
+  // source rather than three.
+  function clickFoveal() {
+    if (fovealCheck.disabled) return;
+    fovealCheck.checked = !fovealCheck.checked;
+    paintFoveal();
+    toggleFoveal();
+  }
   function applyFoveal(enabled) {
     fovealOn = enabled;
     updateFovealCheck();
