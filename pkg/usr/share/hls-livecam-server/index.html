@@ -252,7 +252,7 @@
 
      Honours prefers-reduced-motion, which goes straight to dark. */
   .crt-stage { position: absolute; inset: 0; z-index: 22; pointer-events: none;
-    display: none; background: #000; overflow: hidden; }
+    display: none; background: var(--crt-off); overflow: hidden; }
   .crt-stage.on { display: block; }
   .crt-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%;
     object-fit: contain; image-rendering: pixelated; }
@@ -291,6 +291,16 @@
      exactly the "flicker of the stream" after the beam dies. It has to go
      out on the frame it is told to, not a second later. */
   .video-wrap.crt-dark video { opacity: 0 !important; transition: none !important; }
+  /* The stage retires the moment the screen is dark, so this is what the
+     operator actually looks at for as long as the camera stays off. It has
+     to match the stage's ground exactly or retiring the stage shows as a
+     step; the sheen sits on top of that shared ground. */
+  .video-wrap.crt-dark {
+    background:
+      radial-gradient(130% 90% at 24% 4%, var(--crt-sheen-a), transparent 58%),
+      linear-gradient(168deg, var(--crt-sheen-b) 0%, transparent 46%),
+      var(--crt-off);
+  }
 
   /* The notice arrives only once the screen is actually dark -- see
      playCrtOff(). Announcing "switched off" over a picture that is still
@@ -340,6 +350,14 @@
     --border-soft: #242427;
     --emboss: #8a8a90; --emboss-strong: #a2a2a8; --emboss-dim: #6a6a70;
     --led-on: #30d158; --led-off: #3a3a3e; --led-bad: #ff453a;
+    --led-glow: rgba(48,209,88,.75); --led-glow-bad: rgba(255,69,58,.75);
+    /* A dead tube is never actually black. The phosphor layer is a slightly
+       green-grey mirror, so a switched-off screen sits a little above the
+       black around it and carries a faint cast of whatever light is in the
+       room. In a dark room that is barely there; see the light theme for
+       the version with a lit room in front of it. */
+    --crt-off: #070f0d; --crt-sheen-a: rgba(168,222,206,.05); --crt-sheen-b: rgba(168,222,206,.02);
+    --led-well: inset 0 1px 1px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.05);
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --phos: #3fe8cd; --phos-ghost: rgba(63,232,205,.12); --phos-label: rgba(63,232,205,.40);
     --glass-a: #070d0e; --glass-b: #0b1416;
@@ -374,13 +392,13 @@
   .leds { display: flex; flex-direction: column; gap: 7px; padding-top: 2px; }
   .led { display: flex; align-items: center; gap: 7px; font-size: 10.5px; line-height: 15px; white-space: nowrap; }
   .led .n { color: var(--emboss); text-shadow: 0 1px 0 rgba(255,255,255,.05), 0 -1px 0 rgba(0,0,0,.5); }
-  .bulb { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--led-off); box-shadow: inset 0 1px 1px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.05); }
-  .led.on .bulb, .bulb.on { background: var(--led-on); box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5); }
+  .bulb { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--led-off); box-shadow: var(--led-well); }
+  .led.on .bulb, .bulb.on { background: var(--led-on); box-shadow: 0 0 6px var(--led-glow), inset 0 0 2px rgba(255,255,255,.5); }
   /* Red is not only for a stage that failed. Muted is a state the operator
      chose, but it is also the state most worth noticing at a glance -- the
      room is being watched and nobody can hear it. Green would say "fine". */
-  .bulb.alarm { background: var(--led-bad); box-shadow: 0 0 6px rgba(255,69,58,.75), inset 0 0 2px rgba(255,255,255,.5); }
-  .led.down .bulb { background: var(--led-bad); box-shadow: 0 0 6px rgba(255,69,58,.75), inset 0 0 2px rgba(255,255,255,.5); }
+  .bulb.alarm { background: var(--led-bad); box-shadow: 0 0 6px var(--led-glow-bad), inset 0 0 2px rgba(255,255,255,.5); }
+  .led.down .bulb { background: var(--led-bad); box-shadow: 0 0 6px var(--led-glow-bad), inset 0 0 2px rgba(255,255,255,.5); }
 
   .pdiv { height: 1px; background: #242428; margin: 12px -14px; box-shadow: 0 1px 0 rgba(255,255,255,.03); }
   .btnrow { display: flex; gap: 7px; }
@@ -391,14 +409,25 @@
   .pbtn:disabled, .pbtn.pending { color: var(--emboss-dim); cursor: not-allowed; background: linear-gradient(180deg,#242427,#1e1e21); border-color: #2c2c31; box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }
   .pbtn .badge2 { display: block; font-family: var(--mono); font-size: 7px; letter-spacing: .1em; color: var(--phos-label); margin-top: 2px; }
 
+  /* Focus was the last piece of operating-system furniture on the panel:
+     the browser draws its own blue ring, on a surface where blue means
+     nothing and every other state is carried by a lamp. Same job, panel
+     vocabulary -- the key the operator is on picks up the lamp colour.
+     outline rather than box-shadow so a pressed key keeps its depth. */
+  .pbtn:focus-visible, .modem:focus-visible, .buzz2:focus-visible,
+  .vol:focus-visible, .chk input:focus-visible + .box, .modem.wide:focus-visible {
+    outline: 2px solid var(--led-on); outline-offset: 1px; }
+  .pbtn:focus:not(:focus-visible), .modem:focus:not(:focus-visible),
+  .buzz2:focus:not(:focus-visible) { outline: none; }
+
   .chk { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 9px; color: var(--emboss-strong); cursor: pointer; }
   .chk input { position: absolute; opacity: 0; width: 0; height: 0; }
   .chk.pending { color: var(--emboss-dim); cursor: not-allowed; }
   .chk.pending .box { opacity: .5; }
   .box { width: 13px; height: 13px; border-radius: 3.5px; flex: 0 0 auto; background: linear-gradient(180deg,#1a1a1c,#212124); border: 1px solid #3a3a40; box-shadow: inset 0 1px 2px rgba(0,0,0,.55); position: relative; }
   .chk input:checked + .box { background: var(--led-on); border-color: color-mix(in srgb,var(--led-on) 70%,#000);
-    box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5); }
-  html[data-theme="light"] .chk input:checked + .box { box-shadow: 0 0 5px rgba(48,209,88,.5), inset 0 0 2px rgba(255,255,255,.6); }
+    box-shadow: 0 0 6px var(--led-glow), inset 0 0 2px rgba(255,255,255,.5); }
+  html[data-theme="light"] .chk input:checked + .box { box-shadow: 0 0 5px var(--led-glow), inset 0 0 2px rgba(255,255,255,.55); }
 
   .buzz2 { width: 100%; border-radius: 8px; padding: 11px; font-size: 12.5px; font-weight: 600; color: #fff; cursor: pointer; font-family: inherit;
     background: linear-gradient(180deg,#ff5a49,#e5341f); border: 1px solid #b8271a;
@@ -801,7 +830,23 @@
     --housing: #fbfaf6; --housing-hi: rgba(255,255,255,.9); --housing-lo: #f3f2ec;
     --border-soft: #e0ded4;
     --emboss: #657b83; --emboss-strong: #586e75; --emboss-dim: #93a1a1;
-    --led-off: #cfc8b6;
+    /* A lamp reads as a lamp because of the socket it sits in, not because
+       of the colour it turns. In light theme the housing is nearly white, so
+       an unlit bulb painted light beige vanished into the metal and a lit one
+       shouted. The well goes DARK -- the same dark glass the displays use --
+       so an unlit lamp is a visible empty socket, and the lit green drops to
+       a deeper, less electric hue that sits beside the LCD instead of
+       fighting it. Darker green, darker hole, same distance travelled. */
+    --led-off: #26332e;
+    --led-on: #3f8f52; --led-bad: #a8352a;
+    --led-glow: rgba(63,143,82,.42); --led-glow-bad: rgba(168,53,42,.38);
+    --led-well: inset 0 1px 2px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.85);
+    /* Light theme means a lit room in front of the tube, so the off screen
+       reflects more of it: the ground lifts off black towards the same warm
+       green the displays glow in, and the sheen is a window's worth of
+       ambient falling across the top-left of the glass. Solarized, but as
+       reflection rather than emission -- nothing here is switched on. */
+    --crt-off: #16241f; --crt-sheen-a: rgba(253,246,227,.11); --crt-sheen-b: rgba(253,246,227,.045);
   }
   html[data-theme="light"] .panel {
     background: linear-gradient(180deg,#fffefb 0%,var(--housing) 34%,var(--housing-lo) 100%);
@@ -2070,9 +2115,16 @@
   function updateClearBtn() {
     var val = msgBox.value.trim();
     var changed = val !== currentMsg;
-    saveBtn.className   = 'btn' + (editing && changed ? ' primary' : '');
-    cancelBtn.className = 'btn' + (editing ? ' primary' : '');
-    clearBtn.className  = 'btn' + (currentMsg !== '' ? ' primary' : '');
+    // These three used to repaint themselves as '.btn primary' -- the old
+    // operating-system blue, on a panel where blue means nothing. A key that
+    // has nothing to do reads as unavailable, not as highlighted: Save waits
+    // for an actual change, Clear waits for there to be something to clear.
+    saveBtn.className   = 'pbtn' + (editing && changed ? '' : ' pending');
+    saveBtn.disabled    = !(editing && changed);
+    cancelBtn.className = 'pbtn';
+    cancelBtn.disabled  = false;
+    clearBtn.className  = 'pbtn' + (currentMsg !== '' ? '' : ' pending');
+    clearBtn.disabled   = currentMsg === '';
   }
 
   function setHint(text, cls) {
