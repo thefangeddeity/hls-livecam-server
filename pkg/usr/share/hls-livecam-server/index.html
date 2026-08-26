@@ -1040,6 +1040,7 @@
   // because they clear on different events -- a switch clears when the new
   // stream plays, a fault clears when the stream goes LIVE again -- and one
   // must not cancel the other's cover.
+  var coverCancel   = null;    // set while a cover is running; see fadeOut
   var switching     = false;   // deliberate: the operator changed mode
   var faulted       = false;   // involuntary: the player gave up
 
@@ -1145,6 +1146,12 @@
 
     var startedAt = Date.now();
     var done = false, holding = false;
+    // Exposed so a switch to Hide can cancel a cover that is still serving
+    // its sixteen seconds. Declining to START one is not enough: press CV
+    // then Hide inside the minimum and the earlier cover is still running,
+    // so the power-off happens behind snow that belongs to the switch
+    // before it. That is what "still seeing static going CV to Hide" was.
+    coverCancel = function () { startedAt = 0; finish(); };
     function finish() {
       if (done) return;
       // Hold the snow for the whole switch even if the player claims to be
@@ -1159,6 +1166,7 @@
         return;
       }
       done = true;
+      coverCancel = null;
       video.removeEventListener('playing', onPlaying);
       if (fadeInTimer) { clearTimeout(fadeInTimer); fadeInTimer = null; }
       video.style.opacity = '1';
@@ -1340,7 +1348,17 @@
   // genuinely takes the same ~16s to re-establish either way, and without a
   // cover there the viewer stares at a frozen black frame and then a jump.
   function coverFor(target) {
-    if (target !== 'hide') fadeOut();
+    if (target === 'hide') {
+      // Cancel anything already covering, then let the power-off stand
+      // alone. Snow and a switch-off are different events and must never
+      // be on screen together.
+      if (coverCancel) coverCancel();
+      switching = false;
+      faulted = false;
+      updateCover();
+      return;
+    }
+    fadeOut();
   }
 
   function setFeedMode(mode) {
