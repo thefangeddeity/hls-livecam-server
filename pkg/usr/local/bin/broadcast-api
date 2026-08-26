@@ -299,10 +299,19 @@ def _start_loopback_publisher(denv, mode='show'):
             inputs += ['-f', 'lavfi',
                        '-i', f'anullsrc=channel_layout=stereo:sample_rate={a_rate}']
         else:
-            inputs += ['-use_wallclock_as_timestamps', '1',
+            src = a_dev
+            wall = ['-use_wallclock_as_timestamps', '1']
+            if _single_session(denv):
+                # Far end of the ALSA loopback the capture session feeds.
+                # Same clock as the video by construction, so wallclock
+                # stamping is not only unnecessary here -- it would
+                # reintroduce the system clock as a third opinion.
+                src = denv.get('AUDIO_LOOPBACK_SRC', 'hw:Loopback,1,0').strip()
+                wall = []
+            inputs += [*wall,
                        '-thread_queue_size', '512',
                        '-f', a_backend, '-ac', a_ch, '-ar', a_rate,
-                       '-i', a_dev]
+                       '-i', src]
         maps += ['-map', '1:a:0']
         # The soundcard is genuinely slow -- it delivers ~59.5s of samples
         # in 60.0s of wall time, about 0.8%, in every timestamp arrangement
@@ -384,19 +393,76 @@ def _stage_capture_level(denv):
             print(f'broadcast-api: could not set {ctl.strip()}={val.strip()}: {e}',
                   file=sys.stderr, flush=True)
 
+def _single_session(denv):
+    return (denv.get('AUDIO_SINGLE_SESSION', '0').strip()
+            not in ('', '0', 'false', 'no'))
+
 def _start_cam_reader(denv):
+    """Open the camera -- and, in single-session mode, the microphone too.
+
+    THIS IS THE ANSWER TO THE DRIFT. macOS has no sync problem because
+    avfoundation hands it both streams from one session: one clock, nothing
+    to reconcile, no competing timestamps. We had assumed Linux could not do
+    the same because our video goes through Python for CV. It can. One
+    ffmpeg opens v4l2 AND alsa, pipes video to us and writes audio straight
+    to an ALSA loopback; the publisher takes the audio off the far end of
+    that loopback. Verified on tanzania: camera and mic open together with
+    no contention and no deadlock. The v4l2/alsa pair simply does not have
+    the AVFoundation problem that forced macOS into a single session in the
+    first place -- we inherited the belief without testing it.
+
+    Both streams then descend from one capture clock. The publisher still
+    names two devices, but they are no longer independent clocks reconciled
+    after the fact, which is what produced 5-8 ms/s of drift in every
+    timestamp arrangement we tried.
+
+    IT DID NOT FIX THE DRIFT, and the measurement is the point of keeping
+    this code. Enabled on tanzania: -5.54 ms/s over 156 seconds, which is
+    the same -5 to -8 ms/s the two-session pipeline produced. A 75s sample
+    looked like it had converged and it had not; the longer run settled it.
+
+    The reason is worth writing down, because the idea is right and the
+    plumbing is not. One session does put both streams on one clock -- at
+    the CAPTURE. But the audio then leaves through snd-aloop and is
+    RE-CAPTURED by the publisher, and the video goes through Python and is
+    RE-TIMED into the v4l2 loopback at the writer loop's own pace. The clock
+    that matters is the one at the publisher, and there we still have two.
+
+    To get what macOS gets, the PUBLISHER has to be the process that opens
+    both -- which means no Python in the video path, which means no CV. That
+    is precisely the trade macOS made when combined A/V orphaned their frame
+    pipeline. The option that keeps CV is to make Python the pacer for both:
+    read audio in the writer loop and emit one video frame per N samples, so
+    the audio clock drives the video instead of time.sleep(). That is a real
+    change to the writer loop and has not been made.
+
+    Needs snd-aloop. Off by default, and off on tanzania: it is a moving
+    part that buys nothing until the writer-loop change lands.
+    """
     device = denv.get('VIDEO_DEVICE', '/dev/video0')
     fr     = int(denv.get('FRAMERATE', 15))
     fmt    = denv.get('V4L2_INPUT_FMT', '-input_format mjpeg').split()[-1]
-    return subprocess.Popen([
+    a_on, a_dev, a_backend, a_kbps, a_rate, a_ch = _audio_conf(denv)
+
+    cmd = [
         'ffmpeg', '-hide_banner', '-loglevel', 'error',
         '-f', 'v4l2', '-input_format', fmt,
         '-video_size', f'{FRAME_W}x{FRAME_H}',
         '-framerate', str(fr),
         '-i', device,
-        '-f', 'rawvideo', '-pix_fmt', 'rgb24',
-        'pipe:1'
-    ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    ]
+    if a_on and _single_session(denv):
+        sink = denv.get('AUDIO_LOOPBACK_SINK', 'hw:Loopback,0,0').strip()
+        cmd += ['-thread_queue_size', '512',
+                '-f', a_backend, '-ac', a_ch, '-ar', a_rate, '-i', a_dev,
+                '-map', '0:v', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1',
+                '-map', '1:a', '-f', 'alsa', sink]
+        print(f'broadcast-api: single-session capture, audio -> {sink}',
+              flush=True)
+    else:
+        cmd += ['-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL)
 
 def _drain_loop(cam_holder, denv):
     global _cam_frame, _cam_proc
