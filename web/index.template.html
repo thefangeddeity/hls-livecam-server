@@ -259,31 +259,6 @@
   .error-overlay .title { font-size: 15px; font-weight: 600; color: var(--danger); }
   .error-overlay .sub { font-size: 12px; color: rgba(255,255,255,0.7); }
 
-  /* run-10 §1: feed-mode switch cover. Mechanism ported verbatim from the
-     Linux viewer (Dev 30's reloadStream()/buffer-flush fix, with Dev-cover
-     countdown on top). HOLD_MS is NOT Linux's number -- see the JS below. */
-  video { transition: opacity 1s ease; }
-  .switch-overlay {
-    position: absolute; inset: 0;
-    display: none;
-    flex-direction: column;
-    align-items: center; justify-content: center;
-    gap: 10px;
-    pointer-events: none;
-    z-index: 20;
-  }
-  .switch-overlay.visible { display: flex; }
-  .switch-count {
-    font-size: 48px; font-weight: 700;
-    color: rgba(255,255,255,0.5);
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
-  }
-  .switch-label {
-    font-size: 13px;
-    color: rgba(255,255,255,0.3);
-    letter-spacing: 0.04em;
-  }
 
   /* ── DESKTOP SIDEBAR ── */
   .sidebar {
@@ -1135,10 +1110,6 @@
          differently from the picture announces itself as an overlay, which is
          the opposite of the point. -->
     <canvas class="static-cover" id="staticCover" width="224" height="126"></canvas>
-    <div class="switch-overlay" id="switchOverlay">
-      <div class="switch-count" id="switchCount"></div>
-      <div class="switch-label">Switching feed…</div>
-    </div>
     <div class="dark-overlay" id="darkOverlay">
       <img src="/dark.png" alt="">
     </div>
@@ -1563,10 +1534,6 @@
   // takes -- a cover that outlasts the thing it's covering is worse than no
   // cover, which was the PM's original complaint (choppiness, not duration).
   var HOLD_SECONDS = 10;  // Ron's call, over the PM's 7 and my measured 4
-  var switchOverlay = document.getElementById('switchOverlay');
-  var switchCount = document.getElementById('switchCount');
-  var countInterval = null;
-
   /* True from the moment a switch is requested until the feed is back.
      Restarting the publisher makes hls.js error by design -- suppressing the
      error UI during that window is the difference between reporting a fault
@@ -1583,22 +1550,18 @@
     feedSwitching = false;
   }
 
+  /* The snow is the whole transition. There was a countdown over it, and a
+     label saying "Switching feed" -- both narrating something the picture
+     was already showing, in plain type over an instrument that speaks in
+     phosphor. Static says "no usable picture" on its own, and the pill says
+     SWITCHING for anyone who wants the word.
+
+     HOLD_SECONDS survives as the bound for when the new stream never
+     arrives; the cover normally clears on the picture's own `playing`. */
   function fadeOut() {
     beginFeedSwitch();
     startStatic();
-    video.style.opacity = '0';
-    if (countInterval) clearInterval(countInterval);
-    var secs = HOLD_SECONDS;
-    switchCount.textContent = secs;
-    switchOverlay.classList.add('visible');
-    countInterval = setInterval(function() {
-      secs--;
-      switchCount.textContent = secs > 0 ? secs : '';
-      if (secs <= 0) { clearInterval(countInterval); countInterval = null; }
-    }, 1000);
-    setTimeout(function() {
-      video.style.opacity = '1';
-      switchOverlay.classList.remove('visible');
+    setTimeout(function () {
       stopStatic();
       endFeedSwitch();
     }, HOLD_SECONDS * 1000);
