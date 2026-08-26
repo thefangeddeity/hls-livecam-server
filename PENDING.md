@@ -466,6 +466,28 @@ for there to be something to clear. And check your **focus ring**: the browser
 supplies its own blue one for free, and it was the last piece of platform
 furniture left on the panel. Focus now picks up the lamp colour.
 
+### QUEUED, not built: the letterbox bars need an inner border — and macOS may already have an answer
+
+`object-fit: contain` is settled and stays (see the run-21 note above: `cover`
+was eating the burnt-in telemetry strip). The cost is letterbox bars whose
+size changes with every window resize, and right now they are the same flat
+black as the picture area, so the frame has no edge — the image just stops
+somewhere inside a black rectangle.
+
+**Proposal, PM's, for a later run:** an inner border in dark metal, sitting
+between the picture and the bars, so the bars read as bezel rather than as
+dead space the video failed to fill. Note it interacts with the camera-off
+work above: whatever the bars become, they must not fight the reflected-ambient
+ground of a switched-off tube, and in light theme "dark metal" cannot mean the
+same value it means in dark theme.
+
+**macOS: how do you handle this today?** AVPlayerLayer with
+`videoGravity = .resizeAspect` produces the same bars, and if you have already
+picked a treatment — bezel, matte, letting them stay black — Linux would
+rather copy it than invent a second answer. If you have no treatment either,
+say so and one of us designs it once for both. Not urgent on either side.
+
+
 ## Node state
 
 | | tanzania | tina |
