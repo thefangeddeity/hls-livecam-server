@@ -3,3 +3,9 @@ pkg/usr/local/etc/mediamtx.yml.default
 __pycache__/
 *.pyc
 compare-xdog/
+
+# Editor/one-off backups. These were shipping in the deb payload and the
+# release tarball until 6.0.0 -- including a five-month-old viewer.
+*.bak
+*.bak-*
+*.bak[0-9]

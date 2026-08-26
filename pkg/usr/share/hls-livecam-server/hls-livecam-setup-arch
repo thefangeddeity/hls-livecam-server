@@ -398,6 +398,11 @@ mkdir -p "$LIB_DIR"
 cp /usr/share/hls-livecam-server/index.html "$WEB_ROOT/index.html"
 sed -i "s/@HOSTNAME@/$HOSTNAME_VAL/g" "$WEB_ROOT/index.html"
 
+# The header brand mark. The viewer asks for /brand.png; nothing copied it
+# there until 6.0.0, so it existed only on nodes where someone had put it
+# by hand and a fresh install served a broken image in the header.
+cp /usr/share/hls-livecam-server/brand.png "$WEB_ROOT/brand.png" 2>/dev/null || true
+
 # Cams viewer
 mkdir -p "$WEB_ROOT/cams"
 cp /usr/share/hls-livecam-server/cams/cams.html "$WEB_ROOT/cams/cams.html"

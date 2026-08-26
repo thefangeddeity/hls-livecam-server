@@ -52,6 +52,37 @@ mkdir -p /var/www/hls-livecam
 chown root:www-data /var/www/hls-livecam
 chmod 775 /var/www/hls-livecam
 
+# --- Install the served viewer from the packaged copy ------------
+# Until 6.0.0 the deb shipped /var/www/hls-livecam/index.html as payload
+# AND /usr/share/hls-livecam-server/index.html as the source the setup
+# wizard copies from. Two copies of the same file, and only one of them
+# was ever updated: the payload copy sat at a May build (32 KB, pre-CV,
+# pre-panel) while the share copy grew to 104 KB. Installing the deb
+# would therefore have REPLACED a current viewer with a five-month-old
+# one -- the exact failure the packaging is supposed to prevent.
+#
+# The payload copy is gone. /usr/share is the single source, and this
+# step puts it where nginx serves it, on install and on upgrade both, so
+# an upgrade actually refreshes the viewer instead of leaving new code
+# behind an old page. The sed is a no-op on current viewers (the
+# placeholder was retired when the header started reading /api/info) and
+# is kept for older ones.
+SHARE_VIEWER=/usr/share/hls-livecam-server/index.html
+WEB_VIEWER=/var/www/hls-livecam/index.html
+if [ -f "$SHARE_VIEWER" ]; then
+    cp "$SHARE_VIEWER" "$WEB_VIEWER"
+    sed -i "s/@HOSTNAME@/$(hostname)/g" "$WEB_VIEWER"
+    chown root:www-data "$WEB_VIEWER"
+    chmod 0644 "$WEB_VIEWER"
+fi
+# The viewer asks for /brand.png in its header. Nothing ever copied it into
+# the web root, so it worked only on nodes where someone had done it by hand.
+if [ -f /usr/share/hls-livecam-server/brand.png ]; then
+    cp /usr/share/hls-livecam-server/brand.png /var/www/hls-livecam/brand.png
+    chown root:www-data /var/www/hls-livecam/brand.png
+    chmod 0644 /var/www/hls-livecam/brand.png
+fi
+
 # --- Rescue cams.json across the v5.2.3 payload eviction ---------
 # v5.2.2 and earlier shipped a seed cams.json in the deb payload, which
 # dpkg silently overwrote on every install/upgrade (the long-parked
