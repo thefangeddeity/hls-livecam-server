@@ -261,31 +261,36 @@
   .crt-beam { position: absolute; left: 0; right: 0; top: 50%; height: 3px;
     background: #fff; box-shadow: 0 0 18px 5px rgba(255,255,255,.85);
     transform: translateY(-50%) scaleX(1); opacity: 0; }
-  /* Timings are for watching, not for getting it over with. 190ms of
-     squash was a blink -- by the time the eye found the line it was already
-     a dot. The squash now takes 420ms, the beam another 1.1s after a 380ms
-     hold on the full-width line, so each stage is legible: snow, line,
-     line shrinking, dot, gone. */
-  .crt-stage.fire canvas { animation: crtSquash 420ms cubic-bezier(.55,0,.85,.35) forwards; }
-  .crt-stage.fire .crt-beam { animation: crtBeam 1100ms cubic-bezier(.35,0,.25,1) 380ms forwards; }
+  /* Timings are for watching, not for getting it over with. Third pass:
+     420ms of squash still read as a blink. The squash takes 700ms, the beam
+     holds the full-width line for most of a second before it starts to
+     close, and the close itself runs 1.6s. Total to dark is about 2.6s --
+     long for a UI animation, correct for a picture tube giving up. */
+  .crt-stage.fire canvas { animation: crtSquash 700ms cubic-bezier(.55,0,.85,.35) forwards; }
+  .crt-stage.fire .crt-beam { animation: crtBeam 1600ms cubic-bezier(.35,0,.22,1) 620ms forwards; }
   @keyframes crtSquash {
     0%   { transform: scaleY(1);     filter: brightness(1); opacity: 1; }
     100% { transform: scaleY(0.012); filter: brightness(3); opacity: 0; }
   }
   @keyframes crtBeam {
     0%   { opacity: 0; transform: translateY(-50%) scaleX(1);     height: 3px; }
-    10%  { opacity: 1; transform: translateY(-50%) scaleX(1);     height: 3px; }
-    30%  { opacity: 1; transform: translateY(-50%) scaleX(1);     height: 3px; }
-    72%  { opacity: 1; transform: translateY(-50%) scaleX(0.03);  height: 3px; }
-    86%  { opacity: 1; transform: translateY(-50%) scaleX(0.014); height: 3px; }
+    8%   { opacity: 1; transform: translateY(-50%) scaleX(1);     height: 3px; }
+    34%  { opacity: 1; transform: translateY(-50%) scaleX(1);     height: 3px; }
+    62%  { opacity: 1; transform: translateY(-50%) scaleX(0.22);  height: 3px; }
+    80%  { opacity: 1; transform: translateY(-50%) scaleX(0.04);  height: 3px; }
+    90%  { opacity: 1; transform: translateY(-50%) scaleX(0.014); height: 3px; }
     100% { opacity: 0; transform: translateY(-50%) scaleX(0.014); height: 2px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .crt-stage.fire canvas, .crt-stage.fire .crt-beam { animation: none; opacity: 0; }
   }
-  /* The picture stays gone until the feed comes back. Without this the video
-     is still sitting there at full brightness behind a finished animation. */
-  .video-wrap.crt-dark video { opacity: 0; }
+  /* The picture stays gone until the feed comes back.
+     transition: none is load-bearing. The <video> carries a 1s opacity
+     transition for the switch fade, so setting opacity 0 here FADED over a
+     second -- and the stage retires long before that finishes, which is
+     exactly the "flicker of the stream" after the beam dies. It has to go
+     out on the frame it is told to, not a second later. */
+  .video-wrap.crt-dark video { opacity: 0 !important; transition: none !important; }
 
   /* The notice arrives only once the screen is actually dark -- see
      playCrtOff(). Announcing "switched off" over a picture that is still
@@ -1282,6 +1287,11 @@
     // after the beam had died -- the same flash at the other end.
     drawStaticInto(crtCanvas);
     hideOverlay.classList.remove('lit', 'visible');
+    // fadeOut()'s finish() writes video.style.opacity = '1' inline, and an
+    // inline style beats the .crt-dark rule no matter how specific it is.
+    // Cancelling a cover on the way into Hide therefore left the picture
+    // pinned visible behind the animation. Clear it and let the class win.
+    video.style.opacity = '';
     crtStage.className = 'crt-stage on';
     requestAnimationFrame(function () {
       requestAnimationFrame(function () { crtStage.classList.add('fire'); });
@@ -1293,7 +1303,7 @@
         hideOverlay.classList.add('visible');
         requestAnimationFrame(function () { hideOverlay.classList.add('lit'); });
       });
-    }, 1560);
+    }, 2600);
   }
   // null until the first mode is known, so the first paint can tell "opened
   // on a hidden feed" from "just switched off in front of me".
