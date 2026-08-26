@@ -374,38 +374,6 @@ def audio_filter_args():
             if gain_db:
                 audio_filter = ['-af',
                                 f'volume={gain_db}dB,alimiter=limit=0.95']
-
-    # Hidden means the devices are not opened at all, not that something is
-    # drawn over the picture. A client-side overlay hides the feed in one
-    # browser tab while the real stream stays available to every other viewer,
-    # to camdash, and to anyone who requests the HLS URL directly -- which is
-    # the opposite of what a control called Hide should do.
-    #
-    # Publishing generated black instead means the camera is genuinely closed:
-    # its indicator light goes out, which no overlay can achieve, and the
-    # microphone is closed with it. Black also costs almost nothing to encode,
-    # unlike static, which is incompressible by construction.
-    if mode == 'hide':
-        source = [
-            '-f', 'lavfi',
-            '-i', f'color=c=black:s={FRAME_W}x{FRAME_H}:r={fr}',
-            '-f', 'lavfi',
-            '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
-            '-map', '0:v:0',
-            '-map', '1:a:0',
-        ]
-    else:
-        source = [
-            '-f', 'avfoundation',
-            '-framerate', str(fr),
-            '-video_size', f'{FRAME_W}x{FRAME_H}',
-            '-pixel_format', 'uyvy422',
-            '-use_wallclock_as_timestamps', '1',
-            '-i', f'{video_idx}:{audio_idx}',
-            '-map', '0:v:0',
-            '-map', '0:a:0',
-        ]
-
     return audio_filter
 
 
@@ -578,6 +546,37 @@ def _start_combined_av_publisher(mode='show'):
     #   AUDIO_FILTER    raw ffmpeg -af chain for anything more involved,
     #                   e.g. dynaudnorm for constant perceived loudness.
     #                   Wins if both are set.
+    # Hidden means the devices are not opened at all, not that something is
+    # drawn over the picture. A client-side overlay hides the feed in one
+    # browser tab while the real stream stays available to every other viewer,
+    # to camdash, and to anyone who requests the HLS URL directly -- which is
+    # the opposite of what a control called Hide should do.
+    #
+    # Publishing generated black instead means the camera is genuinely closed:
+    # its indicator light goes out, which no overlay can achieve, and the
+    # microphone is closed with it. Black also costs almost nothing to encode,
+    # unlike static, which is incompressible by construction.
+    if mode == 'hide':
+        source = [
+            '-f', 'lavfi',
+            '-i', f'color=c=black:s={FRAME_W}x{FRAME_H}:r={fr}',
+            '-f', 'lavfi',
+            '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+        ]
+    else:
+        source = [
+            '-f', 'avfoundation',
+            '-framerate', str(fr),
+            '-video_size', f'{FRAME_W}x{FRAME_H}',
+            '-pixel_format', 'uyvy422',
+            '-use_wallclock_as_timestamps', '1',
+            '-i', f'{video_idx}:{audio_idx}',
+            '-map', '0:v:0',
+            '-map', '0:a:0',
+        ]
+
     audio_filter = audio_filter_args()
 
     cmd = [
