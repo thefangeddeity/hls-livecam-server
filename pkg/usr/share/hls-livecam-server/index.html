@@ -720,39 +720,41 @@
     --phos: #1d332e;
     --phos-ghost: rgba(29,51,46,.13);
     --phos-label: rgba(88,110,117,.66);
-    /* Housing in the same family as the glass. Pure white against a warm
-       base3 screen made the panel look cold and the display look stained --
-       two different whites arguing. The metal is a warm off-white now, a
-       step BELOW base3 so the lit screen stays the brightest thing in the
-       box, and the engraving takes Solarized's own greys rather than Apple's
-       blue-tinted ones. */
-    --housing: #f8f3e7; --housing-hi: rgba(255,255,255,.75); --housing-lo: #f0ead9;
-    --border-soft: #ded5c1;
+    /* The metal is LIGHTER and nearly neutral; the glass keeps the warmth.
+       Matching the housing to base3 made everything champagne and the
+       display stopped reading as lit -- it became another panel in the same
+       metal. What makes a backlit screen look backlit is not brightness, it
+       is HUE SEPARATION: a near-neutral case around a distinctly warmer,
+       greener glow. So the housing pulls almost all the yellow out and stays
+       bright, and base3 behind the glass now sits clearly warmer than
+       everything around it. */
+    --housing: #fbfaf6; --housing-hi: rgba(255,255,255,.9); --housing-lo: #f3f2ec;
+    --border-soft: #e0ded4;
     --emboss: #657b83; --emboss-strong: #586e75; --emboss-dim: #93a1a1;
     --led-off: #cfc8b6;
   }
   html[data-theme="light"] .panel {
-    background: linear-gradient(180deg,#fefaf0 0%,var(--housing) 34%,var(--housing-lo) 100%);
+    background: linear-gradient(180deg,#fffefb 0%,var(--housing) 34%,var(--housing-lo) 100%);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.85), 0 1px 2px rgba(88,110,117,.14);
   }
   html[data-theme="light"] .eng,
   html[data-theme="light"] .led .n { text-shadow: 0 1px 0 rgba(255,255,255,.9), 0 -1px 0 rgba(0,0,0,.10); }
   html[data-theme="light"] .pbtn,
   html[data-theme="light"] .modem {
-    background: linear-gradient(180deg,#fdf9ee,#efe9d8); border-color: #d6cdb8; color: #3b4a4a;
+    background: linear-gradient(180deg,#fdfcf8,#f0efe8); border-color: #dbd9cf; color: #3b4a4a;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 1px rgba(88,110,117,.16);
   }
-  html[data-theme="light"] .pbtn.pressed { background: linear-gradient(180deg,#ded6c2,#ebe4d3); box-shadow: inset 0 2px 4px rgba(88,110,117,.28); color: #073642; }
-  html[data-theme="light"] .pbtn.pending, html[data-theme="light"] .pbtn:disabled { background: linear-gradient(180deg,#f4efe2,#ece6d5); color: #a9a08c; }
-  html[data-theme="light"] .box { background: linear-gradient(180deg,#fffdf6,#f1ebda); border-color: #c9bfa8; box-shadow: inset 0 1px 2px rgba(88,110,117,.20); }
-  html[data-theme="light"] .talk { background: linear-gradient(180deg,#faf6ea,#f1ebda); border-color: #ded5c1; }
-  html[data-theme="light"] .msg2 { background: #fffdf5; border-color: #ded5c1; color: #073642; box-shadow: inset 0 1px 3px rgba(88,110,117,.10); }
-  html[data-theme="light"] .msg2.empty { color: #a9a08c; }
-  html[data-theme="light"] .pdiv { background: #e2dac6; box-shadow: 0 1px 0 rgba(255,255,255,.85); }
+  html[data-theme="light"] .pbtn.pressed { background: linear-gradient(180deg,#dcdad0,#e9e8e1); box-shadow: inset 0 2px 4px rgba(88,110,117,.28); color: #073642; }
+  html[data-theme="light"] .pbtn.pending, html[data-theme="light"] .pbtn:disabled { background: linear-gradient(180deg,#f4f3ee,#ecebe4); color: #a8a69b; }
+  html[data-theme="light"] .box { background: linear-gradient(180deg,#fffefb,#f1f0e9); border-color: #cbc9bd; box-shadow: inset 0 1px 2px rgba(88,110,117,.20); }
+  html[data-theme="light"] .talk { background: linear-gradient(180deg,#faf9f4,#f1f0e9); border-color: #e0ded4; }
+  html[data-theme="light"] .msg2 { background: #fffefa; border-color: #e0ded4; color: #073642; box-shadow: inset 0 1px 3px rgba(88,110,117,.10); }
+  html[data-theme="light"] .msg2.empty { color: #a8a69b; }
+  html[data-theme="light"] .pdiv { background: #e4e2d8; box-shadow: 0 1px 0 rgba(255,255,255,.9); }
   html[data-theme="light"] .vol::-webkit-slider-runnable-track,
-  html[data-theme="light"] .vol::-moz-range-track { background: linear-gradient(180deg,#e2dac6,#efe9d8); box-shadow: inset 0 1px 2px rgba(88,110,117,.22); }
+  html[data-theme="light"] .vol::-moz-range-track { background: linear-gradient(180deg,#e4e2d8,#f0efe8); box-shadow: inset 0 1px 2px rgba(88,110,117,.22); }
   html[data-theme="light"] .vol::-webkit-slider-thumb,
-  html[data-theme="light"] .vol::-moz-range-thumb { background: linear-gradient(180deg,#fdf9ee,#e9e2d0); border-color: #c9bfa8; box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(88,110,117,.24); }
+  html[data-theme="light"] .vol::-moz-range-thumb { background: linear-gradient(180deg,#fdfcf8,#e7e6df); border-color: #cbc9bd; box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(88,110,117,.24); }
   /* A soft outer halo and a lighter rim: the screen looks switched on from
      the outside too, so the eye reads glass rather than a cut-out. The
      scanlines ease off because they were tuned against near-black. */
@@ -762,7 +764,7 @@
      screen. Lit segments lose the bloom entirely: glow is what an emissive
      display does, and this one is being blocked, not lit. */
   html[data-theme="light"] .vfd {
-    border-color: #cfc7b1;
+    border-color: #c9c0a6;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.85),
                 inset 0 0 18px rgba(101,123,131,.16),
                 0 1px 2px rgba(0,0,0,.10);
@@ -800,11 +802,11 @@
        are one family. base2 for the ground the panels sit on, base3 for the
        panels, base00/base01/base1 for text -- the same greys the glass uses
        for its own labels, which is why the two stop competing. */
-    --bg: #e9e2d0;
-    --panel: #fdf8ec;
-    --panel-2: #efe8d6;
-    --border: #d9d0bb;
-    --border-strong: #cabfa6;
+    --bg: #e7e6df;
+    --panel: #fcfbf7;
+    --panel-2: #f0efe9;
+    --border: #dcdad0;
+    --border-strong: #cbc9bd;
     --text: #073642;
     --text-dim: #586e75;
     --text-muted: #93a1a1;
