@@ -1,13 +1,44 @@
 # PENDING — Linux branch, and what other branches should check
 
-**As of 2026-08-26, commit `70edaca` on `main`, pushed. Linux is now v6.0.0.**
+**As of 2026-08-26, commit `73e783f` on `main`, tagged `v6.0.0`, on the AUR, and installed on both Linux nodes.**
 **From:** tanzania · **Repo:** `github.com:thefangeddeity/hls-livecam-server`
 
-Everything below is **in git**. None of it is in a tag, a `.deb`, or the AUR
-package. `git pull` before assuming your copy is current — and if you are
-looking at a v5.9.3 install, you are looking at none of it. The version
-line moved to **6.0.0** because the panel is no longer the 5.x panel — the
-theme rules below are the reason.
+Everything below is in git **and shipped**: tagged `v6.0.0`, pushed to the
+AUR, built as a `.deb`, and installed on tanzania and tina. Both nodes
+verify clean against their own package (`pacman -Qkk`: 54 files, 0 altered;
+`dpkg --verify`: silent). The version line moved to 6.0.0 because the panel
+is no longer the 5.x panel — the theme rules below are the reason.
+
+### What the installers were about to undo — check yours
+
+Cutting the release surfaced four ways a package could quietly revert a
+sprint, and every one of them is the kind of thing another branch can have
+without knowing:
+
+1. **Two copies of the viewer.** The deb shipped `/var/www/.../index.html`
+   as payload *and* `/usr/share/.../index.html` as the wizard's source. Only
+   the share copy was ever updated, so the payload copy was still a **May
+   build, 32 KB against today's 104 KB** — and dpkg owns that path. The
+   payload copy is gone; `/usr/share` is the single source and both
+   installers copy it into the web root on install **and** upgrade.
+2. **An asset nothing installed.** The header asks for `/brand.png`; no
+   installer ever put it there. It worked only on nodes where someone had
+   copied it by hand.
+3. **Optional at import time is not optional in the payload.**
+   `cv_persist.py` and `cv_occupancy.py` are imported behind `try/except`.
+   They were missing from the PKGBUILD, so an Arch install simply had no
+   persistence and no occupancy and said nothing about it.
+4. **Node facts stored in payload files.** Identity (`PRODUCT`) and tuning
+   (temporal denoise weights, hand-edited into tina's `cv_processor.py`)
+   both lived where an installer overwrites them. Identity now reads
+   `/etc/hls-livecam/PRODUCT` first; tuning is `CV_TEMPORAL_W_CUR` /
+   `CV_TEMPORAL_W_PREV` in `device.env`. **Whatever is true of the node
+   belongs in /etc, not in the package.**
+
+One operational note for whoever upgrades next: files that were hand-copied
+to a package-owned path make pacman refuse the whole transaction
+(`exists in filesystem`). Move them aside first; do not reach for
+`--overwrite` reflexively.
 
 Fleet split, since it decides who this file is even for:
 
@@ -497,9 +528,15 @@ say so and one of us designs it once for both. Not urgent on either side.
 | feed mode | `cv` | `cv` |
 | scene model | **`stale`** | n/a |
 
-**tina is hot-patched and diverges from its 5.6.0 package** — every change
-above is applied to its live files by hand. A package upgrade reverts them.
-All of it is in git, so a real install restores it.
+**Both nodes are now on their own package, and nothing is hot-patched.**
+tina went 5.6.0 → 6.0.0 by `dpkg -i`; tanzania 5.8.2 → 6.0.0 by `pacman -U`.
+The one real divergence the audit found on tina was its temporal denoise
+tuning, which is now a `device.env` setting rather than a source edit.
+
+tina's `ffmpeg-cam` unit shows `failed` — it has been down since **Aug 23**,
+long before this upgrade, and the studio pipeline does not use it (the
+publisher is started by `broadcast-api`). Left alone deliberately; noted so
+nobody reads it as fallout from the release.
 
 **tanzania's scene model has gone stale** and the viewer keeps offering
 "Re-register camera". It should not have to ask: the own-camera path exists
