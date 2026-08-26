@@ -237,26 +237,55 @@
     padding: 4px 10px;
     border-radius: 4px;
   }
-  /* CRT POWER-OFF. Collapse to a scanline, then a lingering dot, then dark.
-     Applied to the WRAP rather than the <video> so mobile and desktop take
-     the identical path -- a transform on a video element is where browsers
-     disagree with each other. Purely presentation: the stream is already
-     black by the time it finishes, so nothing depends on the timing.
-     Honours prefers-reduced-motion, where it simply goes dark. */
-  @keyframes crtOff {
-    0%   { transform: scale(1, 1);      filter: brightness(1);   opacity: 1; }
-    45%  { transform: scale(1, 0.008);  filter: brightness(5);   opacity: 1; }
-    70%  { transform: scale(0.35, 0.006); filter: brightness(7); opacity: 1; }
-    100% { transform: scale(0.0, 0.004); filter: brightness(9);  opacity: 0; }
+  /* CRT POWER-OFF.
+     Snow collapses to a bright white line, the line collapses to a dot, the
+     dot fades and the screen stays black. An electron beam losing its
+     deflection: vertical scan dies first, so the raster becomes one bright
+     horizontal line; then horizontal scan dies and the line becomes a point;
+     then the beam current goes and the point decays.
+
+     It animates the OVERLAY, not the <video>. The stream is already black by
+     the time this plays -- the server publishes black for Hide -- so there is
+     nothing on the video element left to collapse, which is why the earlier
+     attempt at this just looked like the screen going out. What collapses has
+     to be something still lit, so the static canvas does it.
+
+     Honours prefers-reduced-motion, which goes straight to dark. */
+  .crt-stage { position: absolute; inset: 0; z-index: 22; pointer-events: none;
+    display: none; background: #000; overflow: hidden; }
+  .crt-stage.on { display: block; }
+  .crt-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; image-rendering: pixelated; }
+  /* The white line and the dot are one element scaled in two stages -- the
+     glow is a box-shadow so it survives being one pixel tall. */
+  .crt-beam { position: absolute; left: 0; right: 0; top: 50%; height: 3px;
+    background: #fff; box-shadow: 0 0 18px 5px rgba(255,255,255,.85);
+    transform: translateY(-50%) scaleX(1); opacity: 0; }
+  .crt-stage.fire canvas { animation: crtSquash 190ms cubic-bezier(.5,0,.9,.4) forwards; }
+  .crt-stage.fire .crt-beam { animation: crtBeam 620ms cubic-bezier(.3,0,.2,1) 150ms forwards; }
+  @keyframes crtSquash {
+    0%   { transform: scaleY(1);     filter: brightness(1); opacity: 1; }
+    100% { transform: scaleY(0.012); filter: brightness(3); opacity: 0; }
   }
-  .video-wrap.crt-off video { animation: crtOff 620ms cubic-bezier(.2,.7,.3,1) forwards; }
+  @keyframes crtBeam {
+    0%   { opacity: 0; transform: translateY(-50%) scaleX(1);    height: 3px; }
+    18%  { opacity: 1; transform: translateY(-50%) scaleX(1);    height: 3px; }
+    55%  { opacity: 1; transform: translateY(-50%) scaleX(0.02); height: 3px; }
+    72%  { opacity: 1; transform: translateY(-50%) scaleX(0.012); height: 3px; }
+    100% { opacity: 0; transform: translateY(-50%) scaleX(0.012); height: 2px; }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .video-wrap.crt-off video { animation: none; opacity: 0; }
+    .crt-stage.fire canvas, .crt-stage.fire .crt-beam { animation: none; opacity: 0; }
   }
-  /* Once it has collapsed the picture stays gone until the feed comes back.
-     Without this the video springs back to full size the moment the
-     animation ends and the whole effect reads as a glitch. */
+  /* The picture stays gone until the feed comes back. Without this the video
+     is still sitting there at full brightness behind a finished animation. */
   .video-wrap.crt-dark video { opacity: 0; }
+
+  /* The notice arrives only once the screen is actually dark -- see
+     playCrtOff(). Announcing "switched off" over a picture that is still
+     collapsing would be describing a state that has not arrived yet. */
+  .hide-overlay { opacity: 0; transition: opacity 420ms ease; }
+  .hide-overlay.lit { opacity: 1; }
 
   .hide-overlay {
     position: absolute; inset: 0;
@@ -698,6 +727,10 @@
     <div class="switch-overlay" id="switchOverlay">
       <canvas class="switch-static" id="switchStatic"></canvas>
     </div>
+    <div class="crt-stage" id="crtStage">
+      <canvas id="crtCanvas"></canvas>
+      <div class="crt-beam"></div>
+    </div>
     <div class="hide-overlay" id="hideOverlay">
       <div class="hide-title">No signal</div>
       <div class="hide-sub">The camera is switched off</div>
@@ -1053,10 +1086,14 @@
   // is no timer to read, so nothing has to predict how long the switch takes.
   var NOISE_W = 224, NOISE_H = 126;
 
-  function drawStatic() {
-    var ctx = switchStatic.getContext('2d');
-    if (switchStatic.width !== NOISE_W) {
-      switchStatic.width = NOISE_W; switchStatic.height = NOISE_H;
+  function drawStatic() { drawStaticInto(switchStatic); }
+
+  // Same snow, any canvas. The switch cover animates it frame by frame; the
+  // CRT power-off needs exactly one frame of it to collapse.
+  function drawStaticInto(target) {
+    var ctx = target.getContext('2d');
+    if (target.width !== NOISE_W) {
+      target.width = NOISE_W; target.height = NOISE_H;
     }
     var img = ctx.createImageData(NOISE_W, NOISE_H);
     var d = img.data;
@@ -1183,6 +1220,41 @@
 
   var hideOverlay = document.getElementById('hideOverlay');
   var videoWrap   = document.getElementById('videoContainer');
+  var crtStage    = document.getElementById('crtStage');
+  var crtCanvas   = document.getElementById('crtCanvas');
+
+  // Snow -> white line -> dot -> black, then the notice fades in.
+  //
+  // The order matters and is the whole point: the message says the camera is
+  // switched off, so it must not appear until the screen actually IS off.
+  // Fading it in over a collapsing picture would be describing a state that
+  // has not arrived.
+  function playCrtOff(instant) {
+    if (instant) {
+      crtStage.className = 'crt-stage';
+      videoWrap.classList.add('crt-dark');
+      hideOverlay.classList.add('visible');
+      requestAnimationFrame(function () { hideOverlay.classList.add('lit'); });
+      return;
+    }
+    // One frame of snow to collapse. The switch cover is cancelled for Hide,
+    // so this canvas paints its own rather than borrowing a running one.
+    drawStaticInto(crtCanvas);
+    crtStage.className = 'crt-stage on';
+    hideOverlay.classList.remove('lit', 'visible');
+    // Two frames before firing: the browser has to have painted the snow,
+    // or the animation starts from an empty canvas and there is nothing to
+    // see collapsing.
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { crtStage.classList.add('fire'); });
+    });
+    setTimeout(function () {
+      videoWrap.classList.add('crt-dark');
+      crtStage.className = 'crt-stage';          // dark now; stage retires
+      hideOverlay.classList.add('visible');
+      requestAnimationFrame(function () { hideOverlay.classList.add('lit'); });
+    }, 820);
+  }
   // null until the first mode is known, so the first paint can tell "opened
   // on a hidden feed" from "just switched off in front of me".
   var wasHidden   = null;
@@ -1204,18 +1276,17 @@
     var hidingNow = (feedMode === 'hide');
     if (hidingNow !== wasHidden) {
       if (hidingNow) {
-        if (wasHidden === null) {
-          videoWrap.classList.add('crt-dark');       // already off on arrival
-        } else {
-          videoWrap.classList.add('crt-off');
-          setTimeout(function () { videoWrap.classList.add('crt-dark'); }, 600);
-        }
+        if (wasHidden === null) playCrtOff(true);   // already off on arrival
+        else                    playCrtOff(false);
       } else {
-        videoWrap.classList.remove('crt-off', 'crt-dark');
+        crtStage.className = 'crt-stage';
+        videoWrap.classList.remove('crt-dark');
+        hideOverlay.classList.remove('lit', 'visible');
       }
       wasHidden = hidingNow;
+    } else if (hidingNow) {
+      hideOverlay.classList.add('visible');
     }
-    hideOverlay.classList.toggle('visible', feedMode === 'hide');
     // Foveal Layer is a modifier on CV Mode, not a mode of its own -- same
     // pattern as B&W was on Blur before the CV Mode pivot. Greyed out
     // (disabled) anywhere but CV Mode, same as B&W's precedent.
@@ -1626,7 +1697,13 @@
   }
 
   function paintListen() { paintTransport(); paintMute(); }
-  try { roomAudio.muted = localStorage.getItem('livecamMuted') !== '0'; } catch (e) { roomAudio.muted = true; }
+  // Default UNMUTED. The <video> defaults muted because it autoplays and
+  // browsers require that; this element never autoplays -- it only ever
+  // starts on a click -- so there is no policy reason to start it silent,
+  // and every reason not to: pressing play on a muted element does exactly
+  // nothing you can hear, which reads as "the node has no sound" rather
+  // than "you are muted". The key is right there if you want silence.
+  try { roomAudio.muted = localStorage.getItem('livecamMuted') === '1'; } catch (e) { roomAudio.muted = false; }
   try {
     var _sv = localStorage.getItem('livecamVolume');
     var _vs = document.getElementById('volSlider');
