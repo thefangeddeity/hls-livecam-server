@@ -32,6 +32,14 @@
     --shadow: 0 1px 3px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.6);
     --radius: 12px;
     --radius-sm: 8px;
+    /* A dead tube is never actually black -- the phosphor layer is a
+       slightly green-grey mirror, so a switched-off screen sits a little
+       above the black around it and carries a faint cast of whatever light
+       is in the room. Barely visible in a dark room; see the light-theme
+       override for the version with a lit room in front of it. */
+    --crt-off:     #070f0d;
+    --crt-sheen-a: rgba(168,222,206,.05);
+    --crt-sheen-b: rgba(168,222,206,.02);
   }
 
   /* Derived light theme (run-8/9 §5) -- not in the ratified design system,
@@ -51,6 +59,9 @@
     --text-muted: #8e8e93;
     --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 14px rgba(0,0,0,0.12);
     /* --accent/--danger/--success/--warn intentionally absent: unchanged */
+    --crt-off:     #16241f;
+    --crt-sheen-a: rgba(253,246,227,.11);
+    --crt-sheen-b: rgba(253,246,227,.045);
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -320,6 +331,20 @@
   }
   .btn:hover { background: var(--bg); border-color: var(--text-muted); }
   .btn:active { transform: scale(0.98); }
+  /* Every control on this panel is a physical object with its own lamp, so
+     the browser's default blue focus ring -- platform furniture that means
+     nothing on an instrument panel -- is replaced with the same green a
+     pressed key lights up. Outline rather than box-shadow so a pressed key
+     keeps its depth. :focus-visible so a mouse click doesn't ring it, only
+     keyboard/switch-control focus. .fs-btn lives in the video area, outside
+     .sidebar-scroll's --led-on scope, so it uses the equivalent global
+     --success token instead -- same colour, valid everywhere. */
+  .btn:focus-visible, .btn-tiny:focus-visible, .transport:focus-visible,
+  .vol:focus-visible, .mute-key:focus-visible, .buzz:focus-visible,
+  .theme-key:focus-visible, .chk input:focus-visible + .box {
+    outline: 2px solid var(--led-on); outline-offset: 1px;
+  }
+  .fs-btn:focus-visible { outline: 2px solid var(--success); outline-offset: 1px; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   .btn.dark-btn { background: #1c1c1e; border-color: #3a3a3c; color: #ebebf5; }
@@ -507,6 +532,18 @@
   /* Once collapsed, the tube stays dark until it is switched back on. Without
      this the element springs back the moment the animation is removed. */
   .video-wrap.crt-dark video { opacity: 0; }
+  /* What the operator actually looks at for as long as the camera stays off.
+     Flat #000 read as a hole in the page rather than a switched-off tube --
+     a dead phosphor screen is a lifted, faintly green-grey ground with a
+     cast of ambient light, not true black. Sheen sits on top of the shared
+     ground so retiring the power-off animation onto this does not read as a
+     step. */
+  .video-wrap.crt-dark {
+    background:
+      radial-gradient(130% 90% at 24% 4%, var(--crt-sheen-a), transparent 58%),
+      linear-gradient(168deg, var(--crt-sheen-b) 0%, transparent 46%),
+      var(--crt-off);
+  }
 
   /* The dot that lingers after the scanline collapses. */
   .video-wrap.crt-off::after,
@@ -1092,8 +1129,8 @@
     <!-- A strip of the same tube the panels use. Version is substituted at
          render time from `git describe`; hovering gives the build stamp and
          commit, which is what distinguishes two installs of the same tag. -->
-    <span class="hdr-vfd" title="mac-v1.7.1">
-      <span class="vlit">mac-v1.7.1</span><span class="vlit hdr-host" id="hdrHost"></span>
+    <span class="hdr-vfd" title="mac-v1.7.1-2-g1b6f100-dirty · dev · 1b6f100">
+      <span class="vlit">mac-v1.7.1-2-g1b6f100-dirty</span><span class="vlit hdr-host" id="hdrHost"></span>
     </span>
   </div>
   <div class="status-bar">
@@ -1390,7 +1427,7 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION  = 'mac-v1.7.1';
+  var BUILD_VERSION  = 'mac-v1.7.1-2-g1b6f100-dirty';
   var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
@@ -1705,6 +1742,13 @@
         if (feedModeFirstPoll) {
           feedModeFirstPoll = false;
           applyFeedModeVisual(feedMode, false);   // no animation on arrival
+          /* The stream starts here, not unconditionally at page load. Until
+             this first response lands, feedMode is only a client-side guess
+             ('show') -- starting hls.js against that guess raced the real
+             mode and could briefly show or connect against the wrong one.
+             If the fetch fails (server not up yet), feedModeFirstPoll stays
+             true and this fires on whichever retry of the 3s poll succeeds. */
+          initHLS();
         }
       });
   }
@@ -2128,7 +2172,8 @@
     if (e.key === 'Escape') { cancelEdit(); }
   });
 
-  initHLS();
+  // initHLS() is NOT called here. It fires from pollFeedMode()'s first
+  // response, once the server's real feed mode is known -- see there.
 </script>
 
 <script>
