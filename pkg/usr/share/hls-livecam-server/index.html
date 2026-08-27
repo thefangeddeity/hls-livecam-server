@@ -985,21 +985,26 @@
           </div>
         </div>
         <div class="pdiv"></div>
+        <!-- The row reads as a privacy ladder, not a radio group (PM):
+             Show gives the room away, CV redraws it, Blur refuses it. Blur
+             is still a modifier, so it can sit pressed alongside Show or CV
+             -- "showing, blurred" is a real state and the row says so. -->
         <div class="btnrow">
           <button class="pbtn" id="showBtn" onclick="setFeedMode('show')">Show</button>
           <button class="pbtn" id="cvBtn" onclick="setFeedMode('cv')">CV</button>
-          <button class="pbtn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
+          <button class="pbtn" id="blurBtn" onclick="clickBlur()"
+                  title="Mosaic the picture -- privacy over whatever the feed is showing">Blur</button>
         </div>
-        <!-- RELOAD is an action, BLUR latches: same size, same row, the
+        <!-- RELOAD is an action, HIDE latches: same size, same row, the
              difference carried by the lamp rather than by the shape. -->
         <div class="modemrow even">
           <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
             <span class="cap2">RELOAD</span>
           </button>
-          <button class="modem" id="blurBtn" onclick="clickBlur()"
-                  title="Mosaic the picture -- privacy over whatever the feed is showing">
-            <span class="bulb" id="blurLamp"></span>
-            <span class="cap2">BLUR</span>
+          <button class="modem" id="hideBtn" onclick="setFeedMode('hide')"
+                  title="Switch the camera off -- publishes nothing but the notice">
+            <span class="bulb" id="hideLamp"></span>
+            <span class="cap2">HIDE</span>
           </button>
         </div>
         <!-- Foveal is a checkbox again (PM), under the keys the way Mute
@@ -1528,7 +1533,13 @@
   function updateFeedButtons() {
     showBtn.className = 'pbtn' + (feedMode === 'show' ? ' pressed' : '');
     cvBtn.className   = 'pbtn' + (feedMode === 'cv'   ? ' pressed' : '');
-    hideBtn.className = 'pbtn' + (feedMode === 'hide' ? ' pressed' : '');
+    // HIDE is a modem key now, beside RELOAD: pressed with its lamp lit,
+    // the same language MUTE speaks. It is still a feed mode, not a
+    // modifier -- the lamp says "the camera is off", not "an effect is on".
+    var hidden = (feedMode === 'hide');
+    hideBtn.className = 'modem' + (hidden ? ' pressed' : '');
+    var hl = document.getElementById('hideLamp');
+    if (hl) hl.className = 'bulb' + (hidden ? ' on' : '');
     var iCv = document.getElementById('indCv');
     if (iCv) iCv.className = (feedMode === 'cv') ? 'on' : '';
     // Hide publishes static, which on its own is indistinguishable from a
@@ -1618,12 +1629,9 @@
   var blurOn = false;
   function paintBlur() {
     var b = document.getElementById('blurBtn');
-    var l = document.getElementById('blurLamp');
     if (!b) return;
     b.disabled = !feedModeKnown || feedMode === 'hide';
-    var on = blurOn && !b.disabled;
-    b.className = 'modem' + (on ? ' pressed' : '');
-    if (l) l.className = 'bulb' + (on ? ' on' : '');
+    b.className = 'pbtn' + (blurOn && !b.disabled ? ' pressed' : '');
   }
   function clickBlur() {
     if (!feedModeKnown || feedMode === 'hide') return;
