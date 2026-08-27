@@ -1,6 +1,6 @@
 # PENDING — Linux branch, and what other branches should check
 
-**As of 2026-08-26, commit `73e783f` on `main`, tagged `v6.0.0`, on the AUR, and installed on both Linux nodes.**
+**As of 2026-08-27, commit `dc3e70c`, tagged `v6.0.7`, on the AUR, installed on both nodes.**
 **From:** tanzania · **Repo:** `github.com:thefangeddeity/hls-livecam-server`
 
 Everything below is in git **and shipped**: tagged `v6.0.0`, pushed to the
