@@ -661,6 +661,11 @@ class CVProcessor:
         self._foveal_pad = max(0.0, _read_float(denv, 'CV_FOVEAL_PAD'))
         self._foveal_evidence_boost = _read_float(denv, 'CV_FOVEAL_EVIDENCE_BOOST')
         self._fg_mask = None  # HxW uint8, most recent MOG2 foreground mask
+        # When each faculty was last OBSERVED doing its job, not when it was
+        # configured to. A panel lamp fed by a config flag says the operator
+        # asked for something; fed by these it says the thing happened.
+        self._mog2_at = 0.0   # last time MOG2 produced a mask
+        self._crop_at = 0.0   # last time the gate produced a crop box
 
         # Foveal Temporal Accumulation (CV Mode Phase 2). process() (the
         # writer-loop thread) publishes into this single slot every call --
@@ -838,6 +843,21 @@ class CVProcessor:
         if self._detect_enabled and self._detector is not None:
             threading.Thread(target=self._detection_loop, daemon=True).start()
 
+    def state(self, fresh=2.0):
+        """What each faculty is actually doing, for the panel's lamps.
+
+        'fresh' is how recently a stage must have run to count as running --
+        the writer loop is the clock here, so a stalled pipeline goes dark
+        by itself rather than leaving lamps lit over a frozen picture.
+        """
+        now = time.time()
+        return {
+            'mog2':  (now - self._mog2_at) < fresh,
+            'gated': (now - self._crop_at) < fresh,
+            'scene_registered': bool(getattr(self, '_scene_registered', False)),
+            'scene_stale':      bool(getattr(self, '_scene_stale', False)),
+        }
+
     def set_foveal(self, enabled):
         """Live toggle for the Foveal Layer, called every writer-loop
         iteration with the checkbox's current state -- same pattern as feed
@@ -882,6 +902,7 @@ class CVProcessor:
                 fg = cv2.resize(fg, (frame.shape[1], frame.shape[0]),
                                 interpolation=cv2.INTER_NEAREST)
             self._fg_mask = fg
+            self._mog2_at = time.time()
             t['mog2'] = time.perf_counter() - t_mog
         else:
             self._fg_mask = None
@@ -898,6 +919,8 @@ class CVProcessor:
                     if self._foveal_enabled and self._fg_mask is not None
                     else None)
         with self._detect_slot_lock:
+            if crop_box is not None:
+                self._crop_at = time.time()
             self._detect_slot = (frame, crop_box, self._fg_mask)
 
         # Sharpie discards the photo, so everything that exists to improve the

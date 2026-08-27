@@ -936,6 +936,24 @@ def feed_mode_post():
     _write_feed_mode(new_mode)
     return new_mode, 200
 
+@app.route('/api/cv-state', methods=['GET'])
+def cv_state_get():
+    """What the CV faculties are doing, measured rather than configured.
+
+    Absent processor, or a mode that is not CV, is reported as everything
+    off -- never as unknown-but-probably-fine.
+    """
+    proc = _cv_proc
+    if proc is None or _read_feed_mode() != 'cv':
+        return _json.dumps({'mog2': False, 'gated': False,
+                            'scene_registered': False, 'scene_stale': False}), 200, \
+               {'Content-Type': 'application/json'}
+    try:
+        return _json.dumps(proc.state()), 200, {'Content-Type': 'application/json'}
+    except Exception as e:
+        print(f'broadcast-api: cv-state failed: {e}', flush=True)
+        abort(503)
+
 @app.route('/api/talk', methods=['GET'])
 def talk_get():
     with _talk_lock:

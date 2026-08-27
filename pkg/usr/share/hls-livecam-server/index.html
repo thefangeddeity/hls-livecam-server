@@ -1113,14 +1113,22 @@
             <span class="glab glab-l">FPS</span>
             <span class="glab glab-r"></span>
           </div>
-          <!-- What the pipeline is actually doing to the picture, in the
-               same lamp language the stage column upstairs uses: lit is
-               measured and running, dark is off or unknown, red is a stage
-               that was measured and failed. -->
+          <!-- WAYS OF SEEING, and only those. CV is not one: it is the mode
+               that switches seeing on, and the key one row up already says
+               so by being pressed. A lamp repeating it would dilute what
+               this column means and duplicate state the panel already
+               carries. What belongs here is a faculty that is either
+               engaged or not: the flat scene model, and foveal gating.
+               Depth joins them when depth exists. -->
+          <!-- Ordered by how much work the faculty is, lightest first (PM):
+               background subtraction, then the gate built on top of it, then
+               the flat scene model, then depth. Reading down the column is
+               reading up the ladder of seeing. -->
           <div class="leds analysis">
-            <div class="led" id="ledCv"><span class="bulb"></span><span class="n">CV</span></div>
-            <div class="led" id="ledScene2d"><span class="bulb"></span><span class="n">2D</span></div>
-            <div class="led" id="ledFov"><span class="bulb"></span><span class="n">FOV</span></div>
+            <div class="led" id="ledMog2" title="Background model producing a foreground mask"><span class="bulb"></span><span class="n">MOG2</span></div>
+            <div class="led" id="ledFov" title="Detection gated to the moving region"><span class="bulb"></span><span class="n">FOV</span></div>
+            <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary"><span class="bulb"></span><span class="n">2D</span></div>
+            <div class="led" id="ledScene3d" title="Depth -- not implemented on this branch"><span class="bulb"></span><span class="n">3D</span></div>
           </div>
         </div>
         <!-- Foveal belongs to CV, so it sits directly under it, the way
@@ -1716,19 +1724,27 @@
   pollPipeline();
   setInterval(function() { if (!document.hidden) pollPipeline(); }, 4000);
 
-  // CV: the render is running. 2D: the flat scene model -- homography plus
-  // its region dictionary -- registered and usable, red when it has gone
-  // stale, dark when the node has none. FOV: foveal gating on. There is no
-  // 3D lamp because there is no 3D: registration is homography-only and the
-  // multi-view work was scoped and never built. A lamp for a stage that
-  // cannot exist yet would be the panel's one unforgivable lie.
+  // 2D: the flat scene model -- homography plus its region dictionary --
+  // registered and usable, red when it has gone stale, dark when the node
+  // has none. FOV: foveal gating engaged. Both are ways of seeing, which is
+  // the whole membership rule for this column.
+  //
+  // 3D is present and permanently dark (PM). Depth is not implemented:
+  // registration is homography-only and the multi-view work was scoped in
+  // Phase 3 and never built. Dark is the correct reading for it under this
+  // panel's own rule -- red is measured-and-failed, dark is not running --
+  // and having the socket sit there names the gap instead of hiding it.
+  // Nothing sets this lamp. The day depth lands, it will.
   function paintAnalysis() {
     function set(id, state) {
       var el = document.getElementById(id);
       if (el) el.className = 'led' + (state === 'ok' ? ' on' : state === 'down' ? ' down' : '');
     }
-    set('ledCv',      feedModeKnown && feedMode === 'cv' ? 'ok' : '');
-    set('ledFov',     (feedMode === 'cv' && fovealCheck && fovealCheck.checked) ? 'ok' : '');
+    // Measured, not configured: cvState comes from the processor saying
+    // what it did in the last couple of seconds. A stalled pipeline puts
+    // these out by itself rather than leaving them lit over a frozen frame.
+    set('ledMog2',    cvState.mog2  ? 'ok' : '');
+    set('ledFov',     cvState.gated ? 'ok' : '');
     set('ledScene2d', sceneState === 'registered' ? 'ok'
                     : sceneState === 'stale'      ? 'down' : '');
   }
@@ -1871,6 +1887,15 @@
   // The scene row was dropped from this panel, so this variable is now the
   // only thing holding what the node said -- the 2D lamp reads it.
   var sceneState = '';
+  var cvState = { mog2: false, gated: false };
+  function pollCvState() {
+    fetch('/api/cv-state', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j) { cvState = j; paintAnalysis(); } })
+      .catch(function () {});
+  }
+  setInterval(function () { if (!document.hidden) pollCvState(); }, 2000);
+  pollCvState();
   function applySceneState(state) {
     sceneState = state;
     paintAnalysis();
