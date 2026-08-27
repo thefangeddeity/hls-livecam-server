@@ -985,32 +985,34 @@
           </div>
         </div>
         <div class="pdiv"></div>
-        <!-- The row reads as a privacy ladder, not a radio group (PM):
-             Show gives the room away, CV redraws it, Blur refuses it. Blur
-             is still a modifier, so it can sit pressed alongside Show or CV
-             -- "showing, blurred" is a real state and the row says so. -->
+        <!-- Three degrees of one question -- how much of the room goes
+             out -- so they share an exclusive row: clear, mosaicked, off.
+             Blur is a server-side modifier underneath, but the panel drives
+             it as a picture state, because a key sitting in an exclusive
+             row has to behave like one. -->
         <div class="btnrow">
-          <button class="pbtn" id="showBtn" onclick="setFeedMode('show')">Show</button>
-          <button class="pbtn" id="cvBtn" onclick="setFeedMode('cv')">CV</button>
-          <button class="pbtn" id="blurBtn" onclick="clickBlur()"
-                  title="Mosaic the picture -- privacy over whatever the feed is showing">Blur</button>
+          <button class="pbtn" id="showBtn" onclick="setPicture('show')">Show</button>
+          <button class="pbtn" id="blurBtn" onclick="setPicture('blur')"
+                  title="Mosaic the picture -- the room is there but not legible">Blur</button>
+          <button class="pbtn" id="hideBtn" onclick="setPicture('hide')"
+                  title="Switch the camera off -- publishes nothing but the notice">Hide</button>
         </div>
-        <!-- RELOAD is an action, HIDE latches: same size, same row, the
-             difference carried by the lamp rather than by the shape. -->
+        <!-- CV Mode is not a fourth degree of that question, it is a
+             different answer: the room redrawn rather than shown or
+             withheld. RELOAD is an action, CV MODE latches -- same size,
+             same row, the difference carried by the lamp. -->
         <div class="modemrow even">
           <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
             <span class="cap2">RELOAD</span>
           </button>
-          <button class="modem" id="hideBtn" onclick="setFeedMode('hide')"
-                  title="Switch the camera off -- publishes nothing but the notice">
-            <span class="bulb" id="hideLamp"></span>
-            <span class="cap2">HIDE</span>
+          <button class="modem" id="cvBtn" onclick="setPicture('cv')"
+                  title="Computer-vision render -- the room redrawn, not photographed">
+            <span class="bulb" id="cvLamp"></span>
+            <span class="cap2">CV MODE</span>
           </button>
         </div>
-        <!-- Foveal is a checkbox again (PM), under the keys the way Mute
-             buzzes sits under the audio keys. It is a setting, not an
-             action: as a full modem key it read like a fourth feed mode,
-             which it is not. -->
+        <!-- Foveal belongs to CV, so it sits directly under it, the way
+             Mute buzzes sits under the audio keys. A setting, not an action. -->
         <div class="modemrow">
           <label class="chk" id="fovealChk"><input type="checkbox" id="fovealCheck" onchange="clickFoveal()"><span class="box"></span><span class="eng">Foveal layer</span></label>
         </div>
@@ -1105,6 +1107,7 @@
   var liveInd      = document.getElementById('liveIndicator');
   var darkOverlay  = document.getElementById('darkOverlay');
   var showBtn      = document.getElementById('showBtn');
+  var blurBtn      = document.getElementById('blurBtn');
   var cvBtn        = document.getElementById('cvBtn');
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
@@ -1531,15 +1534,20 @@
   var wasHidden   = null;
 
   function updateFeedButtons() {
-    showBtn.className = 'pbtn' + (feedMode === 'show' ? ' pressed' : '');
-    cvBtn.className   = 'pbtn' + (feedMode === 'cv'   ? ' pressed' : '');
-    // HIDE is a modem key now, beside RELOAD: pressed with its lamp lit,
-    // the same language MUTE speaks. It is still a feed mode, not a
-    // modifier -- the lamp says "the camera is off", not "an effect is on".
-    var hidden = (feedMode === 'hide');
-    hideBtn.className = 'modem' + (hidden ? ' pressed' : '');
-    var hl = document.getElementById('hideLamp');
-    if (hl) hl.className = 'bulb' + (hidden ? ' on' : '');
+    // One row, one selection. Blur is show-with-the-modifier-on, so Show is
+    // lit only when the picture is actually clear -- otherwise both would
+    // sit pressed and the row would be telling two stories.
+    var clear = (feedMode === 'show' && !blurOn);
+    showBtn.className = 'pbtn' + (clear ? ' pressed' : '');
+    blurBtn.className = 'pbtn' + (feedMode === 'show' && blurOn ? ' pressed' : '');
+    hideBtn.className = 'pbtn' + (feedMode === 'hide' ? ' pressed' : '');
+    // CV MODE is a modem key beside RELOAD: pressed with its lamp lit, the
+    // same language MUTE speaks. The lamp says the render is running, not
+    // merely selected.
+    var cving = (feedMode === 'cv');
+    cvBtn.className = 'modem' + (cving ? ' pressed' : '');
+    var cl = document.getElementById('cvLamp');
+    if (cl) cl.className = 'bulb' + (cving ? ' on' : '');
     var iCv = document.getElementById('indCv');
     if (iCv) iCv.className = (feedMode === 'cv') ? 'on' : '';
     // Hide publishes static, which on its own is indistinguishable from a
@@ -1628,23 +1636,40 @@
   // Hide has nothing left to cover, so the key goes dark there.
   var blurOn = false;
   function paintBlur() {
-    var b = document.getElementById('blurBtn');
-    if (!b) return;
-    b.disabled = !feedModeKnown || feedMode === 'hide';
-    b.className = 'pbtn' + (blurOn && !b.disabled ? ' pressed' : '');
+    if (!blurBtn) return;
+    blurBtn.className = 'pbtn' + (feedMode === 'show' && blurOn ? ' pressed' : '');
+    showBtn.className = 'pbtn' + (feedMode === 'show' && !blurOn ? ' pressed' : '');
   }
-  function clickBlur() {
-    if (!feedModeKnown || feedMode === 'hide') return;
-    blurOn = !blurOn;
-    paintBlur();                       // answer the press now, reconcile below
-    fetch('/api/blur-mode', {
+  function postBlur(want) {
+    return fetch('/api/blur-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
-      body: blurOn ? 'true' : 'false'
+      body: want ? 'true' : 'false'
     })
     .then(function(r) { return r.ok ? r.text() : null; })
     .catch(function() { return null; })
-    .then(function(v) { if (v !== null) { blurOn = v.trim() === 'true'; } paintBlur(); });
+    .then(function(v) { if (v !== null) blurOn = v.trim() === 'true'; paintBlur(); });
+  }
+
+  // Every key in the picture row and CV Mode come through here, so the four
+  // of them cannot disagree about what is selected.
+  //
+  // Blur goes ON before the mode changes and OFF after it: whichever way the
+  // operator is moving, the frame in between is the more private of the two
+  // states, never the less. That ordering is the whole reason this is one
+  // function rather than two independent controls.
+  function setPicture(which) {
+    if (!feedModeKnown) return;
+    var wantBlur = (which === 'blur');
+    var wantMode = (which === 'blur') ? 'show' : which;
+    if (wantMode === feedMode && wantBlur === blurOn) return;
+    if (wantBlur && !blurOn) {
+      postBlur(true).then(function() { if (wantMode !== feedMode) setFeedMode(wantMode); });
+      return;
+    }
+    if (wantMode !== feedMode) setFeedMode(wantMode);
+    if (!wantBlur && blurOn) postBlur(false);
+    else paintBlur();
   }
   function pollBlur() {
     fetch('/api/blur-mode', { cache: 'no-store' })
