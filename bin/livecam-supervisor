@@ -34,6 +34,7 @@ STATE     = P.state_dir()
 LOGS      = P.log_dir()
 LOCK_DIR  = os.path.join(STATE, "supervisor.lock")
 LOCK_PID  = os.path.join(LOCK_DIR, "pid")
+LOCK_START = os.path.join(LOCK_DIR, "start")
 MMTX_PID  = os.path.join(STATE, "mediamtx.pid")
 API_PID   = os.path.join(STATE, "broadcast-api.pid")
 MMTX_YML  = os.path.join(STATE, "mediamtx.yml")
@@ -69,6 +70,67 @@ def open_log(name):
 
 # ── Singleton lock ───────────────────────────────────────────────
 
+def _create_time_ms(pid):
+    """Process start time in integer ms, or None if it cannot be read.
+
+    Unlike a PID, this is unique per boot -- the OS hands out PID numbers
+    from a small pool that resets on every reboot, so a PID recorded before
+    a restart is a coin flip away from naming a completely different
+    process afterwards. Integer ms because pidfiles are stored through the
+    existing int-only helpers, not because sub-ms precision matters.
+    """
+    try:
+        import psutil
+        return int(psutil.Process(pid).create_time() * 1000)
+    except Exception:
+        return None
+
+
+def write_owned_pidfile(pidfile, pid):
+    """Record a PID plus its start time, so this file can later prove which
+    process wrote it rather than merely that some process now has that PID.
+
+    Every pidfile this supervisor writes -- its own lock, mediamtx's,
+    broadcast-api's -- gets read back across reboots and reinstalls, and a
+    bare PID cannot survive that: PIDs are reused from a small per-boot pool,
+    so a number recorded before a restart is quite likely reassigned to some
+    unrelated process by the time anything reads it back. Observed directly,
+    twice, on one reboot: the supervisor's own lock file named pid 515,
+    which by the next boot was contactsd, not this app -- so every relaunch
+    read "still running" and exited immediately. mediamtx.pid named 517,
+    which had become spindump -- so the supervisor concluded mediamtx was
+    already up and never started it, silently, no log line at all. Neither
+    process ever came back until both pidfiles were removed by hand.
+    """
+    P.write_pidfile(pidfile, pid)
+    start = _create_time_ms(pid)
+    start_file = pidfile + '.start'
+    if start is not None:
+        P.write_pidfile(start_file, start)
+    elif os.path.exists(start_file):
+        os.remove(start_file)
+
+
+def pid_is_owner(pidfile):
+    """Is the process this pidfile names actually the one that wrote it?
+
+    pid_alive() alone answers "does a live process occupy this PID", which
+    a reused PID satisfies just as well as the real owner. This cross-checks
+    the recorded start time against write_owned_pidfile()'s companion file --
+    see its docstring for the reboot failure this exists to survive. Older
+    pidfiles (or a psutil-less run) have no companion file to check; that
+    ambiguity is resolved in favour of the old bare-liveness behaviour rather
+    than inventing a false reading either way.
+    """
+    pid = P.read_pidfile(pidfile)
+    if not pid or not P.pid_alive(pid):
+        return False
+    recorded = P.read_pidfile(pidfile + '.start')
+    if recorded is None:
+        return True
+    return _create_time_ms(pid) == recorded
+
+
 def acquire_lock():
     """Atomic-mkdir singleton. Reclaims the lock if the recorded owner is gone.
 
@@ -82,19 +144,21 @@ def acquire_lock():
         os.mkdir(LOCK_DIR)
     except FileExistsError:
         owner = P.read_pidfile(LOCK_PID)
-        if owner and owner != os.getpid() and P.pid_alive(owner):
+        if owner != os.getpid() and pid_is_owner(LOCK_PID):
             log(f"another supervisor is already running (pid {owner}); exiting")
             return False
         log("reclaiming stale supervisor lock")
         try:
             if os.path.exists(LOCK_PID):
                 os.remove(LOCK_PID)
+            if os.path.exists(LOCK_PID + '.start'):
+                os.remove(LOCK_PID + '.start')
             os.rmdir(LOCK_DIR)
             os.mkdir(LOCK_DIR)
         except Exception:
             log("could not reclaim lock; exiting")
             return False
-    P.write_pidfile(LOCK_PID, os.getpid())
+    write_owned_pidfile(LOCK_PID, os.getpid())
     return True
 
 
@@ -102,6 +166,8 @@ def release_lock():
     try:
         if os.path.exists(LOCK_PID):
             os.remove(LOCK_PID)
+        if os.path.exists(LOCK_PID + '.start'):
+            os.remove(LOCK_PID + '.start')
         os.rmdir(LOCK_DIR)
     except Exception:
         pass
@@ -175,7 +241,7 @@ def venv_python():
 
 
 def component_running(pidfile):
-    return P.pid_alive(P.read_pidfile(pidfile))
+    return pid_is_owner(pidfile)
 
 
 def start_mediamtx(cfg):
@@ -184,7 +250,7 @@ def start_mediamtx(cfg):
                             stdin=subprocess.DEVNULL,
                             stdout=open_log("mediamtx.log"),
                             stderr=subprocess.STDOUT)
-    P.write_pidfile(MMTX_PID, proc.pid)
+    write_owned_pidfile(MMTX_PID, proc.pid)
     _children.add(proc)
     log(f"started mediamtx (pid {proc.pid})")
     return proc
@@ -195,7 +261,7 @@ def start_api():
                             stdin=subprocess.DEVNULL,
                             stdout=open_log("broadcast-api.log"),
                             stderr=subprocess.STDOUT)
-    P.write_pidfile(API_PID, proc.pid)
+    write_owned_pidfile(API_PID, proc.pid)
     _children.add(proc)
     log(f"started broadcast-api (pid {proc.pid})")
     return proc
@@ -203,13 +269,14 @@ def start_api():
 
 def stop_component(pidfile, name):
     pid = P.read_pidfile(pidfile)
-    if pid and P.pid_alive(pid):
+    if pid and pid_is_owner(pidfile):
         log(f"stopping {name} (pid {pid})")
         P.terminate(pid)
-    try:
-        os.remove(pidfile)
-    except Exception:
-        pass
+    for f in (pidfile, pidfile + '.start'):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
 
 
 def stop_all():
