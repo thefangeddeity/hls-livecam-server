@@ -499,11 +499,29 @@
   .modemrow.even .modem.wide { justify-content: center; padding: 0 8px; }
   .modem.wide { flex: 1 1 auto; min-width: 0; justify-content: flex-start;
     padding: 0 11px; gap: 9px; }
-  /* RELOAD stands beside the trace, so it is the trace's height. Two things
-     of different heights sharing a row read as two rows that failed to line
-     up -- and on real equipment a key and the display next to it are set
-     into the same cutout. */
-  #reloadBtn { height: 42px; }
+  /* A pinhole reset: a hole in the housing with the switch at the bottom of
+     it. The recess is the whole effect -- shadow around the rim, the plunger
+     catching a little light in the middle -- so it reads as something set
+     INTO the metal rather than sitting on it. Pressed, the plunger drops and
+     the light on it goes out. */
+  .reset { width: 17px; height: 17px; flex: 0 0 auto; padding: 0; border-radius: 50%;
+    cursor: pointer; font-family: inherit;
+    background: radial-gradient(circle at 50% 42%,#141416 0%,#101012 58%,#1c1c1f 100%);
+    border: 1px solid #35353b;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,.85), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
+    display: flex; align-items: center; justify-content: center; }
+  .reset .pin { width: 5px; height: 5px; border-radius: 50%;
+    background: linear-gradient(180deg,#3a3a40,#2a2a2e);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 1px 1px rgba(0,0,0,.6); }
+  .reset:active { box-shadow: inset 0 3px 4px rgba(0,0,0,.9); }
+  .reset:active .pin { background: #232327; box-shadow: inset 0 1px 2px rgba(0,0,0,.8); }
+  .rstlab { font-size: 10px; letter-spacing: .04em; }
+  html[data-theme="light"] .reset {
+    background: radial-gradient(circle at 50% 42%,#d9d7cc 0%,#e6e4db 58%,#f3f2ec 100%);
+    border-color: #c4c2b6;
+    box-shadow: inset 0 2px 3px rgba(88,110,117,.35), inset 0 -1px 0 rgba(255,255,255,.9), 0 1px 0 rgba(255,255,255,.8); }
+  html[data-theme="light"] .reset .pin { background: linear-gradient(180deg,#fbfaf6,#e4e2d8);
+    box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(88,110,117,.35); }
   .modem.wide .cap2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Engaged is a pressed key with its lamp lit -- the same language as MUTE,
      which is the point: the two things on this panel that LATCH should look
@@ -1081,18 +1099,23 @@
              painting it on the key would put phosphor on housing metal,
              which is the one thing the three materials never do. -->
         <div class="modemrow">
-          <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
-            <span class="cap2">RELOAD</span>
-          </button>
           <div class="fpsglass" id="fpsGlass" title="Frames actually arriving at this viewer, last 60 seconds">
             <canvas id="fpsGraph" width="240" height="42"></canvas>
             <span class="glab glab-l">FPS</span>
-            <span class="glab glab-r">60s</span>
+            <span class="glab glab-r"></span>
           </div>
         </div>
         <!-- Foveal belongs to CV, so it sits directly under it, the way
              Mute buzzes sits under the audio keys. A setting, not an action. -->
+        <!-- The recessed reset every piece of network hardware has: small,
+             out of the way, and deliberately a little awkward, because you
+             press it on purpose. It repairs the feed, which is not a casual
+             act, and it had been sitting at the size of a primary control
+             for no better reason than that there was room. -->
         <div class="modemrow">
+          <button class="reset" id="reloadBtn" onclick="manualReload()"
+                  title="Repair feed -- restarts the stream" aria-label="Repair feed"><span class="pin"></span></button>
+          <span class="eng rstlab">Reset</span>
           <label class="chk" id="fovealChk"><input type="checkbox" id="fovealCheck" onchange="clickFoveal()"><span class="box"></span><span class="eng">Foveal layer</span></label>
         </div>
       </div>
@@ -2270,6 +2293,7 @@
     var cv    = document.getElementById('fpsGraph');
     if (!glass || !cv) return;
     var ctx = cv.getContext('2d');
+    var spanLab = glass.querySelector('.glab-r');
 
     function withAlpha(col, a) {
       var m = /^#([0-9a-f]{6})$/i.exec(col);
@@ -2342,6 +2366,11 @@
       var y0 = pad + ((h - pad - foot) - rows * PITCH) / 2;
       FPS_SAMPLES = cols;
       while (fpsHist.length > cols) fpsHist.shift();
+      // The window is however many columns fit, at one per second -- so the
+      // label reports the grid rather than a number someone typed once. It
+      // said 60s while the strip held eighty-odd the moment RELOAD moved off
+      // this row and the glass got wider.
+      if (spanLab) spanLab.textContent = cols + 's';
 
       function cell(col, row, style, glow) {
         ctx.fillStyle = style;
