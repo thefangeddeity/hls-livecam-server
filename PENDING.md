@@ -497,6 +497,31 @@ for there to be something to clear. And check your **focus ring**: the browser
 supplies its own blue one for free, and it was the last piece of platform
 furniture left on the panel. Focus now picks up the lamp colour.
 
+### The stream must not start before the page knows what it is looking at
+
+The viewer ran `initHLS()` at the foot of its script, on load, against a
+`feedMode` variable that still held its declaration default. Nothing had
+asked the node anything yet. Opening the page on a **hidden** feed therefore
+attached a player, failed, and raised a fault cover over a camera that was
+off exactly as intended — the viewer inventing a problem out of a working
+state.
+
+The first `/api/feed-mode` answer is now the only place the stream starts,
+and the page asks immediately rather than waiting out its first interval.
+Two things fall out of it worth copying:
+
+- `updateFeedButtons()` moved to the same place. Its `wasHidden === null`
+  branch exists precisely to tell "already off on arrival" from "switched
+  off in front of me", and calling it against an assumed mode threw that
+  distinction away.
+- **The HLS lamp goes dark, not red, when nothing is attached.** Arriving on
+  a hidden feed measures nothing, and `down` would be the viewer reporting a
+  fault it never observed. Same rule as always: red is measured-and-failed,
+  dark is unknown or deliberately off.
+
+macOS: check whether your player is created before your first state fetch
+resolves. It is the same shape of bug whatever draws the picture.
+
 ### QUEUED, not built: the letterbox bars need an inner border — and macOS may already have an answer
 
 `object-fit: contain` is settled and stays (see the run-21 note above: `cover`

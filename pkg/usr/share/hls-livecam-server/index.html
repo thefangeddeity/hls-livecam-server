@@ -1591,7 +1591,13 @@
                                     : state === 'down' ? ' down' : '');
     }
     function stage(n) { return (pipeline && pipeline[n]) || ''; }
-    var hls = live ? 'ok' : (pipeline ? 'down' : '');
+    // Red means a stage that was measured and failed. Arriving on a hidden
+    // feed attaches no player at all (see pollFeedMode), so there is nothing
+    // to measure -- and 'down' would be the viewer inventing a fault out of
+    // a camera that is off on purpose. Dark: unknown, not broken.
+    var hls = live ? 'ok'
+            : (!feedModeKnown || feedMode === 'hide') ? ''
+            : (pipeline ? 'down' : '');
     set('ledHlsV', hls); set('ledHlsA', hls);
     set('ledCamera', stage('camera'));
     set('ledMic', stage('mic'));
@@ -1741,23 +1747,51 @@
     });
   }
 
+  // Nothing on this page may act on a mode it has only assumed. `feedMode`
+  // starts at 'show' because a variable needs a value, not because the node
+  // is showing -- until the first poll answers, the page does not know.
+  var feedModeKnown = false;
+
   function pollFeedMode() {
     fetch('/api/feed-mode', { cache: 'no-store' })
       .then(function(r) { return r.ok ? r.text() : null; })
       .catch(function() { return null; })
       .then(function(m) {
-        if (m && m.trim() !== feedMode) {
+        if (!m) return;
+        m = m.trim();
+
+        // First answer: this is where the page learns what it is looking at,
+        // and the only place the stream is allowed to start. Opening on a
+        // hidden feed must not attach a player at all -- the old eager
+        // initHLS() at the foot of the script ran before anyone had asked
+        // the node anything, so a hidden node got a connection attempt, a
+        // failure, and a fault cover for a state that was working exactly as
+        // intended. wasHidden is still null here, so updateFeedButtons()
+        // reads "already off on arrival" and goes straight to dark instead
+        // of replaying a switch-off nobody triggered.
+        if (!feedModeKnown) {
+          feedModeKnown = true;
+          feedMode = m;
+          updateFeedButtons();
+          if (feedMode !== 'hide') initHLS();
+          return;
+        }
+
+        if (m !== feedMode) {
           // A change made by any other operator or viewer. Previously this
           // only relabelled the buttons, so every viewer except the one who
           // clicked saw the feed cut over uncovered. Run the same transition
           // here and the cover becomes universal.
-          feedMode = m.trim();
+          feedMode = m;
           updateFeedButtons();
           coverFor(feedMode);
           setTimeout(reloadStream, 1000);
         }
       });
   }
+  // Ask immediately rather than waiting out the first interval: the page has
+  // no picture and no painted controls until this answers.
+  pollFeedMode();
   setInterval(pollFeedMode, 3000);
 
   // ── HLS ──
@@ -2222,8 +2256,8 @@
     if (e.key === 'Escape') { cancelEdit(); }
   });
 
-  updateFeedButtons();
-  initHLS();
+  // No initHLS() here, and no updateFeedButtons() either. Both used to run
+  // on load against an assumed mode; the first poll does them once it knows.
 </script>
 </body>
 </html>
