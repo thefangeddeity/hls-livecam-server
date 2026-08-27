@@ -576,6 +576,8 @@
   .listen { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
   .listen .cap, .modemrow .cap { font-size: 9.5px; color: var(--emboss-dim); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .modemrow .chk { white-space: nowrap; }
+  /* .chk is display:flex, which beats the hidden attribute on its own. */
+  .chk[hidden] { display: none; }
   .talk { margin-top: 9px; border-radius: 7px; padding: 8px 10px; font-size: 10.5px; letter-spacing: .09em; display: flex; align-items: center; gap: 8px;
     background: linear-gradient(180deg,#26262a,#1e1e21); border: 1px solid #32323a; box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
   /* The message field is a screen, not a form control. It was the last
@@ -1786,9 +1788,15 @@
   // The box is the lamp -- checked lights it, the same treatment every other
   // checkbox on the panel gets. Unavailable is the label going dim, matching
   // Mute buzzes rather than a dead key.
+  // Foveal belongs to CV and to nothing else, so outside CV it is not dimmed,
+  // it is GONE (PM). The row keeps its height either way -- the reset sits on
+  // it -- so the panel does not jump when the mode changes, which is the one
+  // thing hiding a control is usually punished for.
   function paintFoveal() {
     var row = document.getElementById('fovealChk');
-    if (row) row.className = 'chk' + (fovealCheck.disabled ? ' pending' : '');
+    if (!row) return;
+    row.className = 'chk';
+    row.hidden = fovealCheck.disabled;
   }
 
   // The checkbox remains the state; the key is only how you reach it. Kept
