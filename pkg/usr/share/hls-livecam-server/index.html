@@ -420,6 +420,39 @@
   .pbtn:focus:not(:focus-visible), .modem:focus:not(:focus-visible),
   .buzz2:focus:not(:focus-visible) { outline: none; }
 
+  /* Same glass as the readouts above it, at strip proportions. The canvas
+     is sized in CSS pixels and redrawn at device resolution, or the trace
+     would be a soft grey line on a HiDPI screen instead of a lit one. */
+  .fpsglass { position: relative; flex: 1 1 auto; min-width: 0; height: 34px; border-radius: 5px; overflow: hidden;
+    background: linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
+    border: 1px solid #040809; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75); }
+  .fpsglass::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(180deg,rgba(0,0,0,.15) 0 1px,transparent 1px 3px); opacity: .55; }
+  .fpsglass canvas { display: block; width: 100%; height: 100%; }
+
+  /* HIDE is the key you are allowed to hit by accident -- pressing it costs
+     a feed you restore in one click, where the same slip on Show would put a
+     room on a screen. So it gets emphasis, but from the FINISH rather than
+     from colour: a machined chamfer inside the face and a polished sheen
+     across it, the way a critical control on real equipment is turned from
+     the same billet as its neighbours and simply finished differently.
+     Nothing here is a new material. */
+  .pbtn.guarded { position: relative; }
+  .pbtn.guarded::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(115deg,rgba(255,255,255,.075) 0%,rgba(255,255,255,.02) 34%,rgba(255,255,255,0) 55%); }
+  .pbtn.guarded::after { content: ""; position: absolute; inset: 3px; border-radius: 4px; pointer-events: none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.13), inset 0 -1px 0 rgba(0,0,0,.5); }
+  /* Pressed, the chamfer inverts: the light that was catching the top edge
+     now catches the bottom, because the face has gone down. */
+  .pbtn.guarded.pressed::after { box-shadow: inset 0 -1px 0 rgba(255,255,255,.10), inset 0 1px 0 rgba(0,0,0,.55); }
+  .pbtn.guarded.pressed::before { background: linear-gradient(115deg,rgba(255,255,255,.03) 0%,rgba(255,255,255,0) 45%); }
+  html[data-theme="light"] .pbtn.guarded::before {
+    background: linear-gradient(115deg,rgba(255,255,255,.85) 0%,rgba(255,255,255,.25) 32%,rgba(255,255,255,0) 56%); }
+  html[data-theme="light"] .pbtn.guarded::after {
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(88,110,117,.30); }
+  html[data-theme="light"] .pbtn.guarded.pressed::after {
+    box-shadow: inset 0 -1px 0 rgba(255,255,255,.75), inset 0 1px 0 rgba(88,110,117,.35); }
+
   .chk { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 9px; color: var(--emboss-strong); cursor: pointer; }
   .chk input { position: absolute; opacity: 0; width: 0; height: 0; }
   .chk.pending { color: var(--emboss-dim); cursor: not-allowed; }
@@ -1003,15 +1036,23 @@
           <button class="pbtn" id="showBtn" onclick="setPicture('show')">Show</button>
           <button class="pbtn" id="blurBtn" onclick="setPicture('blur')"
                   title="Mosaic the picture -- the room is there but not legible">Blur</button>
-          <button class="pbtn" id="hideBtn" onclick="setPicture('hide')"
+          <button class="pbtn guarded" id="hideBtn" onclick="setPicture('hide')"
                   title="Switch the camera off -- publishes nothing but the notice">Hide</button>
           <button class="pbtn" id="cvBtn" onclick="setPicture('cv')"
                   title="Computer-vision render -- the room redrawn, not photographed">CV</button>
         </div>
+        <!-- Diagnosis beside the remedy: the trace is what tells you the
+             feed has stopped, and the key that fixes it is immediately to
+             its left. The trace is PHOSPHOR, so it lives behind glass --
+             painting it on the key would put phosphor on housing metal,
+             which is the one thing the three materials never do. -->
         <div class="modemrow">
-          <button class="modem wide" id="reloadBtn" onclick="manualReload()" title="Repair feed">
+          <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
             <span class="cap2">RELOAD</span>
           </button>
+          <div class="fpsglass" id="fpsGlass" title="Frames actually arriving at this viewer, last 60 seconds">
+            <canvas id="fpsGraph" width="240" height="34"></canvas>
+          </div>
         </div>
         <!-- Foveal belongs to CV, so it sits directly under it, the way
              Mute buzzes sits under the audio keys. A setting, not an action. -->
@@ -1541,7 +1582,7 @@
     // sit pressed and the row would be telling two stories.
     showBtn.className = 'pbtn' + (feedMode === 'show' && !blurOn ? ' pressed' : '');
     blurBtn.className = 'pbtn' + (feedMode === 'show' && blurOn  ? ' pressed' : '');
-    hideBtn.className = 'pbtn' + (feedMode === 'hide' ? ' pressed' : '');
+    hideBtn.className = 'pbtn guarded' + (feedMode === 'hide' ? ' pressed' : '');
     cvBtn.className   = 'pbtn' + (feedMode === 'cv'   ? ' pressed' : '');
     var iCv = document.getElementById('indCv');
     if (iCv) iCv.className = (feedMode === 'cv') ? 'on' : '';
@@ -2178,6 +2219,86 @@
   }
   setInterval(updateClock, 1000); updateClock();
 
+  // ── FPS TRACE — sixty seconds of what this viewer actually received ──
+  //
+  // Deliberately measured at the <video> element rather than asked of the
+  // node. The node reporting the frames it believes it published cannot
+  // show you a feed that died between there and here, and "the picture
+  // stopped" is exactly the thing this strip exists to make visible. A
+  // flatline on the floor means no frames are arriving, whatever anyone
+  // upstream thinks.
+  var FPS_SAMPLES = 60;
+  var fpsHist = [];
+  (function setupFpsGraph() {
+    var glass = document.getElementById('fpsGlass');
+    var cv    = document.getElementById('fpsGraph');
+    if (!glass || !cv) return;
+    var ctx = cv.getContext('2d');
+
+    function colours() {
+      var cs = getComputedStyle(document.documentElement);
+      return {
+        lit:   (cs.getPropertyValue('--phos') || '#3fe8cd').trim(),
+        ghost: (cs.getPropertyValue('--phos-ghost') || 'rgba(63,232,205,.12)').trim()
+      };
+    }
+
+    function draw() {
+      var dpr = window.devicePixelRatio || 1;
+      var w = glass.clientWidth, h = glass.clientHeight;
+      if (!w || !h) return;
+      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+        cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      var c = colours();
+
+      // Scale: the tallest thing seen recently, never less than 10, so an
+      // 8fps node fills the strip and a flatline still has somewhere to
+      // fall from. Auto-scaling to the sample maximum alone would redraw a
+      // dead feed as a full-height flat line at zero, which is a lie.
+      var peak = 10;
+      for (var i = 0; i < fpsHist.length; i++) if (fpsHist[i] > peak) peak = fpsHist[i];
+
+      var pad = 3, gh = h - pad * 2;
+      function y(v) { return pad + gh - (Math.max(0, Math.min(v, peak)) / peak) * gh; }
+
+      // Ghost floor and ceiling: the unlit segments every other display on
+      // this panel shows behind its lit ones.
+      ctx.strokeStyle = c.ghost; ctx.lineWidth = 1;
+      [pad + 0.5, pad + gh + 0.5].forEach(function (yy) {
+        ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
+      });
+
+      if (fpsHist.length < 2) return;
+      var step = w / (FPS_SAMPLES - 1);
+      var x0 = w - (fpsHist.length - 1) * step;   // newest sample at the right edge
+      ctx.strokeStyle = c.lit; ctx.lineWidth = 1.5;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.shadowColor = c.lit; ctx.shadowBlur = 4;
+      ctx.beginPath();
+      for (var j = 0; j < fpsHist.length; j++) {
+        var px = x0 + j * step, py = y(fpsHist[j]);
+        if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+
+    function push(v) {
+      fpsHist.push(v);
+      while (fpsHist.length > FPS_SAMPLES) fpsHist.shift();
+      draw();
+    }
+    window._fpsPush = push;
+    window.addEventListener('resize', draw);
+    // The trace is phosphor, so it has to follow the theme's phosphor.
+    var themeBtn = document.getElementById('themeBtn');
+    if (themeBtn) themeBtn.addEventListener('click', function () { setTimeout(draw, 0); });
+    draw();
+  })();
+
   // ── FPS (desktop only) ──
   (function setupFpsCounter() {
     var fpsEl = document.getElementById('fpsVal');
@@ -2188,6 +2309,7 @@
       video.requestVideoFrameCallback(tick);
       setInterval(function() {
         fpsEl.innerHTML = frames + '<span class="vunit">FPS</span>';
+        if (window._fpsPush) window._fpsPush(frames);
         frames = 0; paintLamps();
       }, 1000);
       return;
@@ -2198,7 +2320,9 @@
       if (typeof video.getVideoPlaybackQuality === 'function') count = video.getVideoPlaybackQuality().totalVideoFrames;
       else if (video.webkitDecodedFrameCount !== undefined) count = video.webkitDecodedFrameCount;
       if (count === null) { fpsEl.textContent = '—'; return; }
-      fpsEl.textContent = (count - lastCount) + ' fps'; lastCount = count;
+      var delivered = count - lastCount;
+      fpsEl.textContent = delivered + ' fps'; lastCount = count;
+      if (window._fpsPush) window._fpsPush(delivered);
     }, 1000);
   })();
 

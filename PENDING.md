@@ -563,6 +563,37 @@ the escape route looks broken, and the operator has to work out that pressing
 the lit key again is what releases it. Disabled must keep meaning unavailable.
 Emphasis belongs on the engaged key, never on making its neighbours look dead.
 
+### A rolling FPS trace beside RELOAD, and why it is not drawn on the key
+
+The RELOAD row now carries a 60-second trace of the frame rate **this viewer
+is actually receiving**, read from `getVideoPlaybackQuality()` at the `<video>`
+element rather than asked of the node. A node reporting the frames it believes
+it published cannot show you a feed that died between there and here, and "the
+picture stopped" is the one thing this strip exists to make visible. A flatline
+on the floor means nothing is arriving, whatever anyone upstream thinks.
+
+**It sits in glass, not on the key.** The trace is phosphor, and phosphor lives
+behind glass — painting it onto the RELOAD button would put phosphor on housing
+metal, which is the one thing the three materials never do. Key on the left,
+glass strip filling the rest of the row: the diagnosis ends up immediately
+beside the control that fixes it.
+
+Two details worth copying: the vertical scale is the recent peak but **never
+less than 10**, because auto-scaling to the sample maximum redraws a dead feed
+as a full-height flat line at zero, which is a lie; and the canvas is sized at
+`devicePixelRatio`, or the trace renders as a soft grey line on a HiDPI screen
+instead of a lit one.
+
+### HIDE is finished differently, not coloured differently
+
+**HIDE is the key you are allowed to hit by accident.** Pressing it costs a
+feed you restore in one click; the same slip on Show puts a room on a screen.
+So it earns emphasis — but from the *finish*: a machined chamfer inside the
+face and a polished sheen across it, inverting when the key goes down. The way
+a critical control on real equipment is turned from the same billet as its
+neighbours and simply finished differently. No new material, no colour, and
+nothing that reads as a lamp.
+
 **camdash and the Qt GUI do not know about BLUR yet.** They are the last two
 surfaces still on the pre-panel vocabulary; folding it in belongs with that
 port, not ahead of it.
