@@ -439,26 +439,57 @@
 
   /* HIDE is the key you are allowed to hit by accident -- pressing it costs
      a feed you restore in one click, where the same slip on Show would put a
-     room on a screen. So it gets emphasis, but from the FINISH rather than
-     from colour: a machined chamfer inside the face and a polished sheen
-     across it, the way a critical control on real equipment is turned from
-     the same billet as its neighbours and simply finished differently.
-     Nothing here is a new material. */
-  .pbtn.guarded { position: relative; }
+     room on a screen. The chamfer alone was too quiet to say that, so the
+     key is PAINTED: metallic red over machined aluminium.
+
+     Paint, not light. The red is dark and desaturated with a specular sweep
+     across it and a brushed grain underneath, so it reads as a finish
+     catching the room's light rather than as something switched on. That
+     distinction is load-bearing on this panel -- red that emits is a lamp,
+     and a lamp means a stage was measured and failed. This key is not a
+     status, it is a control someone painted so your hand finds it. */
+  .pbtn.guarded { position: relative; color: #ffe9e4;
+    background: linear-gradient(180deg,#a63a2d 0%,#87251c 54%,#6f1a13 100%);
+    border-color: #551410;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.45); }
+  /* Specular sweep plus the grain of the metal under the paint. */
   .pbtn.guarded::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-    background: linear-gradient(115deg,rgba(255,255,255,.075) 0%,rgba(255,255,255,.02) 34%,rgba(255,255,255,0) 55%); }
+    background:
+      repeating-linear-gradient(97deg,rgba(255,255,255,.035) 0 1px,rgba(0,0,0,.02) 1px 2px),
+      linear-gradient(112deg,rgba(255,255,255,.26) 0%,rgba(255,255,255,.08) 26%,rgba(255,255,255,0) 52%); }
+  /* The machined chamfer, now catching a brighter edge because paint over
+     turned aluminium holds a harder highlight than bare housing does. */
   .pbtn.guarded::after { content: ""; position: absolute; inset: 3px; border-radius: 4px; pointer-events: none;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.13), inset 0 -1px 0 rgba(0,0,0,.5); }
-  /* Pressed, the chamfer inverts: the light that was catching the top edge
-     now catches the bottom, because the face has gone down. */
-  .pbtn.guarded.pressed::after { box-shadow: inset 0 -1px 0 rgba(255,255,255,.10), inset 0 1px 0 rgba(0,0,0,.55); }
-  .pbtn.guarded.pressed::before { background: linear-gradient(115deg,rgba(255,255,255,.03) 0%,rgba(255,255,255,0) 45%); }
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.30), inset 0 -1px 0 rgba(0,0,0,.45); }
+  /* Down: the face drops, the sweep flattens and the chamfer inverts.
+     The paint does not change colour, it changes what light reaches it. */
+  .pbtn.guarded.pressed { color: #fff;
+    background: linear-gradient(180deg,#5f150f 0%,#7a1f17 100%);
+    box-shadow: inset 0 2px 5px rgba(0,0,0,.6); border-color: #4a110d; }
+  .pbtn.guarded.pressed::before {
+    background:
+      repeating-linear-gradient(97deg,rgba(255,255,255,.02) 0 1px,rgba(0,0,0,.02) 1px 2px),
+      linear-gradient(112deg,rgba(255,255,255,.07) 0%,rgba(255,255,255,0) 44%); }
+  .pbtn.guarded.pressed::after { box-shadow: inset 0 -1px 0 rgba(255,255,255,.14), inset 0 1px 0 rgba(0,0,0,.5); }
+  /* Light theme: the same paint under a lit room. Brighter specular, and
+     the red lifts just enough to stay paint rather than going brown against
+     near-white metal. */
+  html[data-theme="light"] .pbtn.guarded { color: #fff3ef;
+    background: linear-gradient(180deg,#c04231 0%,#a02f22 54%,#8c2419 100%);
+    border-color: #7a1e15;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 1px 2px rgba(88,110,117,.22); }
   html[data-theme="light"] .pbtn.guarded::before {
-    background: linear-gradient(115deg,rgba(255,255,255,.85) 0%,rgba(255,255,255,.25) 32%,rgba(255,255,255,0) 56%); }
+    background:
+      repeating-linear-gradient(97deg,rgba(255,255,255,.05) 0 1px,rgba(0,0,0,.02) 1px 2px),
+      linear-gradient(112deg,rgba(255,255,255,.42) 0%,rgba(255,255,255,.12) 28%,rgba(255,255,255,0) 54%); }
   html[data-theme="light"] .pbtn.guarded::after {
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(88,110,117,.30); }
-  html[data-theme="light"] .pbtn.guarded.pressed::after {
-    box-shadow: inset 0 -1px 0 rgba(255,255,255,.75), inset 0 1px 0 rgba(88,110,117,.35); }
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.45), inset 0 -1px 0 rgba(0,0,0,.30); }
+  /* The light theme's pressed rule paints its label #073642, which is right
+     for a bare metal key and wrong on paint: it put dark teal lettering on a
+     red face. Paint keeps its legend. */
+  html[data-theme="light"] .pbtn.guarded.pressed { color: #fff;
+    background: linear-gradient(180deg,#8a2318 0%,#a02f22 100%);
+    box-shadow: inset 0 2px 5px rgba(0,0,0,.35); }
 
   .chk { display: flex; align-items: center; gap: 8px; font-size: 11px; margin-top: 9px; color: var(--emboss-strong); cursor: pointer; }
   .chk input { position: absolute; opacity: 0; width: 0; height: 0; }
