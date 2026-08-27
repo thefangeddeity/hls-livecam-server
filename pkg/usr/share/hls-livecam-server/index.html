@@ -499,6 +499,11 @@
   .modemrow.even .modem.wide { justify-content: center; padding: 0 8px; }
   .modem.wide { flex: 1 1 auto; min-width: 0; justify-content: flex-start;
     padding: 0 11px; gap: 9px; }
+  /* RELOAD stands beside the trace, so it is the trace's height. Two things
+     of different heights sharing a row read as two rows that failed to line
+     up -- and on real equipment a key and the display next to it are set
+     into the same cutout. */
+  #reloadBtn { height: 42px; }
   .modem.wide .cap2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Engaged is a pressed key with its lamp lit -- the same language as MUTE,
      which is the point: the two things on this panel that LATCH should look
