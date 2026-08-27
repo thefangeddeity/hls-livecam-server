@@ -33,6 +33,7 @@ DARK_FLAG       = "/var/lib/hls-livecam/dark"
 LOCK_FILE       = "/var/lib/hls-livecam/msg_lock"
 FEED_MODE_FILE  = "/var/lib/hls-livecam/feed_mode"
 FOVEAL_MODE_FILE = "/var/lib/hls-livecam/foveal_mode"
+BLUR_MODE_FILE  = "/var/lib/hls-livecam/blur_mode"
 
 # The one default in this system where the wrong value has a real-world
 # consequence: this is a privacy control on a camera pointed at a family's
@@ -152,6 +153,65 @@ def _write_foveal_mode(enabled):
 
 _foveal_enabled = _read_foveal_mode()
 _foveal_lock    = threading.Lock()
+
+# -- Blur: the privacy render the CV pivot left without a control --
+#
+# CV Mode replaced the old 'cloak' as the *default* way this camera protects
+# the room, and the blur that cloak used stopped being reachable at all --
+# no mode, no endpoint, no key. It is still the right tool for a different
+# job: CV redraws the room and keeps the picture legible, blur refuses to
+# show it. Those are separate decisions, so this is a modifier over whatever
+# the feed is already doing rather than a fourth feed mode.
+#
+# Mosaic rather than Gaussian, deliberately. A Gaussian blur of a face is
+# recoverable given the kernel and enough frames; a mosaic throws the
+# information away. It also looks like the old cloak, which is what it is
+# replacing.
+def _read_blur_mode():
+    try:
+        with open(BLUR_MODE_FILE) as f:
+            return f.read().strip() == 'true'
+    except Exception:
+        return False
+
+def _write_blur_mode(enabled):
+    try:
+        os.makedirs(os.path.dirname(BLUR_MODE_FILE), exist_ok=True)
+        with open(BLUR_MODE_FILE, 'w') as f:
+            f.write('true' if enabled else 'false')
+    except Exception:
+        pass
+
+_blur_enabled = _read_blur_mode()
+_blur_lock    = threading.Lock()
+
+def _blur_block():
+    """Mosaic cell size in pixels, from device.env, defaulting to 24."""
+    try:
+        return max(4, int(_read_device_env().get('BLUR_BLOCK', 24)))
+    except Exception:
+        return 24
+
+_BLUR_BLOCK = None
+
+def _apply_blur(arr):
+    """Downscale, then upscale with nearest-neighbour: the cheap way to get
+    a mosaic, about a millisecond at 720p. Two resizes, no per-pixel Python.
+    Failure returns the frame untouched rather than raising -- but note the
+    caller only reaches here when the operator asked for privacy, so a
+    silent pass-through would be the worst kind of quiet failure. It logs."""
+    global _BLUR_BLOCK
+    if _BLUR_BLOCK is None:
+        _BLUR_BLOCK = _blur_block()
+    try:
+        h, w = arr.shape[:2]
+        sw, sh = max(1, w // _BLUR_BLOCK), max(1, h // _BLUR_BLOCK)
+        small = _cv2.resize(arr, (sw, sh), interpolation=_cv2.INTER_AREA)
+        return _cv2.resize(small, (w, h), interpolation=_cv2.INTER_NEAREST)
+    except Exception as e:
+        print(f'broadcast-api: BLUR FAILED, publishing the clear picture: {e}',
+              flush=True)
+        return arr
 
 _mode      = _read_feed_mode()
 _mode_lock = threading.Lock()
@@ -560,6 +620,14 @@ def _writer_loop():
                 frame_arr, _cv_meta = cv_proc.process(raw_arr)
             else:  # hide
                 frame_arr = _render_hide_frame(FRAME_W, FRAME_H)
+            # A modifier over whatever the feed is doing, not a mode: Show
+            # blurred and CV blurred are both meaningful. Hide is already
+            # black and has nothing left to protect.
+            if mode != 'hide':
+                with _blur_lock:
+                    _blur_now = _blur_enabled
+                if _blur_now:
+                    frame_arr = _apply_blur(frame_arr)
             prev_mode = mode
 
             loop_cam.schedule_frame(frame_arr)
@@ -699,6 +767,25 @@ def feed_mode_post():
     # a crash, or a package upgrade.
     _write_feed_mode(new_mode)
     return new_mode, 200
+
+@app.route('/api/blur-mode', methods=['GET'])
+def blur_mode_get():
+    with _blur_lock:
+        return ('true' if _blur_enabled else 'false'), 200
+
+@app.route('/api/blur-mode', methods=['POST'])
+def blur_mode_post():
+    global _blur_enabled
+    val = request.get_data(as_text=True).strip().lower()
+    if val not in ('true', 'false'):
+        abort(400)
+    enabled = val == 'true'
+    with _blur_lock:
+        _blur_enabled = enabled
+    # Persisted for the same reason feed mode is: this is a privacy control,
+    # and a restart must not quietly un-blur a room somebody chose to cover.
+    _write_blur_mode(enabled)
+    return ('true' if enabled else 'false'), 200
 
 @app.route('/api/foveal-mode', methods=['GET'])
 def foveal_mode_get():

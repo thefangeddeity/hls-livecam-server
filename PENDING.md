@@ -527,6 +527,32 @@ Two things worth carrying to other branches:
   It should back off and say so once. Not fixed yet — noted with the
   child-reaping item.
 
+### BLUR is back, as a modifier rather than a mode — and Foveal is a checkbox again
+
+The CV pivot left the old privacy blur unreachable: no mode, no endpoint, no
+key, only a `cloak -> cv` alias on input. It is still the right tool for a
+different job. **CV redraws the room and keeps it legible; BLUR refuses to
+show it.** Those are separate decisions, so BLUR is a modifier over whatever
+the feed is already doing — Show blurred and CV blurred are both meaningful —
+not a fourth feed mode. Hide has nothing left to cover, so the key goes dark
+there.
+
+**Mosaic, not Gaussian.** A Gaussian blur of a face is recoverable given the
+kernel and enough frames; a mosaic throws the information away. Two resizes,
+about a millisecond at 720p. `BLUR_BLOCK` in `device.env`, default 24px.
+`/api/blur-mode` GET/POST, persisted like feed mode — a restart must not
+quietly un-blur a room somebody chose to cover. If the render ever fails it
+logs and publishes the clear picture, which is the one failure here that must
+never be silent.
+
+Foveal went back to a small checkbox under the keys, beside where Mute buzzes
+sits in AUDIO. As a full-width lit key it read like a fourth feed mode, which
+it is not — it is a setting.
+
+**camdash and the Qt GUI do not know about BLUR yet.** They are the last two
+surfaces still on the pre-panel vocabulary; folding it in belongs with that
+port, not ahead of it.
+
 ### The stream must not start before the page knows what it is looking at
 
 The viewer ran `initHLS()` at the foot of its script, on load, against a

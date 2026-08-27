@@ -439,19 +439,12 @@
      checkbox hard right, so the two boxes teach each other. */
   .modemrow { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
   .modemrow .chk, .modemrow > .modem:last-child { margin-top: 0; margin-left: auto; }
-  /* A bay, not a single button. Foveal fills it today; when the second CV
-     option lands it drops in beside and the two share the width without the
-     row being rebuilt. Room for two, which the PM says is the end of it --
-     three would want a different arrangement anyway. */
-  .togglebay { flex: 1 1 auto; display: flex; gap: 7px; min-width: 0; margin-left: 0; }
   /* Even keys, the same rule the Show/CV/Hide row above uses. Two today,
      three when the second CV option lands -- and because every child takes
      an equal share of the row rather than a fixed width, that arrival needs
      no layout change at all. Scoped to .even so the LISTEN line, where the
      transport and MUTE deliberately sit at opposite ends, is untouched. */
-  .modemrow.even > .modem,
-  .modemrow.even > .togglebay { flex: 1 1 0; min-width: 0; margin-left: 0; }
-  .modemrow.even > .modem { justify-content: center; }
+  .modemrow.even > .modem { flex: 1 1 0; min-width: 0; margin-left: 0; justify-content: center; }
   .modemrow.even .modem.wide { justify-content: center; padding: 0 8px; }
   .modem.wide { flex: 1 1 auto; min-width: 0; justify-content: flex-start;
     padding: 0 11px; gap: 9px; }
@@ -997,19 +990,24 @@
           <button class="pbtn" id="cvBtn" onclick="setFeedMode('cv')">CV</button>
           <button class="pbtn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
         </div>
-        <!-- TWEAK (PM): modem button left, checkbox hard right. -->
+        <!-- RELOAD is an action, BLUR latches: same size, same row, the
+             difference carried by the lamp rather than by the shape. -->
         <div class="modemrow even">
           <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
             <span class="cap2">RELOAD</span>
           </button>
-          <div class="togglebay" id="toggleBay">
-            <button class="modem wide" id="fovealBtn" onclick="clickFoveal()"
-                    title="Foveal layer -- a modifier on CV Mode">
-              <span class="bulb" id="fovealLamp"></span>
-              <span class="cap2">FOVEAL</span>
-            </button>
-            <input type="checkbox" id="fovealCheck" hidden>
-          </div>
+          <button class="modem" id="blurBtn" onclick="clickBlur()"
+                  title="Mosaic the picture -- privacy over whatever the feed is showing">
+            <span class="bulb" id="blurLamp"></span>
+            <span class="cap2">BLUR</span>
+          </button>
+        </div>
+        <!-- Foveal is a checkbox again (PM), under the keys the way Mute
+             buzzes sits under the audio keys. It is a setting, not an
+             action: as a full modem key it read like a fourth feed mode,
+             which it is not. -->
+        <div class="modemrow">
+          <label class="chk" id="fovealChk"><input type="checkbox" id="fovealCheck" onchange="clickFoveal()"><span class="box"></span><span class="eng">Foveal layer</span></label>
         </div>
       </div>
 
@@ -1560,6 +1558,7 @@
     // (disabled) anywhere but CV Mode, same as B&W's precedent.
     fovealCheck.disabled = (feedMode !== 'cv');
     paintFoveal();
+    paintBlur();
     paintLamps();
   }
 
@@ -1611,27 +1610,62 @@
     if (res && video.videoWidth) res.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
   }
 
+  // ── BLUR — server-side, modifier over Show and CV alike ──
+  //
+  // Not a feed mode: the operator has already decided what the camera is
+  // doing, and this decides whether the room is legible while it does it.
+  // Hide has nothing left to cover, so the key goes dark there.
+  var blurOn = false;
+  function paintBlur() {
+    var b = document.getElementById('blurBtn');
+    var l = document.getElementById('blurLamp');
+    if (!b) return;
+    b.disabled = !feedModeKnown || feedMode === 'hide';
+    var on = blurOn && !b.disabled;
+    b.className = 'modem' + (on ? ' pressed' : '');
+    if (l) l.className = 'bulb' + (on ? ' on' : '');
+  }
+  function clickBlur() {
+    if (!feedModeKnown || feedMode === 'hide') return;
+    blurOn = !blurOn;
+    paintBlur();                       // answer the press now, reconcile below
+    fetch('/api/blur-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: blurOn ? 'true' : 'false'
+    })
+    .then(function(r) { return r.ok ? r.text() : null; })
+    .catch(function() { return null; })
+    .then(function(v) { if (v !== null) { blurOn = v.trim() === 'true'; } paintBlur(); });
+  }
+  function pollBlur() {
+    fetch('/api/blur-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(v) { if (v !== null) { blurOn = v.trim() === 'true'; paintBlur(); } });
+  }
+  pollBlur();
+  setInterval(pollBlur, 5000);
+
   // ── FOVEAL LAYER — server-side, modifier on CV Mode ──
   var fovealOn = false;
   function updateFovealCheck() { fovealCheck.checked = fovealOn; paintFoveal(); }
 
-  // The legend never moves; the lamp and the key's own depth carry the state.
+  // The box is the lamp -- checked lights it, the same treatment every other
+  // checkbox on the panel gets. Unavailable is the label going dim, matching
+  // Mute buzzes rather than a dead key.
   function paintFoveal() {
-    var b = document.getElementById('fovealBtn');
-    var l = document.getElementById('fovealLamp');
-    if (!b) return;
-    b.disabled = fovealCheck.disabled;
-    var on = fovealCheck.checked && !b.disabled;
-    b.className = 'modem wide' + (on ? ' pressed' : '');
-    if (l) l.className = 'bulb' + (on ? ' on' : '');
+    var row = document.getElementById('fovealChk');
+    if (row) row.className = 'chk' + (fovealCheck.disabled ? ' pending' : '');
   }
 
   // The checkbox remains the state; the key is only how you reach it. Kept
   // that way so applyFoveal(), updateFovealCheck() and the poll all read one
   // source rather than three.
+  // onchange, so the input has already flipped itself -- flipping it here too
+  // would put the control back where it started.
   function clickFoveal() {
     if (fovealCheck.disabled) return;
-    fovealCheck.checked = !fovealCheck.checked;
     paintFoveal();
     toggleFoveal();
   }
