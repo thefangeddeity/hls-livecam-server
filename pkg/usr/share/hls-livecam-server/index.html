@@ -985,30 +985,32 @@
           </div>
         </div>
         <div class="pdiv"></div>
-        <!-- Three degrees of one question -- how much of the room goes
-             out -- so they share an exclusive row: clear, mosaicked, off.
+        <!-- FOUR KEYS, ONE ROW. Exactly one of these is true at any
+             moment, so exactly one group says so. CV had its own row for a
+             while and the split made the exclusivity invisible: a key alone
+             in different metal reads as an independent switch, which implied
+             you could have Hide and CV at once. You cannot.
+
+             CV sits at the right end so the Foveal checkbox -- which
+             right-aligns anyway, like Mute buzzes -- lands directly under
+             it. That was the whole reason CV was pulled out of the row, and
+             it turns out the row can have it both ways.
+
              Blur is a server-side modifier underneath, but the panel drives
-             it as a picture state, because a key sitting in an exclusive
-             row has to behave like one. -->
+             it as a picture state: a key in an exclusive row has to behave
+             like one. -->
         <div class="btnrow">
           <button class="pbtn" id="showBtn" onclick="setPicture('show')">Show</button>
           <button class="pbtn" id="blurBtn" onclick="setPicture('blur')"
                   title="Mosaic the picture -- the room is there but not legible">Blur</button>
           <button class="pbtn" id="hideBtn" onclick="setPicture('hide')"
                   title="Switch the camera off -- publishes nothing but the notice">Hide</button>
+          <button class="pbtn" id="cvBtn" onclick="setPicture('cv')"
+                  title="Computer-vision render -- the room redrawn, not photographed">CV</button>
         </div>
-        <!-- CV Mode is not a fourth degree of that question, it is a
-             different answer: the room redrawn rather than shown or
-             withheld. RELOAD is an action, CV MODE latches -- same size,
-             same row, the difference carried by the lamp. -->
-        <div class="modemrow even">
-          <button class="modem" id="reloadBtn" onclick="manualReload()" title="Repair feed">
+        <div class="modemrow">
+          <button class="modem wide" id="reloadBtn" onclick="manualReload()" title="Repair feed">
             <span class="cap2">RELOAD</span>
-          </button>
-          <button class="modem" id="cvBtn" onclick="setPicture('cv')"
-                  title="Computer-vision render -- the room redrawn, not photographed">
-            <span class="bulb" id="cvLamp"></span>
-            <span class="cap2">CV MODE</span>
           </button>
         </div>
         <!-- Foveal belongs to CV, so it sits directly under it, the way
@@ -1537,17 +1539,10 @@
     // One row, one selection. Blur is show-with-the-modifier-on, so Show is
     // lit only when the picture is actually clear -- otherwise both would
     // sit pressed and the row would be telling two stories.
-    var clear = (feedMode === 'show' && !blurOn);
-    showBtn.className = 'pbtn' + (clear ? ' pressed' : '');
-    blurBtn.className = 'pbtn' + (feedMode === 'show' && blurOn ? ' pressed' : '');
+    showBtn.className = 'pbtn' + (feedMode === 'show' && !blurOn ? ' pressed' : '');
+    blurBtn.className = 'pbtn' + (feedMode === 'show' && blurOn  ? ' pressed' : '');
     hideBtn.className = 'pbtn' + (feedMode === 'hide' ? ' pressed' : '');
-    // CV MODE is a modem key beside RELOAD: pressed with its lamp lit, the
-    // same language MUTE speaks. The lamp says the render is running, not
-    // merely selected.
-    var cving = (feedMode === 'cv');
-    cvBtn.className = 'modem' + (cving ? ' pressed' : '');
-    var cl = document.getElementById('cvLamp');
-    if (cl) cl.className = 'bulb' + (cving ? ' on' : '');
+    cvBtn.className   = 'pbtn' + (feedMode === 'cv'   ? ' pressed' : '');
     var iCv = document.getElementById('indCv');
     if (iCv) iCv.className = (feedMode === 'cv') ? 'on' : '';
     // Hide publishes static, which on its own is indistinguishable from a
