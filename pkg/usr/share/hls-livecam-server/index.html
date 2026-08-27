@@ -423,7 +423,7 @@
   /* Same glass as the readouts above it, at strip proportions. The canvas
      is sized in CSS pixels and redrawn at device resolution, or the trace
      would be a soft grey line on a HiDPI screen instead of a lit one. */
-  .fpsglass { position: relative; flex: 1 1 auto; min-width: 0; height: 34px; border-radius: 5px; overflow: hidden;
+  .fpsglass { position: relative; flex: 1 1 auto; min-width: 0; height: 42px; border-radius: 5px; overflow: hidden;
     background: linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
     border: 1px solid #040809; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75); }
   /* Scanlines AND the top sheen ride in one pseudo-element, because the
@@ -2253,13 +2253,55 @@
     if (!glass || !cv) return;
     var ctx = cv.getContext('2d');
 
+    function withAlpha(col, a) {
+      var m = /^#([0-9a-f]{6})$/i.exec(col);
+      if (m) {
+        var n = parseInt(m[1], 16);
+        return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+      }
+      m = /^rgba?\(([^)]+)\)$/i.exec(col);
+      if (m) {
+        var p = m[1].split(',').map(function (x) { return x.trim(); });
+        return 'rgba(' + p[0] + ',' + p[1] + ',' + p[2] + ',' + a + ')';
+      }
+      return col;
+    }
+
     function colours() {
       var cs = getComputedStyle(document.documentElement);
+      var lit = (cs.getPropertyValue('--phos') || '#3fe8cd').trim();
+      // Mixed here rather than with color-mix(): an unparseable fillStyle is
+      // silently ignored by canvas, which leaves the PREVIOUS colour in
+      // place -- so a browser without it would have drawn the stems in
+      // whatever ran last and nothing would look wrong enough to notice.
       return {
-        lit:   (cs.getPropertyValue('--phos') || '#3fe8cd').trim(),
+        lit:   lit,
+        // Between lit and ghost: the column below the reading is on, but it
+        // is not the reading.
+        stem:  withAlpha(lit, 0.34),
         ghost: (cs.getPropertyValue('--phos-ghost') || 'rgba(63,232,205,.12)').trim()
       };
     }
+
+    // A DOT MATRIX, not a line. The panel's other displays are made of
+    // segments that are either lit or unlit, and a smooth antialiased
+    // polyline in the middle of them looked like a chart pasted onto a
+    // instrument -- the one thing on the panel drawn by something other
+    // than the instrument itself. So: a fixed grid of cells, ghost when
+    // unlit, phosphor when lit, exactly like the ghost 88.8 sitting behind
+    // every readout above.
+    //
+    // The grid is also why the history length is not a constant: columns
+    // come from the width, and the trace shows the last COLUMNS samples.
+    // A fixed 60 samples squeezed into whatever pitch fits would put
+    // fractions of a cell between neighbours and the matrix would shimmer.
+    // Finer pitch than the first pass: 2px cells on a 3px pitch, which at
+    // this strip's size gives roughly a 60x12 matrix -- one column per
+    // second of history, which is where the sixty seconds comes from now.
+    // Tighter than this and the gaps close up: the grid stops reading as
+    // discrete segments and becomes a solid block that happens to be
+    // shaped like a graph.
+    var DOT = 2, PITCH = 3;
 
     function draw() {
       var dpr = window.devicePixelRatio || 1;
@@ -2272,6 +2314,29 @@
       ctx.clearRect(0, 0, w, h);
       var c = colours();
 
+      var pad  = 3;
+      var cols = Math.max(4, Math.floor((w - pad * 2) / PITCH));
+      var rows = Math.max(3, Math.floor((h - pad * 2) / PITCH));
+      var x0 = pad + ((w - pad * 2) - cols * PITCH) / 2;
+      var y0 = pad + ((h - pad * 2) - rows * PITCH) / 2;
+      FPS_SAMPLES = cols;
+      while (fpsHist.length > cols) fpsHist.shift();
+
+      function cell(col, row, style, glow) {
+        ctx.fillStyle = style;
+        ctx.shadowColor = glow ? c.lit : 'transparent';
+        ctx.shadowBlur  = glow ? 4 : 0;
+        ctx.fillRect(x0 + col * PITCH, y0 + (rows - 1 - row) * PITCH, DOT, DOT);
+      }
+
+      // Ghost matrix first: the display exists whether or not anything is
+      // arriving. An empty strip would be indistinguishable from a strip
+      // that is switched off.
+      for (var cx = 0; cx < cols; cx++)
+        for (var cy = 0; cy < rows; cy++) cell(cx, cy, c.ghost, false);
+
+      if (!fpsHist.length) { ctx.shadowBlur = 0; return; }
+
       // Scale: the tallest thing seen recently, never less than 10, so an
       // 8fps node fills the strip and a flatline still has somewhere to
       // fall from. Auto-scaling to the sample maximum alone would redraw a
@@ -2279,28 +2344,16 @@
       var peak = 10;
       for (var i = 0; i < fpsHist.length; i++) if (fpsHist[i] > peak) peak = fpsHist[i];
 
-      var pad = 3, gh = h - pad * 2;
-      function y(v) { return pad + gh - (Math.max(0, Math.min(v, peak)) / peak) * gh; }
-
-      // Ghost floor and ceiling: the unlit segments every other display on
-      // this panel shows behind its lit ones.
-      ctx.strokeStyle = c.ghost; ctx.lineWidth = 1;
-      [pad + 0.5, pad + gh + 0.5].forEach(function (yy) {
-        ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
-      });
-
-      if (fpsHist.length < 2) return;
-      var step = w / (FPS_SAMPLES - 1);
-      var x0 = w - (fpsHist.length - 1) * step;   // newest sample at the right edge
-      ctx.strokeStyle = c.lit; ctx.lineWidth = 1.5;
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      ctx.shadowColor = c.lit; ctx.shadowBlur = 4;
-      ctx.beginPath();
+      var first = cols - fpsHist.length;    // newest sample at the right edge
       for (var j = 0; j < fpsHist.length; j++) {
-        var px = x0 + j * step, py = y(fpsHist[j]);
-        if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        var v = Math.max(0, Math.min(fpsHist[j], peak));
+        var row = Math.round((v / peak) * (rows - 1));
+        // Stem below the reading, dimmer: a bar of dots reads as a quantity
+        // where a single dot reads as a position, and zero has to look like
+        // an empty column sitting on a lit floor.
+        for (var r = 0; r < row; r++) cell(first + j, r, c.stem, false);
+        cell(first + j, row, c.lit, true);
       }
-      ctx.stroke();
       ctx.shadowBlur = 0;
     }
 
