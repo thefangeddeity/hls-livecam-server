@@ -54,8 +54,32 @@ def _normalize_mode(val):
 MAX_LEN         = 120
 DEVICE_ENV      = '/etc/hls-livecam/device.env'
 LOOPBACK_DEVICE = '/dev/video10'
-FRAME_W         = 1280
-FRAME_H         = 720
+def _frame_size():
+    """Capture size, from device.env, defaulting to what the fleet uses.
+
+    This was two hardcoded constants until 6.0.3, which meant the one thing
+    a camera can be physically incapable of -- its resolution -- was the one
+    thing a node could not configure. tina's sensor stopped delivering 720p
+    after a USB fault while 640x480 kept working, and there was nowhere to
+    say so. Same rule as PRODUCT and the denoise weights: a fact about the
+    node lives in /etc, not in the payload.
+
+    Accepts `VIDEO_SIZE=WxH`, the spelling hls-livecam-setup already writes.
+    """
+    try:
+        with open(DEVICE_ENV) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('VIDEO_SIZE='):
+                    w, h = line.split('=', 1)[1].strip().lower().split('x')
+                    w, h = int(w), int(h)
+                    if w > 0 and h > 0:
+                        return w, h
+    except Exception:
+        pass
+    return 1280, 720
+
+FRAME_W, FRAME_H = _frame_size()
 FRAME_BYTES     = FRAME_W * FRAME_H * 3
 _cam_proc = None
 _pub_proc = None

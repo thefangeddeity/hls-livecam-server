@@ -497,6 +497,36 @@ for there to be something to clear. And check your **focus ring**: the browser
 supplies its own blue one for free, and it was the last piece of platform
 furniture left on the panel. Focus now picks up the lamp colour.
 
+### The one thing a camera can be incapable of was the one thing you could not configure
+
+`broadcast-api` carried `FRAME_W = 1280` / `FRAME_H = 720` as module constants.
+Every other tunable on this node reads `device.env`; capture resolution did
+not, so a sensor that cannot deliver 720p had nowhere to say so.
+
+It stopped being theoretical on tina. After a USB fault (`error -71`, then
+`Failed to resubmit video URB`) the camera vanished from the bus entirely.
+Recovering it took, in order: `modprobe -r uvcvideo` (not enough), a hub
+bounce via `/sys/bus/usb/devices/1-1/authorized` (brought it back to the
+bus), and another uvcvideo reload. After all that the device enumerated,
+offered MJPG and YUYV, and **still returned no data at 1280x720** — while
+640x480 captured a frame immediately. The link reports 480 Mbps, so this is
+not a speed renegotiation; the camera needs a physical replug to give 720p
+back.
+
+`VIDEO_SIZE=WxH` in `device.env` now drives it, defaulting to 1280x720.
+tina runs at 640x480 until someone replugs it, and says so in its own
+config file rather than in anyone's memory.
+
+Two things worth carrying to other branches:
+
+- **Enumeration is not streaming, and streaming at one size is not streaming
+  at another.** `v4l2-ctl --list-formats` will happily list a mode the link
+  can no longer carry.
+- When the camera is gone, our publisher respawns two or three times a
+  second, forever, with nothing in the log but the same line repeating.
+  It should back off and say so once. Not fixed yet — noted with the
+  child-reaping item.
+
 ### The stream must not start before the page knows what it is looking at
 
 The viewer ran `initHLS()` at the foot of its script, on load, against a
