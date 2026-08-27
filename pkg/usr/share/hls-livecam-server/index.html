@@ -423,7 +423,7 @@
   /* Same glass as the readouts above it, at strip proportions. The canvas
      is sized in CSS pixels and redrawn at device resolution, or the trace
      would be a soft grey line on a HiDPI screen instead of a lit one. */
-  .fpsglass { position: relative; flex: 1 1 auto; min-width: 0; height: 42px; border-radius: 5px; overflow: hidden;
+  .fpsglass { position: relative; flex: 1 1 auto; min-width: 0; height: 60px; border-radius: 5px; overflow: hidden;
     background: linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
     border: 1px solid #040809; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75); }
   /* Scanlines AND the top sheen ride in one pseudo-element, because the
@@ -443,6 +443,9 @@
      never lights. */
   .glab { position: absolute; bottom: 2px; font-family: var(--mono); font-size: 7px;
     letter-spacing: .12em; color: var(--phos-label); pointer-events: none; }
+  .analysisrow { align-items: stretch; }
+  .leds.analysis { flex: 0 0 auto; justify-content: space-between; gap: 0; padding: 1px 0 1px 2px; }
+  .leds.analysis .led { font-size: 9.5px; line-height: 12px; gap: 6px; }
   .glab-l { left: 5px; }
   .glab-r { right: 5px; }
 
@@ -1104,11 +1107,20 @@
              its left. The trace is PHOSPHOR, so it lives behind glass --
              painting it on the key would put phosphor on housing metal,
              which is the one thing the three materials never do. -->
-        <div class="modemrow">
+        <div class="modemrow analysisrow">
           <div class="fpsglass" id="fpsGlass" title="Frames actually arriving at this viewer, last 60 seconds">
-            <canvas id="fpsGraph" width="240" height="42"></canvas>
+            <canvas id="fpsGraph" width="240" height="60"></canvas>
             <span class="glab glab-l">FPS</span>
             <span class="glab glab-r"></span>
+          </div>
+          <!-- What the pipeline is actually doing to the picture, in the
+               same lamp language the stage column upstairs uses: lit is
+               measured and running, dark is off or unknown, red is a stage
+               that was measured and failed. -->
+          <div class="leds analysis">
+            <div class="led" id="ledCv"><span class="bulb"></span><span class="n">CV</span></div>
+            <div class="led" id="ledScene2d"><span class="bulb"></span><span class="n">2D</span></div>
+            <div class="led" id="ledFov"><span class="bulb"></span><span class="n">FOV</span></div>
           </div>
         </div>
         <!-- Foveal belongs to CV, so it sits directly under it, the way
@@ -1166,8 +1178,8 @@
         </div>
 
         <div class="modemrow even">
-          <button class="modem" id="talkBtn" disabled title="No talkback on this node yet">
-            <span class="bulb"></span><span class="cap2">TALK</span>
+          <button class="modem" id="talkBtn" onclick="clickTalk()" title="Talk to the room">
+            <span class="bulb" id="talkLamp"></span><span class="cap2">TALK</span>
           </button>
           <button class="modem" id="buzzBtn" onclick="sendBuzz()"
                   title="Shake and sound every viewer's screen">
@@ -1210,7 +1222,11 @@
 </footer>
 
 <script>
-  var HLS_URL = 'http://' + window.location.hostname + ':8888/cam/index.m3u8';
+  // Same origin, through nginx, rather than mediamtx's own port. An https
+  // page cannot load an http stream, and talkback requires https -- so the
+  // old direct :8888 URL would have left the panel working and the picture
+  // blank on exactly the address people need to use to talk.
+  var HLS_URL = window.location.origin + '/hls/cam/index.m3u8';
   var video        = document.getElementById('video');
   var liveInd      = document.getElementById('liveIndicator');
   var darkOverlay  = document.getElementById('darkOverlay');
@@ -1700,6 +1716,23 @@
   pollPipeline();
   setInterval(function() { if (!document.hidden) pollPipeline(); }, 4000);
 
+  // CV: the render is running. 2D: the flat scene model -- homography plus
+  // its region dictionary -- registered and usable, red when it has gone
+  // stale, dark when the node has none. FOV: foveal gating on. There is no
+  // 3D lamp because there is no 3D: registration is homography-only and the
+  // multi-view work was scoped and never built. A lamp for a stage that
+  // cannot exist yet would be the panel's one unforgivable lie.
+  function paintAnalysis() {
+    function set(id, state) {
+      var el = document.getElementById(id);
+      if (el) el.className = 'led' + (state === 'ok' ? ' on' : state === 'down' ? ' down' : '');
+    }
+    set('ledCv',      feedModeKnown && feedMode === 'cv' ? 'ok' : '');
+    set('ledFov',     (feedMode === 'cv' && fovealCheck && fovealCheck.checked) ? 'ok' : '');
+    set('ledScene2d', sceneState === 'registered' ? 'ok'
+                    : sceneState === 'stale'      ? 'down' : '');
+  }
+
   function paintLamps() {
     var live = (liveInd && liveInd.textContent === 'LIVE');
     // '' is dark and means UNKNOWN -- nothing has measured this stage.
@@ -1718,6 +1751,7 @@
             : (!feedModeKnown || feedMode === 'hide') ? ''
             : (pipeline ? 'down' : '');
     set('ledHlsV', hls); set('ledHlsA', hls);
+    paintAnalysis();
     set('ledCamera', stage('camera'));
     set('ledMic', stage('mic'));
     set('ledMtxV', stage('mediamtx')); set('ledMtxA', stage('mediamtx'));
@@ -1834,7 +1868,12 @@
   setInterval(pollFoveal, 5000);
 
   // ── SCENE MODEL — three-state: registered / stale / unregistered ──
+  // The scene row was dropped from this panel, so this variable is now the
+  // only thing holding what the node said -- the 2D lamp reads it.
+  var sceneState = '';
   function applySceneState(state) {
+    sceneState = state;
+    paintAnalysis();
     // No scene row on this panel -- scene registration belongs to lightcv,
     // where the cameras are bad enough to need a registered reference. The
     // endpoint stays live for anything else that asks; the viewer does not
@@ -2458,6 +2497,132 @@
       if (window._fpsPush) window._fpsPush(delivered);
     }, 1000);
   })();
+
+  // ── TALK — half duplex, and half duplex on purpose ──
+  //
+  // The node is a speakerphone: it plays your voice out of a speaker its own
+  // microphone is pointed at. Full duplex would need echo cancellation on
+  // that side; half duplex needs none, because the node turns its microphone
+  // down for as long as you are talking and the loop is never closed. The
+  // room goes quiet while you speak. That is the trade, and it is the honest
+  // one to make before the drift work lands.
+  //
+  // Audio goes out by WHIP to mediamtx, which already speaks WebRTC on this
+  // node -- no second media server. nginx proxies it so the page and the
+  // publish share an origin whatever the viewer is served over.
+  var talkPc = null, talkStream = null, talkRes = null, talking = false;
+  var talkBtn = document.getElementById('talkBtn');
+
+  function talkSupported() {
+    return !!(window.isSecureContext && navigator.mediaDevices &&
+              navigator.mediaDevices.getUserMedia && window.RTCPeerConnection);
+  }
+
+  function paintTalk(err) {
+    if (!talkBtn) return;
+    var ok = talkSupported();
+    talkBtn.disabled = !ok;
+    talkBtn.className = 'modem' + (talking ? ' pressed' : '');
+    var l = document.getElementById('talkLamp');
+    if (l) l.className = 'bulb' + (talking ? ' on' : '');
+    talkBtn.title = err ? ('Talkback failed: ' + err)
+      : !ok ? 'Talkback needs a secure page: open this viewer over its https address'
+      : talking ? 'Talking -- the room cannot be heard until you stop'
+      : 'Talk to the room (mutes the room mic while you speak)';
+  }
+
+  // mediamtx accepts a complete offer, so gather first rather than trickling.
+  function talkIceReady(pc) {
+    if (pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish() { if (!done) { done = true; resolve(); } }
+      pc.addEventListener('icegatheringstatechange', function () {
+        if (pc.iceGatheringState === 'complete') finish();
+      });
+      setTimeout(finish, 2000);     // a candidate that has not arrived in 2s is not coming
+    });
+  }
+
+  function stopTalk(err) {
+    talking = false;
+    paintTalk(err);
+    fetch('/api/talk', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'false' })
+      .catch(function () {});
+    if (talkRes) { fetch(talkRes, { method: 'DELETE' }).catch(function () {}); talkRes = null; }
+    if (talkPc) { try { talkPc.close(); } catch (e) {} talkPc = null; }
+    if (talkStream) {
+      talkStream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+      talkStream = null;
+    }
+  }
+
+  function startTalk() {
+    talkBtn.disabled = true;
+    navigator.mediaDevices.getUserMedia({
+      // The browser's own AEC, NS and AGC -- the same processing Zoom uses,
+      // on the only side of this link that can do it for free.
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    })
+    .then(function (stream) {
+      talkStream = stream;
+      talkPc = new RTCPeerConnection({ iceServers: [] });
+      stream.getAudioTracks().forEach(function (t) { talkPc.addTrack(t, stream); });
+      talkPc.addEventListener('connectionstatechange', function () {
+        if (talking && (talkPc.connectionState === 'failed' ||
+                        talkPc.connectionState === 'disconnected')) stopTalk('connection lost');
+      });
+      return talkPc.createOffer()
+        .then(function (off) { return talkPc.setLocalDescription(off); })
+        .then(function () { return talkIceReady(talkPc); })
+        .then(function () {
+          return fetch('/talk/whip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: talkPc.localDescription.sdp
+          });
+        });
+    })
+    .then(function (res) {
+      if (!res.ok) throw new Error('WHIP ' + res.status);
+      talkRes = res.headers.get('Location');
+      return res.text();
+    })
+    .then(function (sdp) {
+      return talkPc.setRemoteDescription({ type: 'answer', sdp: sdp });
+    })
+    // Only now does the node open its speaker and drop its microphone: doing
+    // it before the audio is actually flowing would mute a room for a
+    // connection that never arrived.
+    .then(function () {
+      return fetch('/api/talk', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'true' });
+    })
+    .then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('api ' + r.status)); });
+      talking = true;
+      paintTalk();
+    })
+    .catch(function (e) { stopTalk(String(e && e.message || e)); });
+  }
+
+  function clickTalk() {
+    if (!talkSupported()) return;
+    if (talking) stopTalk(); else startTalk();
+  }
+
+  // The node stops talkback on its own after TALK_MAX_SECONDS, and a viewer
+  // that thinks it is still transmitting would be lying about a live
+  // microphone -- so follow the node rather than our own memory.
+  function pollTalk() {
+    if (!talking) return;
+    fetch('/api/talk', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (v) { if (v !== null && v.trim() !== 'true') stopTalk('stopped by the node'); })
+      .catch(function () {});
+  }
+  setInterval(pollTalk, 4000);
+  window.addEventListener('pagehide', function () { if (talking) stopTalk(); });
+  paintTalk();
 
   // ── BROADCAST ──
   var currentMsg = '';
