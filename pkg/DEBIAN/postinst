@@ -132,6 +132,25 @@ if [ -n "$MISSING_SUDOERS" ]; then
     echo "  controls will prompt for a password. Run: sudo hls-livecam-setup"
 fi
 
+# --- Bring back what prerm stopped -------------------------------
+# prerm stops mediamtx and broadcast-api on upgrade, because their files are
+# about to be replaced underneath them. Nothing ever started them again, so
+# every deb upgrade left the node dark until a human noticed -- the same
+# silence as the sudoers bug, one script further along.
+#
+# Only units that are ENABLED get started: a node that deliberately disabled
+# something must not have it switched back on by an upgrade. ffmpeg-cam is
+# included for the nodes that still use it; on a studio-pipeline node it is
+# disabled and stays that way.
+if [ -n "$2" ]; then     # $2 is the old version -- set only on upgrade
+    for unit in mediamtx broadcast-api ffmpeg-cam; do
+        if systemctl is-enabled "$unit" >/dev/null 2>&1; then
+            systemctl start "$unit" 2>/dev/null || \
+                echo -e "${YELLOW}Could not start $unit -- check: systemctl status $unit${NC}"
+        fi
+    done
+fi
+
 echo ""
 echo -e "${GREEN}hls-livecam-server installed.${NC}"
 echo ""
