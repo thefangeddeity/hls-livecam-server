@@ -504,24 +504,28 @@
      catching a little light in the middle -- so it reads as something set
      INTO the metal rather than sitting on it. Pressed, the plunger drops and
      the light on it goes out. */
-  .reset { width: 17px; height: 17px; flex: 0 0 auto; padding: 0; border-radius: 50%;
+  .reset { width: 30px; height: 16px; flex: 0 0 auto; padding: 0; border-radius: 9px;
     cursor: pointer; font-family: inherit;
-    background: radial-gradient(circle at 50% 42%,#141416 0%,#101012 58%,#1c1c1f 100%);
+    background: linear-gradient(180deg,#0f0f11 0%,#141416 60%,#1d1d21 100%);
     border: 1px solid #35353b;
     box-shadow: inset 0 2px 3px rgba(0,0,0,.85), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
     display: flex; align-items: center; justify-content: center; }
-  .reset .pin { width: 5px; height: 5px; border-radius: 50%;
-    background: linear-gradient(180deg,#3a3a40,#2a2a2e);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 1px 1px rgba(0,0,0,.6); }
+  /* The plunger is a tic tac: a plump little pill sitting in the well, not
+     a bar. Fully rounded ends, a gloss along the top, and enough height that
+     it reads as a body you could press rather than a line someone drew. */
+  .reset .pin { width: 20px; height: 9px; border-radius: 5px;
+    background: linear-gradient(180deg,#4a4a52 0%,#37373d 52%,#2a2a2e 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(0,0,0,.35), 0 1px 1px rgba(0,0,0,.55); }
   .reset:active { box-shadow: inset 0 3px 4px rgba(0,0,0,.9); }
-  .reset:active .pin { background: #232327; box-shadow: inset 0 1px 2px rgba(0,0,0,.8); }
+  .reset:active .pin { background: linear-gradient(180deg,#2e2e34,#232327);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.8); }
   .rstlab { font-size: 10px; letter-spacing: .04em; }
   html[data-theme="light"] .reset {
-    background: radial-gradient(circle at 50% 42%,#d9d7cc 0%,#e6e4db 58%,#f3f2ec 100%);
+    background: linear-gradient(180deg,#d5d3c8 0%,#e4e2d9 60%,#f2f1eb 100%);
     border-color: #c4c2b6;
     box-shadow: inset 0 2px 3px rgba(88,110,117,.35), inset 0 -1px 0 rgba(255,255,255,.9), 0 1px 0 rgba(255,255,255,.8); }
-  html[data-theme="light"] .reset .pin { background: linear-gradient(180deg,#fbfaf6,#e4e2d8);
-    box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(88,110,117,.35); }
+  html[data-theme="light"] .reset .pin { background: linear-gradient(180deg,#fffefb 0%,#f2f1ea 52%,#e2e0d6 100%);
+    box-shadow: inset 0 1px 0 #fff, inset 0 -1px 0 rgba(88,110,117,.18), 0 1px 1px rgba(88,110,117,.35); }
   .modem.wide .cap2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Engaged is a pressed key with its lamp lit -- the same language as MUTE,
      which is the point: the two things on this panel that LATCH should look
