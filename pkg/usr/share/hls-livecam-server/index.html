@@ -426,8 +426,15 @@
   .fpsglass { position: relative; flex: 1 1 auto; min-width: 0; height: 34px; border-radius: 5px; overflow: hidden;
     background: linear-gradient(180deg,var(--glass-a) 0%,var(--glass-b) 62%,var(--glass-a) 100%);
     border: 1px solid #040809; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75); }
+  /* Scanlines AND the top sheen ride in one pseudo-element, because the
+     canvas is an in-flow child: a separate ::before would paint underneath
+     it and the strip would sit flatter and darker than the readouts above,
+     which is exactly what it did. Alphas are .vfd's, pre-multiplied by the
+     .55 that rule applies to its scanlines. */
   .fpsglass::after { content: ""; position: absolute; inset: 0; pointer-events: none;
-    background: repeating-linear-gradient(180deg,rgba(0,0,0,.15) 0 1px,transparent 1px 3px); opacity: .55; }
+    background:
+      linear-gradient(180deg,rgba(255,255,255,.04) 0%,rgba(255,255,255,0) 42%),
+      repeating-linear-gradient(180deg,rgba(0,0,0,.083) 0 1px,transparent 1px 3px); }
   .fpsglass canvas { display: block; width: 100%; height: 100%; }
 
   /* HIDE is the key you are allowed to hit by accident -- pressing it costs
@@ -910,6 +917,17 @@
   }
   html[data-theme="light"] .vfd::after { opacity: .14; }
   html[data-theme="light"] .vfd::before { background: linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,0)); }
+  html[data-theme="light"] .fpsglass {
+    border-color: #c9c0a6;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.85),
+                inset 0 0 18px rgba(101,123,131,.16),
+                0 1px 2px rgba(0,0,0,.10);
+  }
+  html[data-theme="light"] .fpsglass::after {
+    background:
+      linear-gradient(180deg,rgba(255,255,255,.5) 0%,rgba(255,255,255,0) 42%),
+      repeating-linear-gradient(180deg,rgba(0,0,0,.021) 0 1px,transparent 1px 3px);
+  }
   html[data-theme="light"] .vlit { text-shadow: none; font-weight: 600; }
   html[data-theme="light"] .vind i.on { text-shadow: none; font-weight: 700; }
   /* The pill lives behind glass, so in light theme it obeys the glass, not
