@@ -590,23 +590,51 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     # somebody's window shape.
     ty = h - 42
 
-    # Right-aligned companion to the DETECTING banner: which CV tools are
-    # actually running. Same ink, size and baseline so the two read as one
-    # telemetry strip rather than two unrelated overlays.
+    # The capability strip is a SECOND LINE, above the banner, and it is
+    # allowed to be cut short.
+    #
+    # It used to share the banner's baseline, right-aligned, clamped with
+    # max(18, ...). On a node running several tools that clamp guaranteed
+    # the failure it looked like it was preventing: the strip started at
+    # x=18 on top of "DETECTING 2 TARGETS" and the two rendered through each
+    # other into an unreadable smear. Two independent strings cannot share
+    # one line unless something enforces that they fit, and nothing did.
+    #
+    # They are also different kinds of fact -- what the machine FOUND, and
+    # how it is LOOKING -- so they get a line each: configuration above,
+    # findings below, quieter above than below.
+    cap_scale = telemetry_scale * 0.88
+    cap_ink = tuple(max(1, min(255, int(round(c * 0.82)))) for c in telemetry_ink)
+    cap_y = ty - 21
+
+    def _strip_width(txt, scale):
+        wsum = 0
+        for ch_ in txt:
+            (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, scale,
+                                          telemetry_thickness)
+            wsum += cw_ + telemetry_spacing
+        return wsum
+
     if capabilities:
         cap = str(capabilities)
-        cap_w = 0
-        for ch_ in cap:
-            (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, telemetry_scale,
-                                          telemetry_thickness)
-            cap_w += cw_ + telemetry_spacing
-        cx_ = max(18, w - 18 - cap_w)
-        for ch_ in cap:
-            (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, telemetry_scale,
-                                          telemetry_thickness)
-            cv2.putText(out, ch_, (cx_, ty), telemetry_font, telemetry_scale,
-                        telemetry_ink, telemetry_thickness, cv2.LINE_AA)
-            cx_ += cw_ + telemetry_spacing
+        avail = w - 36
+        # Trim at a separator rather than mid-word: a strip that ends in
+        # "FOVEA" is worse than one that stops at the last whole tool it had
+        # room to name.
+        while cap and _strip_width(cap, cap_scale) > avail:
+            cut = cap.rfind(', ')
+            if cut <= 0:
+                cap = cap[:max(0, len(cap) - 2)]
+            else:
+                cap = cap[:cut]
+        if cap:
+            cx_ = max(18, w - 18 - _strip_width(cap, cap_scale))
+            for ch_ in cap:
+                (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, cap_scale,
+                                              telemetry_thickness)
+                cv2.putText(out, ch_, (cx_, cap_y), telemetry_font, cap_scale,
+                            cap_ink, telemetry_thickness, cv2.LINE_AA)
+                cx_ += cw_ + telemetry_spacing
 
     for char in text:
         (cw, ch), _ = cv2.getTextSize(

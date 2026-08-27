@@ -443,9 +443,15 @@
      never lights. */
   .glab { position: absolute; bottom: 2px; font-family: var(--mono); font-size: 7px;
     letter-spacing: .12em; color: var(--phos-label); pointer-events: none; }
-  .analysisrow { align-items: stretch; }
-  .leds.analysis { flex: 0 0 auto; justify-content: space-between; gap: 0; padding: 1px 0 1px 2px; }
-  .leds.analysis .led { font-size: 9.5px; line-height: 12px; gap: 6px; }
+  /* The lamps are a strip under the trace, not a column beside it. Beside
+     it they cost the glass a quarter of its width -- this panel is 210px
+     across, and the trace could show 52 seconds with the column next to it
+     or a full minute without. A minute is the rounder thing to compare
+     against yesterday, and the lamps lose nothing by lying down. */
+  .ledstrip { display: flex; justify-content: space-between; align-items: center;
+    margin-top: 7px; padding: 0 2px; }
+  .ledstrip .led { font-size: 8px; line-height: 11px; gap: 4px; letter-spacing: .02em; }
+  .ledstrip .bulb { width: 5px; height: 5px; }
   .glab-l { left: 5px; }
   .glab-r { right: 5px; }
 
@@ -1107,7 +1113,7 @@
              its left. The trace is PHOSPHOR, so it lives behind glass --
              painting it on the key would put phosphor on housing metal,
              which is the one thing the three materials never do. -->
-        <div class="modemrow analysisrow">
+        <div class="modemrow">
           <div class="fpsglass" id="fpsGlass" title="Frames actually arriving at this viewer, last 60 seconds">
             <canvas id="fpsGraph" width="240" height="60"></canvas>
             <span class="glab glab-l">FPS</span>
@@ -1124,12 +1130,18 @@
                background subtraction, then the gate built on top of it, then
                the flat scene model, then depth. Reading down the column is
                reading up the ladder of seeing. -->
-          <div class="leds analysis">
-            <div class="led" id="ledMog2" title="Background model producing a foreground mask"><span class="bulb"></span><span class="n">MOG2</span></div>
-            <div class="led" id="ledFov" title="Detection gated to the moving region"><span class="bulb"></span><span class="n">FOV</span></div>
-            <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary"><span class="bulb"></span><span class="n">2D</span></div>
-            <div class="led" id="ledScene3d" title="Depth -- not implemented on this branch"><span class="bulb"></span><span class="n">3D</span></div>
-          </div>
+        </div>
+        <!-- The lamps sit UNDER the trace, not beside it. Beside it they
+             cost the glass a quarter of its width, and the panel is only
+             210px across -- the trace could show 52 seconds with the column
+             next to it, or a full minute without. A minute is a rounder
+             thing to compare against yesterday than 52 seconds, and the
+             lamps lose nothing by being a row. -->
+        <div class="ledstrip">
+          <div class="led" id="ledMog2" title="Background model producing a foreground mask"><span class="bulb"></span><span class="n">MOG2</span></div>
+          <div class="led" id="ledFov" title="Detection gated to the moving region"><span class="bulb"></span><span class="n">FOV</span></div>
+          <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary"><span class="bulb"></span><span class="n">2D</span></div>
+          <div class="led" id="ledScene3d" title="Depth -- not implemented on this branch"><span class="bulb"></span><span class="n">3D</span></div>
         </div>
         <!-- Foveal belongs to CV, so it sits directly under it, the way
              Mute buzzes sits under the audio keys. A setting, not an action. -->
@@ -2436,7 +2448,12 @@
       // the matrix ran straight through FPS and 60s and both became noise --
       // a label competing with the reading for the same cells.
       var pad = 3, foot = 9;
-      var cols = Math.max(4, Math.floor((w - pad * 2) / PITCH));
+      // Sixty columns is the target: one per second, a minute of history,
+      // and a round number on the label. Wider glass does not buy more time
+      // -- it just centres the same minute -- because a window that changes
+      // size with the browser is a window nobody can compare against
+      // yesterday's.
+      var cols = Math.max(4, Math.min(60, Math.floor((w - pad * 2) / PITCH)));
       var rows = Math.max(3, Math.floor((h - pad - foot) / PITCH));
       var x0 = pad + ((w - pad * 2) - cols * PITCH) / 2;
       var y0 = pad + ((h - pad - foot) - rows * PITCH) / 2;
