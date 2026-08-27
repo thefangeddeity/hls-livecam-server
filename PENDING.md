@@ -549,6 +549,20 @@ Foveal went back to a small checkbox under the keys, beside where Mute buzzes
 sits in AUDIO. As a full-width lit key it read like a fourth feed mode, which
 it is not — it is a setting.
 
+**The picture row is one group of four: Show · Blur · Hide · CV.** Exactly one
+of them is true at any moment, so exactly one group says so. CV spent a couple
+of iterations on its own row and the split made the exclusivity invisible: a
+key alone in different metal reads as an independent switch, which implied you
+could have Hide and CV at once. CV sits at the right end, so the Foveal
+checkbox — right-aligned like Mute buzzes — lands directly under it, which was
+the reason for pulling CV out of the row in the first place.
+
+One idea considered and rejected, recorded because it is tempting: **disabling
+Show/Blur/Hide while CV runs.** Those three are the way *out* of CV. Disabled,
+the escape route looks broken, and the operator has to work out that pressing
+the lit key again is what releases it. Disabled must keep meaning unavailable.
+Emphasis belongs on the engaged key, never on making its neighbours look dead.
+
 **camdash and the Qt GUI do not know about BLUR yet.** They are the last two
 surfaces still on the pre-panel vocabulary; folding it in belongs with that
 port, not ahead of it.
