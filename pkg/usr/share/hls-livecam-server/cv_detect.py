@@ -485,7 +485,9 @@ class Tracker:
 
     def __init__(self, max_misses=5, max_distance=180,
                  evidence_decay=0.85, promote_threshold=0.35,
-                 evidence_boost=0.0, scene_boost=0.0):
+                 evidence_boost=0.0, scene_boost=0.0,
+                 weak_conf=0.0, weak_distance_mult=1.5,
+                 weak_creates_tracks=True):
         self.tracks = {}
         self._next_id = 1
         self.max_misses = int(max_misses)
@@ -494,35 +496,92 @@ class Tracker:
         self.promote_threshold = float(promote_threshold)
         self.evidence_boost = float(evidence_boost)
         self.scene_boost = float(scene_boost)
+        self.weak_conf = float(weak_conf)
+        self.weak_distance_mult = float(weak_distance_mult)
+        self.weak_creates_tracks = bool(weak_creates_tracks)
+
+    def _absorb(self, tid, det):
+        """Fold a matched detection into an existing track."""
+        tr = self.tracks[tid]
+        tr.box = det.box
+        tr.confidence = det.confidence
+        tr.last_seen = det.timestamp
+        tr.state = 'present'
+        tr.misses = 0
+        tr.evidence = tr.evidence * self.evidence_decay + det.confidence * (
+            1.0 + self.evidence_boost * det.fg_consistency
+                + self.scene_boost * det.scene_consistency)
+        tr.promoted = tr.evidence >= self.promote_threshold
+
+    def _nearest(self, det, pool, max_distance):
+        """Nearest same-class track in `pool` within `max_distance`."""
+        best, best_d = None, max_distance + 1
+        cx, cy = det.centre
+        for tid, tr in pool.items():
+            if tr.cls != det.cls:
+                continue
+            tx, ty = tr.centre
+            d = ((cx - tx) ** 2 + (cy - ty) ** 2) ** 0.5
+            if d < best_d:
+                best, best_d = tid, d
+        return best
 
     def update(self, detections):
+        # Two-pass association, after ByteTrack: confident detections choose
+        # first, then weak ones are offered what is left over.
+        #
+        # ByteTrack's own rule -- weak detections may extend a track but may
+        # never start one -- would be actively harmful here, and it is worth
+        # writing down why rather than porting it faithfully. ByteTrack assumes
+        # a strong detector where a low score means an occluded or motion-blurred
+        # instance of something already tracked. On this fleet the subject is
+        # never strong: the cat peaks around 0.19 on tanzania's optics and 0.03
+        # on tina's. Forbidding weak detections from creating tracks would mean
+        # the cat is never tracked at all, and the evidence accumulator -- which
+        # exists precisely because recurrence is the only signal separating a
+        # real subject from noise here -- would never get a track to accumulate
+        # into. So `weak_creates_tracks` defaults True and keeps that path.
+        #
+        # What IS worth taking is the ordering and the second, looser gate.
+        # Before this, one pass in arbitrary detection order let a weak blip
+        # claim the track a confident detection should have had, and a weak
+        # detection just outside `max_distance` started a rival track instead of
+        # extending the real one -- so a flickering subject produced a series of
+        # short tracks each holding a fraction of the evidence, none of them ever
+        # reaching the promotion threshold. Splitting the passes fixes both:
+        # confident detections bind first, then weak ones reach further
+        # (`weak_distance_mult`) into what remains.
+        #
+        # `weak_conf=0.0` (the default) means no detection is ever classified
+        # weak, the second pass is empty, and this is byte-identical to the
+        # single-pass behaviour it replaces.
+        strong = [d for d in detections if d.confidence >= self.weak_conf]
+        weak = [d for d in detections if d.confidence < self.weak_conf]
+
         unmatched = dict(self.tracks)
-        for det in detections:
-            best, best_d = None, self.max_distance + 1
-            cx, cy = det.centre
-            for tid, tr in unmatched.items():
-                if tr.cls != det.cls:
-                    continue
-                tx, ty = tr.centre
-                d = ((cx - tx) ** 2 + (cy - ty) ** 2) ** 0.5
-                if d < best_d:
-                    best, best_d = tid, d
+        spawned = []
+
+        for det in strong:
+            best = self._nearest(det, unmatched, self.max_distance)
             if best is not None:
-                tr = self.tracks[best]
-                tr.box = det.box
-                tr.confidence = det.confidence
-                tr.last_seen = det.timestamp
-                tr.state = 'present'
-                tr.misses = 0
-                tr.evidence = tr.evidence * self.evidence_decay + det.confidence * (
-                    1.0 + self.evidence_boost * det.fg_consistency
-                        + self.scene_boost * det.scene_consistency)
-                tr.promoted = tr.evidence >= self.promote_threshold
+                self._absorb(best, det)
                 unmatched.pop(best, None)
             else:
-                tr = Track(self._next_id, det)
-                self.tracks[self._next_id] = tr
-                self._next_id += 1
+                spawned.append(det)
+
+        # Second pass: only tracks nothing confident claimed, at a looser gate.
+        weak_gate = self.max_distance * self.weak_distance_mult
+        for det in weak:
+            best = self._nearest(det, unmatched, weak_gate)
+            if best is not None:
+                self._absorb(best, det)
+                unmatched.pop(best, None)
+            elif self.weak_creates_tracks:
+                spawned.append(det)
+
+        for det in spawned:
+            self.tracks[self._next_id] = Track(self._next_id, det)
+            self._next_id += 1
 
         # Anything unmatched this pass is missing, then departed. Kept for a
         # few passes so a single failed detection does not blink a label out

@@ -504,6 +504,22 @@ _DEFAULTS = {
                                        # scene containing only cats is exactly
                                        # that failure starting.
 
+    # Two-pass association (after ByteTrack). Detections below CV_TRACK_WEAK_CONF
+    # are held back and offered only what the confident ones did not claim, at a
+    # looser distance gate. 0.0 = every detection is confident, the second pass
+    # is empty, and association is byte-identical to the single pass this
+    # replaced. See Tracker.update() in cv_detect.py for why ByteTrack's own
+    # "weak detections may never start a track" rule is NOT adopted here.
+    'CV_TRACK_WEAK_CONF':          0.0,
+    'CV_TRACK_WEAK_DISTANCE_MULT': 1.5,  # how much further a weak detection may
+                                          # reach than a confident one
+    'CV_TRACK_WEAK_CREATES':       1,     # 1 keeps today's behaviour: a weak
+                                          # detection with nothing to attach to
+                                          # still starts a track. On this fleet
+                                          # the subject is never confident, so
+                                          # turning this off can mean never
+                                          # tracking the cat at all.
+
     'CV_SCENE_ENABLED':        0,        # off by default; opt in per node
     'CV_SCENE_REFERENCE':      '/var/lib/hls-livecam/scene_model.json',
     'CV_SCENE_EVIDENCE_BOOST': 0.0,      # second, independent evidence
@@ -824,7 +840,12 @@ class CVProcessor:
                     evidence_decay=_read_float(denv, 'CV_TRACK_EVIDENCE_DECAY'),
                     promote_threshold=_read_float(denv, 'CV_TRACK_PROMOTE_THRESHOLD'),
                     evidence_boost=self._foveal_evidence_boost,
-                    scene_boost=self._scene_evidence_boost)
+                    scene_boost=self._scene_evidence_boost,
+                    weak_conf=_read_float(denv, 'CV_TRACK_WEAK_CONF'),
+                    weak_distance_mult=_read_float(
+                        denv, 'CV_TRACK_WEAK_DISTANCE_MULT'),
+                    weak_creates_tracks=bool(
+                        _read_int(denv, 'CV_TRACK_WEAK_CREATES')))
             except Exception as exc:
                 print(
                     f"SHAKEY DETECTOR INIT ERROR: "
