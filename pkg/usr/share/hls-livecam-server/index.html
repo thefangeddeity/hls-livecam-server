@@ -1133,12 +1133,12 @@
              reshuffled again once it lands. -->
         <div class="btnrow">
           <button class="pbtn" id="showBtn" onclick="setPicture('show')">Show</button>
-          <button class="pbtn pending" id="nightBtn" disabled
-                  title="Night Vision -- ported from amira, not yet available here">Night</button>
           <button class="pbtn guarded" id="hideBtn" onclick="setPicture('hide')"
                   title="Switch the camera off -- publishes nothing but the notice">Hide</button>
           <button class="pbtn" id="cvBtn" onclick="setPicture('cv')"
                   title="Computer-vision render -- the room redrawn, not photographed">CV</button>
+          <button class="pbtn" id="nightBtn" onclick="setPicture('night')"
+                  title="Denoise and an aggressive tone curve tuned for a dark room">Night</button>
         </div>
         <!-- Diagnosis beside the remedy: the trace is what tells you the
              feed has stopped, and the key that fixes it is immediately to
@@ -1755,6 +1755,8 @@
     showBtn.className = 'pbtn' + (feedMode === 'show' ? ' pressed' : '');
     hideBtn.className = 'pbtn guarded' + (feedMode === 'hide' ? ' pressed' : '');
     cvBtn.className   = 'pbtn' + (feedMode === 'cv'   ? ' pressed' : '');
+    var nightBtn = document.getElementById('nightBtn');
+    if (nightBtn) nightBtn.className = 'pbtn' + (feedMode === 'night' ? ' pressed' : '');
     var iCv = document.getElementById('indCv');
     if (iCv) iCv.className = (feedMode === 'cv') ? 'on' : '';
     // Hide publishes static, which on its own is indistinguishable from a
@@ -2035,7 +2037,9 @@
   function setFeedMode(mode) {
     if (mode === feedMode) return;
     coverFor(mode);
+    var nightBtn = document.getElementById('nightBtn');
     showBtn.disabled = true; cvBtn.disabled = true; hideBtn.disabled = true;
+    if (nightBtn) nightBtn.disabled = true;
     fetch('/api/feed-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
@@ -2050,6 +2054,7 @@
         setTimeout(reloadStream, 1000);
       }
       showBtn.disabled = false; cvBtn.disabled = false; hideBtn.disabled = false;
+      if (nightBtn) nightBtn.disabled = false;
     });
   }
 

@@ -46,7 +46,7 @@ TALK_PATH       = "talk"
 # twice in one run. CV is the safe default when no prior state exists;
 # 'show' is never assumed.
 SAFE_FEED_MODE  = 'cv'
-VALID_MODES     = ('show', 'cv', 'hide')
+VALID_MODES     = ('show', 'cv', 'hide', 'night')
 # CV Mode pivot (SPEC fleet contract): 'cloak' was the pre-pivot name for
 # this mode. Every node in the fleet talks to every other node's endpoints
 # and will not ship the pivot on the same day, so this alias is accepted on
@@ -778,13 +778,22 @@ def _writer_loop():
 
             if mode == 'show':
                 frame_arr = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
-            elif mode == 'cv':
+            elif mode in ('cv', 'night'):
                 # Stays in NumPy/OpenCV array form throughout -- no PNG/PIL
                 # round trip. That cycle is what the old cloak render did,
                 # and it measured ~190ms/frame here against a 66.7ms budget.
                 raw_arr = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
                 with _foveal_lock:
                     cv_proc.set_foveal(_foveal_enabled)
+                # Night mode reuses CVProcessor's own denoise/tone-correct
+                # machinery, just tuned harder and stopped before edges --
+                # see cv_proc.process()'s _night_enabled branch. No separate
+                # capture path: unlike macOS, the camera reader here runs
+                # continuously at one fixed framerate regardless of mode
+                # (see _start_cam_reader's docstring on why), so this is the
+                # digital half of Night mode only, not the optical
+                # long-exposure half ariana also gets from a slower capture.
+                cv_proc.set_night(mode == 'night')
                 frame_arr, _cv_meta = cv_proc.process(raw_arr)
             else:  # hide
                 frame_arr = _render_hide_frame(FRAME_W, FRAME_H)
