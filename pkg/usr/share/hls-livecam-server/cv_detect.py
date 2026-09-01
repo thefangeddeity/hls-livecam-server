@@ -594,10 +594,16 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     #
     # Deriving it from frame height instead makes one rule cover every node and
     # every future resolution, with nothing to re-tune when a camera changes.
-    # The fraction is e%, chosen by the operator. There is no derivation here
-    # and it is not pretending to be one -- any value in this neighbourhood
-    # reads well, and a memorable constant is easier to keep consistent across
-    # nodes than a rounder number nobody recalls the reason for.
+    # THE e% RULE: HUD cap height is e percent of frame height, on every node,
+    # in every renderer -- burned-in here and in the fork, and in amira's CSS
+    # overlay, which measures it off the displayed picture rect. Anything that
+    # draws telemetry over a picture in this fleet follows it.
+    #
+    # The value is the operator's pick and this comment is not going to pretend
+    # it was derived. Any fraction in this neighbourhood reads well; what makes
+    # it worth having is that it is one number, memorable, and identical
+    # everywhere -- which a rounder figure nobody recalls the reason for was
+    # demonstrably not.
     HUD_CAP_FRACTION = math.e / 100.0
     _CAP_AT_UNIT_SCALE = 27.0        # measured: getTextSize(..., 1.0, 1)[0][1]
 
