@@ -32,6 +32,14 @@ SOURCES = {
     'livecam': 'art/hls-livecam-server.png',
     'lightcv': 'art/hls-lightcv-server.png',
 }
+# Each product ships its mark into its own tree. This script lives in the
+# livecam repo, so the lightcv destination is only reachable by pointing --out
+# at a checkout of the fork; there is deliberately no path here that writes one
+# product's art into the other's package.
+OUT_PATHS = {
+    'livecam': 'pkg/usr/share/hls-livecam-server/brand.png',
+    'lightcv': None,   # set --out explicitly, inside a fork checkout
+}
 # 20 CSS px in the header; 128 carries a 3x phone with room to spare, at a
 # file size that does not matter. Bigger is shipping an app icon down the
 # wire to draw a 20px square.
@@ -58,8 +66,19 @@ def find_lens(rgb):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--product', choices=sorted(SOURCES), default='livecam')
-    ap.add_argument('--out', default='pkg/usr/share/hls-livecam-server/brand.png')
+    # No shared default. --out used to default to the LIVECAM package path
+    # regardless of --product, so `--product lightcv` with no --out wrote the
+    # fork's mark straight into the parent's package -- the exact confusion
+    # art/README.md exists to prevent. The destination now follows the product.
+    ap.add_argument('--out', default=None)
     args = ap.parse_args()
+    if args.out is None:
+        args.out = OUT_PATHS[args.product]
+        if args.out is None:
+            raise SystemExit(
+                f'--product {args.product} has no destination in this repo. '
+                'This is the livecam repo; pass --out pointing into a '
+                'hls-lightcv-server checkout.')
 
     src_path = os.path.join(REPO, SOURCES[args.product])
     src = Image.open(src_path).convert('RGB')

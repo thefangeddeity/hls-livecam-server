@@ -9,3 +9,8 @@ compare-xdog/
 *.bak
 *.bak-*
 *.bak[0-9]
+
+# The fork's artwork lives in the fork's own repo, deliberately -- one shared
+# art directory across two products is how a fork ends up branded as the thing
+# it forked from (see art/README.md).
+art/hls-lightcv-server.png
