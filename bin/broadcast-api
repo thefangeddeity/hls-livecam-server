@@ -178,7 +178,7 @@ def _read_mode():
     try:
         with open(MODE_FILE) as f:
             v = f.read().strip()
-        return v if v in ('show', 'cv', 'hide') else 'hide'
+        return v if v in ('show', 'cv', 'hide', 'night') else 'hide'
     except Exception:
         return 'hide'
 
@@ -206,10 +206,18 @@ _mode_lock = threading.Lock()
 # how a mode change reaches the encoder at all -- the mode decides which
 # devices ffmpeg opens, so it cannot be applied to a running process.
 _mode_generation = 0
-# Foveal layer: a modifier on CV mode, and the successor to B&W Blur's flag.
-# Renamed rather than deleted so the control, its endpoint and its state keep
-# the same shape when the CV port lands.
-_foveal_mode = False
+# Blur: a modifier on CV mode, reusing the old Cloak mode's block-art render
+# (block_art.render_cloak_vec, via CVProcessor.set_blur()) now that CV mode
+# has a real frame to put it in. Foveal Layer never grew past this same
+# shape of flag -- it shipped the checkbox disabled and never wired the
+# other end -- so this replaces it rather than sitting beside it.
+_cv_blur_mode = False
+# Foveal: the real gate CVProcessor already has (_foveal_enabled / set_foveal
+# / _fg_mask), previously only settable via CV_FOVEAL_ENABLED at start-up.
+# This is the live toggle the stale comment in cv_processor.py described but
+# broadcast-api never actually called -- wired for real now, read every frame
+# in _cv_pump alongside Blur so another viewer's toggle is reflected live.
+_cv_foveal_mode = False
 try:
     with open(LOCK_FILE) as _f:
         _msg_lock = _f.read().strip() == "true"
@@ -420,6 +428,14 @@ def audio_filter_args():
 _cv_procs  = []
 _cv_thread = None
 _cv_stop   = threading.Event()
+# Live handle onto the running CVProcessor so /api/pipeline can report real
+# faculty state (MOG2/Foveal/scene registration) instead of a fixed lamp
+# strip that always reads the same regardless of what CV mode is actually
+# doing -- the fleet's own rule ("a lamp that can never fail is
+# indistinguishable from a broken one"). Cleared whenever the CV publisher
+# stops, so a lamp reads unknown/off between CV sessions rather than
+# showing a stale reading from the last one.
+_cv_proc_instance = None
 
 
 def _read_exact(src, n):
@@ -450,6 +466,9 @@ def _cv_pump(src, dst, proc):
             break                      # A exited or was killed
         try:
             frame = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
+            proc.set_blur(_cv_blur_mode)  # re-read every frame, same as feed mode
+            proc.set_foveal(_cv_foveal_mode)  # ditto -- the real gate, not a stub
+            proc.set_night(_mode == 'night')  # ditto
             out, _meta = proc.process(frame)
             dst.write(np.ascontiguousarray(out).tobytes())
         except BrokenPipeError:
@@ -469,10 +488,30 @@ def _cv_pump(src, dst, proc):
                 break
 
 
-def _start_cv_publisher():
+def _start_cv_publisher(mode='cv'):
     """Camera -> CVProcessor -> RTSP, with the microphone joined at the muxer."""
-    global _cv_thread
-    fr = int(_cfg.get('FRAMERATE', 15))
+    global _cv_thread, _cv_proc_instance
+    if _cv_procs:
+        # A previous pair should always have been stopped by the caller
+        # before this runs, but the retry loop in _writer_loop re-enters
+        # this function on the same stale spawn_mode without rechecking
+        # _mode_generation, so it's possible to get here with a live pair
+        # still tracked. Overwriting _cv_procs below would orphan it --
+        # observed live as a leaked camera-leg ffmpeg, still holding the
+        # camera and still being read by a pump thread nothing else
+        # referenced anymore. Stop first, unconditionally, so this
+        # function can never leak regardless of how it got called twice.
+        _stop_cv_publisher()
+    # Night mode captures at a genuinely lower framerate rather than the
+    # normal one -- AVFoundation's own auto-exposure lengthens the exposure
+    # window per frame as the requested rate drops, which is real long
+    # exposure, not a digital simulation of it. The output stays honestly
+    # choppy at that same rate rather than faking smoothness with frame
+    # duplication: an old night-vision device looks like this too.
+    if mode == 'night':
+        fr = int(_cfg.get('NIGHT_FPS', 5))
+    else:
+        fr = int(_cfg.get('FRAMERATE', 15))
     video_idx = _resolve_avf_index()
     audio_idx = str(_cfg.get('AUDIO_DEVICE', 'Built-in Microphone')).strip() \
         or 'Built-in Microphone'
@@ -481,6 +520,7 @@ def _start_cv_publisher():
 
     import cv_processor as _cvp
     proc = _cvp.CVProcessor(_cfg)
+    _cv_proc_instance = proc
 
     a = subprocess.Popen([
         FFMPEG, '-hide_banner', '-loglevel', 'error',
@@ -492,6 +532,17 @@ def _start_cv_publisher():
         '-f', 'rawvideo', '-pix_fmt', 'bgr24', 'pipe:1',
     ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
        stderr=_open_ffmpeg_log(), bufsize=0)
+
+    # A and B each open their own AVFoundation session (A: camera, B: mic --
+    # split so the video leg can be piped through CVProcessor while audio
+    # passes straight to the encoder). Spawning both at once intermittently
+    # left B's mic-only session failing fast with "Input/output error"
+    # while A's camera session was still completing its own AVFoundation
+    # startup -- observed live, not everywhere, which is the signature of
+    # two concurrent AVCaptureSession opens racing rather than a hard
+    # incompatibility. Giving A a head start to finish opening the camera
+    # before B so much as asks for the microphone removes the overlap.
+    time.sleep(1.0)
 
     b = subprocess.Popen([
         FFMPEG, '-hide_banner', '-loglevel', 'error',
@@ -521,11 +572,21 @@ def _start_cv_publisher():
 
 
 def _stop_cv_publisher():
+    global _cv_proc_instance
     _cv_stop.set()
     for pr in _cv_procs:
         try: _kill_hard(pr)
         except Exception: pass
     _cv_procs[:] = []
+    _cv_proc_instance = None
+    # _kill_hard() waits for the OS process to exit, but CoreAudio's release
+    # of the microphone lags a moment behind that -- observed live as the
+    # very next avfoundation open (a mode switch back into cv/night) failing
+    # fast with "Input/output error" on the mic, intermittently, exactly the
+    # signature of a device not yet free rather than a real incompatibility.
+    # This settle window sits in the one function every teardown path
+    # already funnels through, so it covers all of them.
+    time.sleep(0.8)
 
 
 def _start_combined_av_publisher(mode='show'):
@@ -721,8 +782,13 @@ def _writer_loop():
             with _mode_lock:
                 spawn_mode = _mode
                 spawn_gen  = _mode_generation
-            if spawn_mode == 'cv':
-                proc = _start_cv_publisher()
+            # Blur is a modifier on Show (fleet convention, see Linux v6.0.5),
+            # not its own feed mode -- so it rides the CV split-pipeline
+            # (the only seam with a Python frame stage) while _mode stays
+            # 'show'. cv_blur_post() bumps _mode_generation on toggle so
+            # this reconsiders it the same way a real mode change does.
+            if spawn_mode in ('cv', 'night') or (spawn_mode == 'show' and _cv_blur_mode):
+                proc = _start_cv_publisher(spawn_mode)
             else:
                 proc = _start_combined_av_publisher(spawn_mode)
             _cam_proc = proc
@@ -836,29 +902,69 @@ def _writer_loop():
                 file=sys.stderr,
                 flush=True,
             )
+            # Whatever raised may have done so after _start_cv_publisher() or
+            # _start_combined_av_publisher() already spawned ffmpeg -- without
+            # this, the next loop iteration calls _start_*_publisher() again,
+            # which overwrites _cam_proc/_pub_proc/_cv_procs before anything
+            # kills what they used to point to. That orphan keeps the camera
+            # open (contending with the new capture) and outlives the app
+            # indefinitely, since nothing else ever references its pid again.
+            # Observed live: a leaked CV camera-leg ffmpeg, ignoring SIGTERM
+            # (blocked in a mach_msg syscall, same deadlock _kill_hard's
+            # docstring describes), reaped only by hand with SIGKILL.
+            try:
+                if _cam_proc is not None and _cam_proc.poll() is None:
+                    _kill_hard(_cam_proc)
+            except Exception:
+                pass
+            _stop_cv_publisher()
             time.sleep(2.0)
 
 
-# Canonical route is /api/foveal-mode, matching Linux, which already ships it
-# in five call sites (broadcast-api, index.html, camdash, gui/probes.py, a
-# deploy script). This branch had /api/foveal in exactly one place and had not
-# shipped it, so one string moves instead of five. /api/foveal stays as an
-# alias because it was live on ariana for a few hours; /api/bw-mode stays for
-# camdash and the Qt dashboard until they are ported.
+# This slot has been renamed twice now rather than deleted, so whatever
+# lands next keeps the same control/endpoint/state shape: B&W Blur -> Foveal
+# Layer (which shipped its checkbox permanently disabled and never wired the
+# other end) -> Blur, the abandoned Cloak render, now that CV mode has a real
+# frame to put it in. /api/bw-mode is not dead weight -- bin/camdash polls
+# and POSTs it live (_api_get("bw-mode", ...), the [b] key), so that control
+# now toggles Blur instead of nothing. /api/foveal-mode/-foveal keep working
+# too; nothing currently calls them, but breaking a URL for no benefit is
+# just as wrong as breaking one something depends on.
+@app.route('/api/cv-blur-mode', methods=['GET'])
 @app.route('/api/foveal-mode', methods=['GET'])
-@app.route('/api/foveal', methods=['GET'])     # alias, this branch only
-@app.route('/api/bw-mode', methods=['GET'])    # deprecated alias
-def foveal_get():
-    return ('true' if _foveal_mode else 'false'), 200
+@app.route('/api/foveal', methods=['GET'])
+@app.route('/api/bw-mode', methods=['GET'])
+def cv_blur_get():
+    return ('true' if _cv_blur_mode else 'false'), 200
 
 
+@app.route('/api/cv-blur-mode', methods=['POST'])
 @app.route('/api/foveal-mode', methods=['POST'])
-@app.route('/api/foveal', methods=['POST'])    # alias, this branch only
-@app.route('/api/bw-mode', methods=['POST'])   # deprecated alias, see feed_mode_post
-def foveal_post():
-    global _foveal_mode
-    _foveal_mode = not _foveal_mode
-    return ('true' if _foveal_mode else 'false'), 200
+@app.route('/api/foveal', methods=['POST'])
+@app.route('/api/bw-mode', methods=['POST'])
+def cv_blur_post():
+    global _cv_blur_mode, _mode_generation
+    with _mode_lock:
+        _cv_blur_mode = not _cv_blur_mode
+        _mode_generation += 1  # forces _writer_loop to restart the publisher
+    return ('true' if _cv_blur_mode else 'false'), 200
+
+
+@app.route('/api/cv-foveal-mode', methods=['GET'])
+def cv_foveal_get():
+    return ('true' if _cv_foveal_mode else 'false'), 200
+
+
+@app.route('/api/cv-foveal-mode', methods=['POST'])
+def cv_foveal_post():
+    global _cv_foveal_mode
+    with _mode_lock:
+        _cv_foveal_mode = not _cv_foveal_mode
+    # No _mode_generation bump: unlike Blur, Foveal never changes which
+    # devices ffmpeg opens or which mode the publisher spawns for -- it only
+    # changes what CVProcessor.process() does with a frame it already has,
+    # so nothing needs tearing down.
+    return ('true' if _cv_foveal_mode else 'false'), 200
 
 
 @app.route('/api/feed-mode', methods=['GET'])
@@ -882,7 +988,7 @@ def feed_mode_post():
     # dashboard are ported.
     if new_mode == 'cloak':
         new_mode = 'cv'
-    if new_mode not in ('show', 'cv', 'hide'):
+    if new_mode not in ('show', 'cv', 'hide', 'night'):
         abort(400)
     global _mode_generation
     with _mode_lock:
@@ -1048,11 +1154,31 @@ def pipeline():
         detail = 'feed hidden; camera and microphone closed'
         audio_rate = audio_ch = audio_kbps = None
 
+    # Faculty lamps, read from the live CVProcessor instance rather than
+    # asserted from config -- a stalled pipeline puts these out by itself
+    # rather than leaving them lit over a frozen frame. None (not False)
+    # when CV isn't running at all: unknown must look different from
+    # measured-and-off. 3D has no reading at all, ever -- depth is not
+    # implemented on this branch, same as tina's own 3D socket; the day it
+    # lands, this gets a real value instead of the control quietly
+    # disappearing and reappearing.
+    cvp = _cv_proc_instance
+    if cvp is not None and mode_now == 'cv':
+        mog2 = getattr(cvp, '_fg_mask', None) is not None
+        foveal = bool(getattr(cvp, '_foveal_enabled', False)) and mog2
+        scene = 'registered' if getattr(cvp, '_scene_registered', False) else 'none'
+    else:
+        mog2 = foveal = None
+        scene = None
+
     data = {
         # The microphone opened iff the capture session did; they are one
         # AVFoundation session and audio is a mapped output stream.
         'mode':     mode_now,
         'cv':       mode_now == 'cv',
+        'cv_mog2':  mog2,
+        'cv_foveal': foveal,
+        'cv_scene': scene,
         'mic':      capture,
         'audio_rate_hz':  audio_rate,
         'audio_channels': audio_ch,
@@ -1166,16 +1292,25 @@ def serve_static(path):
 
 
 def _shutdown(signum, frame):
+    # Was dead code: defined but never registered with signal.signal(), so
+    # every stop of this process -- supervisor restart, `kill`, a redeploy --
+    # left its own ffmpeg children behind as real orphans, not zombies. Same
+    # failure observed and fixed twice already in _writer_loop for exceptions
+    # and re-entrant spawns; this is the third place a publisher restart
+    # could leak, and the most direct one, since it fires on every ordinary
+    # process stop rather than only on an error path. Escalates like
+    # _kill_hard rather than a bare terminate(), because a capture wedged in
+    # avformat_open_input ignores SIGTERM outright.
     for p in (_pub_proc, _cam_proc):
         if p:
-            try:
-                p.terminate()
-            except Exception:
-                pass
+            _kill_hard(p)
+    _stop_cv_publisher()
     sys.exit(0)
 
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     # Media capture/publishing runs independently of the HTTP control plane.
     # One AVFoundation session owns camera + microphone.
     threading.Thread(

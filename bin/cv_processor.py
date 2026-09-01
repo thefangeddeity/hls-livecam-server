@@ -45,6 +45,8 @@ from collections import deque
 import numpy as np
 import cv2
 
+import block_art as _ba
+
 try:
     import cv_detect as _cvd
 except Exception:      # detection is optional; the pipeline runs without it
@@ -100,6 +102,28 @@ _DEFAULTS = {
                                       # silhouette while the rolloff only helps
                                       # the bright end.
     'CV_SHADOW_RANGE':        110,   # L value below which the lift applies
+
+    # --- Night mode: denoise + tone-correct only, no edges/detection ------
+    # Same LUT/CLAHE machinery CV mode already runs (_tone_correct), tuned
+    # far more aggressively and pointed at a plain enhanced photo instead of
+    # a redrawn one. No new model, no GPU: a trained low-light network
+    # (Zero-DCE-style) buys nothing on hardware that measured 2-5 FPS on a
+    # CPU *better* than any node in this fleet has. This is deliberately the
+    # "or better" reading of that brief -- classical, already-tested code,
+    # real-time on a 2016 dual-core.
+    'NIGHT_CLAHE_CLIP':       4.5,   # vs CV mode's 2.0 -- a dark room needs far
+                                      # more local contrast pulled out of it
+    'NIGHT_CLAHE_TILES':      8,
+    'NIGHT_GAIN':             1.6,   # flat linear-light multiply before the
+                                      # curve; real signal, not a curve trick
+    'NIGHT_HIGHLIGHT_THRESHOLD': 235,  # a dark room rarely blows out, so the
+                                      # rolloff barely engages -- headroom is
+                                      # not the scarce resource here
+    'NIGHT_HIGHLIGHT_CEILING':   255,
+    'NIGHT_HIGHLIGHT_GAMMA':     1.0,
+    'NIGHT_SHADOW_LIFT':      2.4,   # aggressive; this curve is the whole point
+    'NIGHT_SHADOW_RANGE':     190,   # wider than CV's 110 -- most of a dark
+                                      # room's histogram sits low
 
     # Adaptive edge mode. Below a sharpness threshold, enhancement stops
     # helping -- CLAHE on mush is still mush -- so the pipeline switches to
@@ -642,6 +666,12 @@ class CVProcessor:
         # re-reads feed mode every iteration. CV_FOVEAL_ENABLED from
         # device.env is only the value this starts at.
         self._foveal_enabled = _read_int(denv, 'CV_FOVEAL_ENABLED') != 0
+
+        # Blur: the abandoned Cloak mode's block-art render, reused as a
+        # modifier on CV mode (the slot Foveal Layer never grew into). No
+        # device.env default -- a plain checkbox, live-toggled only, same as
+        # Foveal was meant to be. See set_blur().
+        self._blur_enabled = False
         self._mog2 = cv2.createBackgroundSubtractorMOG2(
             history=_read_int(denv, 'CV_MOG2_HISTORY'),
             varThreshold=_read_float(denv, 'CV_MOG2_VAR_THRESHOLD'),
@@ -820,6 +850,21 @@ class CVProcessor:
             _read_float(denv, 'CV_SHADOW_LIFT'),
             _read_int(denv, 'CV_SHADOW_RANGE'))
 
+        # Night mode: its own LUT/CLAHE/gain, independent of CV mode's --
+        # tuned for a dark room rather than for detection accuracy in
+        # daylight, so the two must not share instances.
+        self._night_enabled = False
+        self._night_gain = _read_float(denv, 'NIGHT_GAIN')
+        self._night_lut = _tone_curve_lut(
+            _read_int(denv, 'NIGHT_HIGHLIGHT_THRESHOLD'),
+            _read_int(denv, 'NIGHT_HIGHLIGHT_CEILING'),
+            _read_float(denv, 'NIGHT_HIGHLIGHT_GAMMA'),
+            _read_float(denv, 'NIGHT_SHADOW_LIFT'),
+            _read_int(denv, 'NIGHT_SHADOW_RANGE'))
+        self._night_clahe = cv2.createCLAHE(
+            clipLimit=_read_float(denv, 'NIGHT_CLAHE_CLIP'),
+            tileGridSize=(_read_int(denv, 'NIGHT_CLAHE_TILES'),) * 2)
+
         # Detection thread starts last, once everything it can touch
         # (_tracker, _fg_mask, _accum_*) is fully constructed. Daemon, no
         # explicit stop: this instance lives for the life of the writer-loop
@@ -836,6 +881,29 @@ class CVProcessor:
         consulted, so toggling off and back on does not throw away the
         learned background."""
         self._foveal_enabled = bool(enabled)
+
+    def set_blur(self, enabled):
+        """Live toggle for Blur, called every CV-pump iteration with the
+        checkbox's current state -- same pattern as set_foveal() and feed
+        mode itself. Plain attribute flip; nothing to reinit."""
+        self._blur_enabled = bool(enabled)
+
+    def set_night(self, enabled):
+        """Live toggle for Night mode, same pattern as set_blur()."""
+        self._night_enabled = bool(enabled)
+
+    def _night_correct(self, frame):
+        """Denoise's output, brightened and locally contrast-stretched for a
+        dark room: flat linear-light gain, then the same highlight/shadow
+        LUT + CLAHE shape _tone_correct uses, with its own far more
+        aggressive night-tuned instances."""
+        boosted = cv2.convertScaleAbs(frame, alpha=self._night_gain, beta=0)
+        lab = cv2.cvtColor(boosted, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+        self._last_luma = l
+        l = cv2.LUT(l, self._night_lut)
+        l2 = self._night_clahe.apply(l)
+        return cv2.cvtColor(cv2.merge((l2, a, b)), cv2.COLOR_LAB2RGB)
 
     def process(self, frame):
         t = {}
@@ -890,6 +958,37 @@ class CVProcessor:
         with self._detect_slot_lock:
             self._detect_slot = (frame, crop_box, self._fg_mask)
 
+        # Blur discards the photo even more thoroughly than sharpie does --
+        # the whole point is that nothing recognisable survives -- so it
+        # takes the same early-return shape, ahead of sharpie, using the
+        # vectorized cloak renderer (block_art.render_cloak_vec: numpy grid
+        # + nearest-neighbour upscale, no per-cell PIL text). The retired
+        # font-path renderer measured 110-180ms/frame, well over budget
+        # alongside anything else in this pipeline; the vectorized one is
+        # 5.2x faster and was built for exactly this (run-7 §3), just never
+        # wired to a live toggle until now. Detection still runs on the real
+        # frame and its boxes draw onto the blurred canvas, same as sharpie.
+        if self._blur_enabled:
+            t5 = time.perf_counter()
+            out = _ba.render_cloak_vec(
+                np.ascontiguousarray(frame).tobytes(),
+                frame.shape[1], frame.shape[0])
+            t['blur'] = time.perf_counter() - t5
+            t6 = time.perf_counter()
+            out, tracks = self._detect_and_hud(frame, out)
+            t['detect'] = time.perf_counter() - t6
+            t['total'] = time.perf_counter() - t0
+            return out, {
+                'motion': 0.0,
+                'sharpness': 0.0,
+                'tracks': len(tracks),
+                'edge_weight': 1.0,
+                'artifact_mask': self._artifact_mask is not None,
+                'artifact_learning': False,
+                'timings_ms': {k: round(v * 1000, 3) for k, v in t.items()},
+                'history': len(self._frames),
+            }
+
         # Sharpie discards the photo, so everything that exists to improve the
         # photo is wasted work: optical flow, the temporal blend and the
         # unsharp pass are ~70ms of the frame and none of it survives into a
@@ -943,6 +1042,30 @@ class CVProcessor:
         t2 = time.perf_counter()
         denoised = self._temporal_denoise(frame, moving_mask)
         t['denoise'] = time.perf_counter() - t2
+
+        # Night mode stops here: a plain enhanced photo, not a redrawn one.
+        # No sharpen -- unsharp amplifies noise, and noise is the one thing
+        # a dark room already has too much of. No detection/HUD -- YOLO on a
+        # near-black frame is a guess, and this mode is for a human's eyes,
+        # not a claim about what was found in the dark.
+        if self._night_enabled:
+            t3 = time.perf_counter()
+            night = self._night_correct(denoised)
+            t['night'] = time.perf_counter() - t3
+            sharpness = self._measure_sharpness(self._last_luma)
+            self._frames.append(frame)
+            self._gray_small.append(small_gray)
+            t['total'] = time.perf_counter() - t0
+            return night, {
+                'motion': motion_mean,
+                'sharpness': round(sharpness, 2),
+                'tracks': 0,
+                'edge_weight': 0.0,
+                'artifact_mask': False,
+                'artifact_learning': False,
+                'timings_ms': {k: round(v * 1000, 3) for k, v in t.items()},
+                'history': len(self._frames),
+            }
 
         t3 = time.perf_counter()
         toned = self._tone_correct(denoised)

@@ -339,7 +339,8 @@
      keyboard/switch-control focus. .fs-btn lives in the video area, outside
      .sidebar-scroll's --led-on scope, so it uses the equivalent global
      --success token instead -- same colour, valid everywhere. */
-  .btn:focus-visible, .btn-tiny:focus-visible, .transport:focus-visible,
+  .btn:focus-visible, .btn-tiny:focus-visible, .reset:focus-visible,
+  .transport:focus-visible,
   .vol:focus-visible, .mute-key:focus-visible, .buzz:focus-visible,
   .theme-key:focus-visible, .chk input:focus-visible + .box {
     outline: 2px solid var(--led-on); outline-offset: 1px;
@@ -795,6 +796,16 @@
     box-shadow: 0 0 6px rgba(255,69,58,.7), inset 0 0 2px rgba(255,255,255,.4);
   }
 
+  /* Same .led/.bulb language as the tube's lamp column, laid out as a row
+     under the FPS graph instead of a column beside the tube. Spacing matches
+     tina/tanzania: even spread across the row rather than a fixed gap, and
+     smaller bulbs than the tube's own lamp column since four now share one
+     line instead of stacking. */
+  .ledstrip { display: flex; justify-content: space-between; align-items: center;
+    margin-top: 7px; padding: 0 2px; }
+  .ledstrip .led { font-size: 8px; line-height: 11px; gap: 4px; letter-spacing: .02em; }
+  .ledstrip .bulb { width: 5px; height: 5px; }
+
   /* ── Controls ─────────────────────────────────────────────────── */
 
   .divider {
@@ -837,6 +848,31 @@
     background: linear-gradient(180deg, #e8e8eb, #e0e0e4);
     border-color: #d5d5da; box-shadow: none;
   }
+  /* Ported from tina/amira: Hide is the key you're allowed to hit by
+     accident -- costs a feed restored in one click, where the same slip
+     on Show puts a room on a screen -- so it's painted, not lit. Dark/
+     desaturated on purpose: an emitting red is a lamp elsewhere on this
+     panel, meaning a stage measured and failed; paint has to stay paint. */
+  .panel .btn.guarded {
+    color: #ffe9e4; border-color: #551410;
+    background: linear-gradient(180deg,#a63a2d 0%,#87251c 54%,#6f1a13 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 1px 1px rgba(0,0,0,.35);
+  }
+  .panel .btn.guarded.pressed {
+    color: #fff; border-color: #4a110d;
+    background: linear-gradient(180deg,#5f150f 0%,#7a1f17 100%);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
+  }
+  html[data-theme="light"] .panel .btn.guarded {
+    color: #fff3ef; border-color: #7a1e15;
+    background: linear-gradient(180deg,#c04231 0%,#a02f22 54%,#8c2419 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.30), 0 1px 1px rgba(88,110,117,.20);
+  }
+  html[data-theme="light"] .panel .btn.guarded.pressed {
+    color: #fff;
+    background: linear-gradient(180deg,#8a2318 0%,#a02f22 100%);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.35);
+  }
   .panel .btn .badge {
     display: block; font-family: var(--mono); font-size: 7px;
     letter-spacing: .1em; color: var(--phos-label); margin-top: 2px;
@@ -854,6 +890,34 @@
     display: flex; align-items: center; justify-content: space-between;
     gap: 10px; margin-top: 9px;
   }
+
+  .modemrow { display: flex; align-items: center; gap: 10px; margin: 9px 0 7px; }
+
+  /* Ported from tina/amira -- a dot-matrix history of frames actually
+     arriving at THIS viewer, not a line chart. Same glass as the VFD
+     readouts above, so it reads as part of the instrument rather than a
+     chart pasted onto one. */
+  .fpsglass {
+    position: relative; flex: 1 1 auto; min-width: 0; height: 60px;
+    border-radius: 5px; overflow: hidden;
+    background: linear-gradient(180deg, var(--glass-a) 0%,
+                var(--glass-b) 62%, var(--glass-a) 100%);
+    border: 1px solid #040809;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), inset 0 0 20px rgba(0,0,0,.75);
+  }
+  .fpsglass::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,0) 42%),
+      repeating-linear-gradient(180deg, rgba(0,0,0,.083) 0 1px, transparent 1px 3px);
+  }
+  .fpsglass canvas { display: block; width: 100%; height: 100%; }
+  .glab {
+    position: absolute; bottom: 2px; font-family: var(--mono); font-size: 7px;
+    letter-spacing: .12em; color: var(--phos-label); pointer-events: none;
+  }
+  .glab-l { left: 5px; }
+  .glab-r { right: 5px; }
   .peer-row .chk { margin-top: 0; min-width: 0; flex: 0 0 auto; }
 
   .btn-tiny {
@@ -876,6 +940,107 @@
     box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
   }
   .btn-tiny[hidden] { display: none; }
+
+  /* Ported from tina/amira: a pinhole reset, a hole in the housing with
+     the switch at the bottom of it, in place of a full-size labelled
+     button for the one control that just repairs a stuck player. The
+     recess is the whole effect -- shadow around the rim, the plunger
+     catching a little light in the middle -- so it reads as something set
+     INTO the metal rather than sitting on it. Pressed, the plunger drops
+     and the light on it goes out. */
+  .reset {
+    width: 30px; height: 16px; flex: 0 0 auto; padding: 0; border-radius: 9px;
+    cursor: pointer; font-family: inherit;
+    background: linear-gradient(180deg,#0f0f11 0%,#141416 60%,#1d1d21 100%);
+    border: 1px solid #35353b;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,.85), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .reset .pin {
+    width: 20px; height: 9px; border-radius: 5px;
+    background: linear-gradient(180deg,#4a4a52 0%,#37373d 52%,#2a2a2e 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(0,0,0,.35), 0 1px 1px rgba(0,0,0,.55);
+  }
+  .reset:active { box-shadow: inset 0 3px 4px rgba(0,0,0,.9); }
+  .reset:active .pin {
+    background: linear-gradient(180deg,#2e2e34,#232327);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.8);
+  }
+  /* A latching toggle (Mute buzzes, Lock message) needs the pressed look to
+     persist after release, unlike Reset's momentary :active -- the pin stays
+     down until the state changes back. */
+  .reset.pressed { box-shadow: inset 0 3px 4px rgba(0,0,0,.9); }
+  .reset.pressed .pin {
+    background: linear-gradient(180deg,#2e2e34,#232327);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.8);
+  }
+  .rstlab { font-size: 10px; letter-spacing: .04em; }
+  /* Generic lamp-on rule for bulbs that sit inside a pinled/reset-style
+     button rather than inside a .led or .modem -- same green glow, same
+     Tina/amira convention of an id-addressed bulb toggled directly. */
+  .bulb.on {
+    background: var(--led-on);
+    box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5);
+  }
+  /* A pilot-light button: a pinhole just large enough to hold its own lamp,
+     for latching toggles (Mute buzzes, Lock message) that used to be
+     checkboxes. Round rather than .reset's oblong tic-tac, since there is no
+     plunger here -- the bulb itself is the whole face of the button, the way
+     a component-stereo power light doubles as its own switch. Label lives
+     outside it, same as Reset's. */
+  .pinled {
+    width: 16px; height: 16px; flex: 0 0 auto; padding: 0; border-radius: 50%;
+    cursor: pointer; font-family: inherit;
+    background: linear-gradient(180deg,#0f0f11 0%,#141416 60%,#1d1d21 100%);
+    border: 1px solid #35353b;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,.85), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pinled:active, .pinled.pressed { box-shadow: inset 0 3px 4px rgba(0,0,0,.9); }
+  html[data-theme="light"] .pinled {
+    background: linear-gradient(180deg,#d5d3c8 0%,#e4e2d9 60%,#f2f1eb 100%);
+    border-color: #c4c2b6;
+    box-shadow: inset 0 2px 3px rgba(88,110,117,.35), inset 0 -1px 0 rgba(255,255,255,.9), 0 1px 0 rgba(255,255,255,.8);
+  }
+  html[data-theme="light"] .reset {
+    background: linear-gradient(180deg,#d5d3c8 0%,#e4e2d9 60%,#f2f1eb 100%);
+    border-color: #c4c2b6;
+    box-shadow: inset 0 2px 3px rgba(88,110,117,.35), inset 0 -1px 0 rgba(255,255,255,.9), 0 1px 0 rgba(255,255,255,.8);
+  }
+  html[data-theme="light"] .reset .pin {
+    background: linear-gradient(180deg,#fffefb 0%,#f2f1ea 52%,#e2e0d6 100%);
+    box-shadow: inset 0 1px 0 #fff, inset 0 -1px 0 rgba(88,110,117,.18), 0 1px 1px rgba(88,110,117,.35);
+  }
+
+  /* Ported from tina/amira: Blur as a tiny modem-style push-button with
+     its own lamp, in place of a checkbox -- "engaged" is a pressed key
+     with its lamp lit, the same language MUTE uses, so the panel's
+     latching controls all look alike. .modem-group exists even for a
+     single button so a future Foveal-style addition slots in without
+     touching this layout again. */
+  .modem-group { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .modem {
+    min-width: 54px; height: 32px; padding: 0 7px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    flex: 0 0 auto; cursor: pointer; font-family: inherit;
+    background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35);
+  }
+  .modem:disabled { cursor: not-allowed; opacity: .55; }
+  .modem:active { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
+  .modem.pressed { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); border-color: #3c3c44; }
+  .modem .cap2 { font-family: var(--mono); font-size: 7.5px; letter-spacing: .1em; color: var(--emboss); }
+  .modem:disabled .cap2 { color: var(--emboss-dim); }
+  .modem.on .bulb {
+    background: var(--led-on);
+    box-shadow: 0 0 6px rgba(48,209,88,.75), inset 0 0 2px rgba(255,255,255,.5);
+  }
+  html[data-theme="light"] .modem {
+    background: linear-gradient(180deg,#fdfcf8,#f0efe8); border-color: #dbd9cf; color: #3b4a4a;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 1px rgba(88,110,117,.16);
+  }
+  html[data-theme="light"] .modem:active,
+  html[data-theme="light"] .modem.pressed { background: linear-gradient(180deg,#dcdad0,#e9e8e1); box-shadow: inset 0 2px 4px rgba(88,110,117,.28); }
 
   .chkrow { display: flex; gap: 10px; }
   .chkrow .chk { flex: 1; min-width: 0; }
@@ -1129,8 +1294,8 @@
     <!-- A strip of the same tube the panels use. Version is substituted at
          render time from `git describe`; hovering gives the build stamp and
          commit, which is what distinguishes two installs of the same tag. -->
-    <span class="hdr-vfd" title="mac-v1.7.1-2-g1b6f100-dirty · dev · 1b6f100">
-      <span class="vlit">mac-v1.7.1-2-g1b6f100-dirty</span><span class="vlit hdr-host" id="hdrHost"></span>
+    <span class="hdr-vfd" title="">
+      <span class="vlit">mac-v1.8.0-dirty</span><span class="vlit hdr-host" id="hdrHost"></span>
     </span>
   </div>
   <div class="status-bar">
@@ -1200,15 +1365,48 @@
 
         <div class="divider"></div>
 
+        <!-- Hide sits in the middle, red -- the key you're allowed to hit
+             by accident (pressing it costs a feed restored in one click,
+             where the same slip on Show would put a room on a screen), so
+             it's painted differently from its neighbors rather than
+             positioned differently. Night is a dummy/disabled placeholder
+             to the right of CV, ahead of actually porting amira's
+             spatial-binning low-light pipeline here -- named now so the
+             row's final shape doesn't get reshuffled again once it lands. -->
         <div class="btnrow">
           <button type="button" class="btn" id="showBtn" onclick="setFeedMode('show')">Show</button>
-          <!-- Blur's slot, retargeted rather than removed. Inert until the CV
-               port lands; wiring it to feed-mode now would ship a button that
-               changes state and nothing else. -->
+          <button type="button" class="btn guarded" id="hideBtn" onclick="setFeedMode('hide')"
+                  title="Switch the camera off — publishes nothing but the notice">Hide</button>
           <button type="button" class="btn" id="cvBtn" onclick="setFeedMode('cv')"
                   title="Computer vision mode">CV</button>
-          <button type="button" class="btn" id="hideBtn" onclick="setFeedMode('hide')">Hide</button>
+          <button type="button" class="btn" id="nightBtn" onclick="setFeedMode('night')"
+                  title="Long exposure at a slower framerate, digitally denoised and brightened">Night</button>
         </div>
+
+        <!-- Ported from tina/amira -- frames actually decoded by THIS
+             viewer, last 60s. Diagnosis beside the remedy: this trace is
+             what tells you the feed has stopped; Reset right below it is
+             what fixes that. -->
+        <div class="modemrow">
+          <div class="fpsglass" id="fpsGlass" title="Frames actually arriving at this viewer, last 60 seconds">
+            <canvas id="fpsGraph" width="240" height="60"></canvas>
+            <span class="glab glab-l">FPS</span>
+            <span class="glab glab-r"></span>
+          </div>
+        </div>
+        <!-- Real faculties, not tina's fixed four: this backend actually
+             has MOG2 + foveal gating + scene registration (cv_processor.py
+             already runs all three), so these are measured from the live
+             CVProcessor instance, not asserted. 3D stays permanently dark
+             like tina's own -- depth isn't implemented here either. -->
+        <div class="ledstrip">
+          <div class="led" id="ledMog2" title="Background model producing a foreground mask"><span class="bulb"></span><span class="n eng">MOG2</span></div>
+          <div class="led" id="ledFov" title="Detection gated to the moving region"><span class="bulb"></span><span class="n eng">FOV</span></div>
+          <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary"><span class="bulb"></span><span class="n eng">2D</span></div>
+          <div class="led" id="ledScene3d" title="Depth — not implemented on this branch"><span class="bulb"></span><span class="n eng">3D</span></div>
+        </div>
+
+        <div class="divider"></div>
 
         <!-- B&W Blur's slot, retargeted the same way. A modifier on CV cannot
              be togglable before CV exists. Reload sits at the far end of the
@@ -1216,13 +1414,20 @@
              it was previously hidden until an error -- which meant the one
              control that fixes a stuck player only appeared once the player
              had already given up. -->
-        <div class="peer-row">
-          <button type="button" class="btn-tiny eng" id="reconnectBtn"
-                  onclick="reloadStream()" title="Reload the video stream">Reload</button>
-          <label class="chk pending" id="fovealRow" title="Modifier on CV mode — not yet available">
-            <input type="checkbox" id="fovealCheck" disabled>
-            <span class="box"></span><span class="eng">Foveal layer</span>
-          </label>
+        <div class="modemrow">
+          <button type="button" class="reset" id="reconnectBtn"
+                  onclick="reloadStream()" title="Reload the video stream" aria-label="Reload the video stream"><span class="pin"></span></button>
+          <span class="eng rstlab">Reset</span>
+          <div class="modem-group">
+            <button type="button" class="modem" id="blurBtn" onclick="toggleCvBlur()"
+                    title="Block-art cloak — modifier on CV mode">
+              <span class="bulb" id="blurLamp"></span><span class="cap2">BLUR</span>
+            </button>
+            <button type="button" class="modem" id="fovealBtn" onclick="toggleCvFoveal()"
+                    title="Foveal layer — gate detection to the moving region">
+              <span class="bulb" id="fovealLamp"></span><span class="cap2">FOVEAL</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1307,11 +1512,15 @@
 
         <!-- The two mutes are one set: each silences the side of the panel
              above it, incoming and outgoing, so they sit together rather than
-             one per sub-section. -->
-        <label class="chk">
-          <input type="checkbox" id="muteCheck" onchange="toggleMute()">
-          <span class="box"></span><span class="eng">Mute buzzes</span>
-        </label>
+             one per sub-section. A pilot-light button, sized to its own lamp
+             -- label lives outside it, the same way Reset's own label does. -->
+        <div class="modemrow">
+          <button type="button" class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
+                  title="Silence incoming buzz alerts" aria-label="Mute buzzes">
+            <span class="bulb" id="muteBuzzLamp"></span>
+          </button>
+          <span class="eng rstlab">Mute buzzes</span>
+        </div>
 
         <span id="audioStatus" aria-live="polite" hidden></span>
       </div>
@@ -1327,10 +1536,13 @@
           <button class="btn" id="clearBtn" onclick="clearMessage()">Clear</button>
           <button class="btn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
         </div>
-        <label class="chk">
-          <input type="checkbox" id="lockCheck" onchange="toggleMsgLock()">
-          <span class="box"></span><span class="eng">Lock message</span>
-        </label>
+        <div class="modemrow">
+          <button type="button" class="pinled" id="lockMsgBtn" onclick="toggleMsgLock()"
+                  title="Prevent Save / Clear / Cancel from being used" aria-label="Lock message">
+            <span class="bulb" id="lockMsgLamp"></span>
+          </button>
+          <span class="eng rstlab">Lock message</span>
+        </div>
       </div>
 
       <!-- Unhoused: a viewer preference, not part of any media path. -->
@@ -1372,7 +1584,7 @@
   var cvBtn        = document.getElementById('cvBtn');
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
-  var muteCheck    = document.getElementById('muteCheck');
+  var muteBuzzBtn  = document.getElementById('muteBuzzBtn');
   var reconnectBtn = document.getElementById('reconnectBtn');
   var saveBtn      = document.getElementById('saveBtn');
   var clearBtn     = document.getElementById('clearBtn');
@@ -1382,6 +1594,14 @@
   var liveAt = null, uptimeInterval = null;
   var isDark = false;
   var feedMode = 'show'; // 'show' | 'cloak' | 'hide' -- mirrors the server's real feed mode
+  // 'show' above is a guess to render something before the first poll lands,
+  // not a known value -- so setFeedMode() must not treat a click that happens
+  // to match it as "already in that mode". Observed live: with no confirmed
+  // reading yet, clicking Show (equal to the guess) silently no-ops -- no
+  // fetch, no fadeOut() -- while Hide or CV (both unequal to the guess) go
+  // through normally. That made CV look like the only button that worked and
+  // the de facto way to start the stream, and Show look dead.
+  var feedModeKnown = false;
 
   var hostEl = document.getElementById('hostVal');
   var protoEl = document.getElementById('protoVal');
@@ -1427,7 +1647,7 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION  = 'mac-v1.7.1-2-g1b6f100-dirty';
+  var BUILD_VERSION  = 'mac-v1.8.0-dirty';
   var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
@@ -1495,7 +1715,10 @@
   }
 
   function updateMuteBtn() {
-    muteCheck.checked = buzzMuted;
+    if (!muteBuzzBtn) return;
+    muteBuzzBtn.classList.toggle('pressed', buzzMuted);
+    var lamp = document.getElementById('muteBuzzLamp');
+    if (lamp) lamp.classList.toggle('on', buzzMuted);
   }
 
   function toggleMute() {
@@ -1547,11 +1770,12 @@
 
   function updateFeedButtons() {
     // A pressed button is pushed in, not tinted -- the panel's buttons are
-    // physical objects. CV has no pressed state: it is inert until the port
-    // lands, and 'cv' is never returned as the current mode.
+    // physical objects.
     showBtn.className = 'btn' + (feedMode === 'show' ? ' pressed' : '');
-    hideBtn.className = 'btn' + (feedMode === 'hide' ? ' pressed' : '');
+    hideBtn.className = 'btn guarded' + (feedMode === 'hide' ? ' pressed' : '');
     if (cvBtn) cvBtn.className = 'btn' + (feedMode === 'cv' ? ' pressed' : '');
+    var nightBtn = document.getElementById('nightBtn');
+    if (nightBtn) nightBtn.className = 'btn' + (feedMode === 'night' ? ' pressed' : '');
   }
   // Cloak/hide are rendered server-side: broadcast-api burns the block-art
   // effect directly into the encoded HLS frames, so every viewer (and the
@@ -1689,7 +1913,7 @@
   }
 
   function setFeedMode(mode) {
-    if (mode === feedMode) return;
+    if (feedModeKnown && mode === feedMode) return;
     /* Switching the tube off is the whole transition, so the switch-cover
        countdown would just be a second, slower animation on top of it. */
     if (mode === 'hide') {
@@ -1698,8 +1922,10 @@
       setTimeout(endFeedSwitch, HOLD_SECONDS * 1000);
     }
     else { if (feedMode === 'hide') applyFeedModeVisual(mode, true); fadeOut(); }
+    var nightBtn = document.getElementById('nightBtn');
     showBtn.disabled = true; hideBtn.disabled = true;
     if (cvBtn) cvBtn.disabled = true;
+    if (nightBtn) nightBtn.disabled = true;
     fetch('/api/feed-mode', { method: 'POST', body: mode })
       .then(function(r) { return r.ok ? r.text() : null; })
       .then(function(text) {
@@ -1712,6 +1938,7 @@
       .then(function() {
         showBtn.disabled = false; hideBtn.disabled = false;
         if (cvBtn) cvBtn.disabled = false;
+        if (nightBtn) nightBtn.disabled = false;
       });
   }
 
@@ -1739,6 +1966,7 @@
           setTimeout(endFeedSwitch, HOLD_SECONDS * 1000);
           if (wasHidden !== (mode === 'hide')) applyFeedModeVisual(mode, true);
         }
+        feedModeKnown = true;
         if (feedModeFirstPoll) {
           feedModeFirstPoll = false;
           applyFeedModeVisual(feedMode, false);   // no animation on arrival
@@ -1900,6 +2128,104 @@
   setInterval(updateClock, 1000); updateClock();
 
   // ── FPS (desktop only) ──
+  // Ported from tina/amira -- a dot-matrix history, not a line chart,
+  // matching the ghost/lit segments every other readout on this panel is
+  // made of. window._fpsPush is fed one sample per second by
+  // setupFpsCounter() below, the same source used for the plain FPS
+  // number. --phos/--glass-a/etc. live on :root here (unlike amira, where
+  // they're scoped to .sidebar-scroll), so document.documentElement is
+  // the right place to read them from -- no getComputedStyle bug to work
+  // around on this machine.
+  var FPS_SAMPLES = 60;
+  var fpsHist = [];
+  (function setupFpsGraph() {
+    var glass = document.getElementById('fpsGlass');
+    var cv    = document.getElementById('fpsGraph');
+    if (!glass || !cv) return;
+    var ctx = cv.getContext('2d');
+    var spanLab = glass.querySelector('.glab-r');
+
+    function withAlpha(col, a) {
+      var m = /^#([0-9a-f]{6})$/i.exec(col);
+      if (m) {
+        var n = parseInt(m[1], 16);
+        return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+      }
+      m = /^rgba?\(([^)]+)\)$/i.exec(col);
+      if (m) {
+        var p = m[1].split(',').map(function (x) { return x.trim(); });
+        return 'rgba(' + p[0] + ',' + p[1] + ',' + p[2] + ',' + a + ')';
+      }
+      return col;
+    }
+
+    function colours() {
+      var cs = getComputedStyle(document.documentElement);
+      var lit = (cs.getPropertyValue('--phos') || '#3fe8cd').trim();
+      return {
+        lit:   lit,
+        stem:  withAlpha(lit, 0.34),
+        ghost: (cs.getPropertyValue('--phos-ghost') || 'rgba(63,232,205,.12)').trim()
+      };
+    }
+
+    var DOT = 2, PITCH = 3;
+
+    function draw() {
+      var dpr = window.devicePixelRatio || 1;
+      var w = glass.clientWidth, h = glass.clientHeight;
+      if (!w || !h) return;
+      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+        cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      var c = colours();
+
+      var pad = 3, foot = 9;
+      var cols = Math.max(4, Math.min(60, Math.floor((w - pad * 2) / PITCH)));
+      var rows = Math.max(3, Math.floor((h - pad - foot) / PITCH));
+      var x0 = pad + ((w - pad * 2) - cols * PITCH) / 2;
+      var y0 = pad + ((h - pad - foot) - rows * PITCH) / 2;
+      FPS_SAMPLES = cols;
+      while (fpsHist.length > cols) fpsHist.shift();
+      if (spanLab) spanLab.textContent = cols + 's';
+
+      function cell(col, row, style, glow) {
+        ctx.fillStyle = style;
+        ctx.shadowColor = glow ? c.lit : 'transparent';
+        ctx.shadowBlur  = glow ? 4 : 0;
+        ctx.fillRect(x0 + col * PITCH, y0 + (rows - 1 - row) * PITCH, DOT, DOT);
+      }
+
+      for (var cx = 0; cx < cols; cx++)
+        for (var cy = 0; cy < rows; cy++) cell(cx, cy, c.ghost, false);
+
+      if (!fpsHist.length) { ctx.shadowBlur = 0; return; }
+
+      var peak = 10;
+      for (var i = 0; i < fpsHist.length; i++) if (fpsHist[i] > peak) peak = fpsHist[i];
+
+      var first = cols - fpsHist.length;
+      for (var j = 0; j < fpsHist.length; j++) {
+        var v = Math.max(0, Math.min(fpsHist[j], peak));
+        var row = Math.round((v / peak) * (rows - 1));
+        for (var r = 0; r < row; r++) cell(first + j, r, c.stem, false);
+        cell(first + j, row, c.lit, true);
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    function push(v) {
+      fpsHist.push(v);
+      while (fpsHist.length > FPS_SAMPLES) fpsHist.shift();
+      draw();
+    }
+    window._fpsPush = push;
+    window.addEventListener('resize', draw);
+    draw();
+  })();
+
   (function setupFpsCounter() {
     var fpsEl = document.getElementById('fpsVal');
     if (!fpsEl) return;
@@ -1930,6 +2256,7 @@
       if (delta > 0) everAdvanced = true;
       if (!everAdvanced) { fpsEl.textContent = ''; return; }   // unmeasurable here
       fpsEl.innerHTML = delta + '<span class="vunit">FPS</span>';
+      if (window._fpsPush) window._fpsPush(delta);
     }, 1000);
     document.addEventListener('visibilitychange', function() {
       if (document.hidden) lastCount = null;  // resync on return, don't emit a burst
@@ -2053,15 +2380,105 @@
     paintThemeKey();
   })();
 
-  // Foveal layer took over B&W Blur's control and its endpoint, since it is
-  // the same shape of thing: a modifier on the processing mode beside it.
-  // Both ship inert until the CV port lands, so nothing polls -- a control
-  // that cannot be changed has no state worth fetching every three seconds.
-  // The endpoint is /api/foveal-mode (fleet-standard, matching Linux) and is
-  // ready when the port is.
-  var fovealCheck = document.getElementById('fovealCheck');
+  // Blur took over Foveal Layer's slot -- same shape of thing, a modifier on
+  // CV mode -- and this time the other end is actually wired: the endpoint
+  // (/api/cv-blur-mode, aliased as /api/foveal-mode and /api/bw-mode for
+  // bin/camdash's [b] key) reaches CVProcessor.set_blur() every CV-pump
+  // frame. Polled like feed mode, so another viewer or camdash toggling it
+  // is reflected here too.
+  // Ported from tina/amira: a modem push-button with its own lamp, not a
+  // checkbox -- "engaged" is a pressed key with its lamp lit, the same
+  // language MUTE uses.
+  var blurBtn = document.getElementById('blurBtn');
+  var cvBlurMode = false;
 
-  var lockCheck = document.getElementById('lockCheck');
+  function paintBlur() {
+    if (!blurBtn) return;
+    blurBtn.classList.toggle('pressed', cvBlurMode);
+    // .modem.on .bulb is parent-scoped here (unlike tina/amira's .bulb.on),
+    // so the "on" class belongs on the button, not the lamp span.
+    blurBtn.classList.toggle('on', cvBlurMode);
+  }
+
+  function toggleCvBlur() {
+    // Same restart-and-narrate treatment as setFeedMode(): the server bumps
+    // _mode_generation on this toggle too (see broadcast-api's cv_blur_post),
+    // which tears down and respawns the publisher exactly like a real mode
+    // change. Observed live: without fadeOut() here, that restart happened
+    // silently -- the only one of the four controls that dropped the feed
+    // with no snow to say so.
+    fadeOut();
+    fetch('/api/cv-blur-mode', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .then(function(text) {
+        cvBlurMode = text !== null && text.trim() === 'true';
+        paintBlur();
+        setTimeout(reloadStream, 1000);
+      })
+      .catch(function() { paintBlur(); });
+  }
+
+  function pollCvBlur() {
+    fetch('/api/cv-blur-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (text === null) return;
+        var on = text.trim() === 'true';
+        if (on !== cvBlurMode) { cvBlurMode = on; paintBlur(); }
+      });
+  }
+  if (blurBtn) {
+    pollCvBlur();
+    setInterval(pollCvBlur, 3000);
+  }
+
+  // Foveal: gates detection to the region MOG2 says is moving. Unlike Blur
+  // this never restarts the publisher -- /api/cv-foveal-mode only changes
+  // what CVProcessor.process() does with a frame it already has -- so no
+  // fadeOut()/reloadStream() here.
+  var fovealBtn = document.getElementById('fovealBtn');
+  var cvFovealMode = false;
+
+  function paintFoveal() {
+    if (!fovealBtn) return;
+    fovealBtn.classList.toggle('pressed', cvFovealMode);
+    fovealBtn.classList.toggle('on', cvFovealMode);
+  }
+
+  function toggleCvFoveal() {
+    fetch('/api/cv-foveal-mode', { method: 'POST' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .then(function(text) {
+        cvFovealMode = text !== null && text.trim() === 'true';
+        paintFoveal();
+      })
+      .catch(function() { paintFoveal(); });
+  }
+
+  function pollCvFoveal() {
+    fetch('/api/cv-foveal-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(text) {
+        if (text === null) return;
+        var on = text.trim() === 'true';
+        if (on !== cvFovealMode) { cvFovealMode = on; paintFoveal(); }
+      });
+  }
+  if (fovealBtn) {
+    pollCvFoveal();
+    setInterval(pollCvFoveal, 3000);
+  }
+
+  var lockMsgBtn = document.getElementById('lockMsgBtn');
+  function paintLockMsgBtn() {
+    if (!lockMsgBtn) return;
+    lockMsgBtn.classList.toggle('pressed', msgLocked);
+    var lamp = document.getElementById('lockMsgLamp');
+    if (lamp) lamp.classList.toggle('on', msgLocked);
+  }
+
   function toggleMsgLock() {
     fetch('/api/msg-lock', { method: 'POST' })
       .then(function(r) { return r.ok ? r.text() : null; })
@@ -2076,8 +2493,8 @@
       .then(function(text) {
         if (text === null) return;
         var locked = text.trim() === 'true';
-        if (lockCheck) lockCheck.checked = locked;
         if (locked !== msgLocked) { msgLocked = locked; applyMsgLockUI(); }
+        paintLockMsgBtn();
       });
   }
   pollMsgLock();
@@ -2267,6 +2684,15 @@
   var vHlsLed  = document.getElementById('videoHlsLed');
   var liveInd  = document.getElementById('liveIndicator');
 
+  /* CV faculty strip. Measured from the live CVProcessor instance via
+     /api/pipeline (cv_mog2/cv_foveal/cv_scene), never asserted -- these are
+     real faculties this backend has (MOG2 + foveal gating + scene
+     registration), unlike tina's fixed four. 3D has no backing field and
+     stays permanently dark, same as tina's own "depth not implemented". */
+  var ledMog2    = document.getElementById('ledMog2');
+  var ledFov     = document.getElementById('ledFov');
+  var ledScene2d = document.getElementById('ledScene2d');
+
   function norm(v) {
     if (v === 'ok') return 'ok';
     if (v === 'fail') return 'fail';
@@ -2333,6 +2759,11 @@
     indicator(document.getElementById('indAv'), p.audio_track);
     indicator(document.getElementById('indCv'), p.cv);
     indicator(document.getElementById('indStereo'), p.audio_channels === 2);
+
+    stage(ledMog2,    p.cv_mog2 === true ? 'ok' : 'pending');
+    stage(ledFov,     p.cv_foveal === true ? 'ok' : 'pending');
+    stage(ledScene2d, p.cv_scene === 'registered' ? 'ok' : 'pending');
+    // ledScene3d is left untouched -- no field reports it, so it stays dark.
 
     /* The server's own detail string is the useful thing to surface on hover:
        "capture hung opening the camera/microphone" beats a dark lamp. */
