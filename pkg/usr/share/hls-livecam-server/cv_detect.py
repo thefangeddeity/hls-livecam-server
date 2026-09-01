@@ -615,6 +615,21 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
             wsum += cw_ + telemetry_spacing
         return wsum
 
+    # Both telemetry lines float directly over the picture with no
+    # background plate. The quiet macOS-light-inspired ink above reads
+    # cleanly against a dark feed and disappears against a light one (or
+    # the reverse) -- there's no single ink value that survives every
+    # scene this camera might be pointed at. A dark shadow pass underneath
+    # each character, offset by one pixel, fixes both directions: it reads
+    # as depth against a light background and is too faint to matter
+    # against a dark one, same principle a drop shadow uses everywhere else.
+    def _put_char(ch_, pos, scale, ink_):
+        sx, sy = pos[0] + 1, pos[1] + 1
+        cv2.putText(out, ch_, (sx, sy), telemetry_font, scale,
+                    (0, 0, 0), telemetry_thickness + 1, cv2.LINE_AA)
+        cv2.putText(out, ch_, pos, telemetry_font, scale,
+                    ink_, telemetry_thickness, cv2.LINE_AA)
+
     if capabilities:
         cap = str(capabilities)
         avail = w - 36
@@ -632,8 +647,7 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
             for ch_ in cap:
                 (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, cap_scale,
                                               telemetry_thickness)
-                cv2.putText(out, ch_, (cx_, cap_y), telemetry_font, cap_scale,
-                            cap_ink, telemetry_thickness, cv2.LINE_AA)
+                _put_char(ch_, (cx_, cap_y), cap_scale, cap_ink)
                 cx_ += cw_ + telemetry_spacing
 
     for char in text:
@@ -644,16 +658,7 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
             telemetry_thickness,
         )
 
-        cv2.putText(
-            out,
-            char,
-            (tx, ty),
-            telemetry_font,
-            telemetry_scale,
-            telemetry_ink,
-            telemetry_thickness,
-            cv2.LINE_AA,
-        )
+        _put_char(char, (tx, ty), telemetry_scale, telemetry_ink)
 
         tx += cw + telemetry_spacing
 
