@@ -47,6 +47,13 @@ OUT_SIZE = 128
 CORNER_RATIO = 177 / 1254        # measured off the source squircle
 LENS_MARGIN = 1.12               # crop side = lens extent * this
 
+# Desktop/app icons want the whole tile. The lens crop exists to win back
+# pixels at 20 CSS px in a page header; at 1024 there is nothing to win and
+# cropping would just throw away the artwork's composition.
+GUI_ICON = {
+    'livecam': ('gui/assets/icon_1024.png', 1024),
+}
+
 
 def find_lens(rgb):
     """Lens centre and extent, measured against the navy field rather than
@@ -71,7 +78,24 @@ def main():
     # fork's mark straight into the parent's package -- the exact confusion
     # art/README.md exists to prevent. The destination now follows the product.
     ap.add_argument('--out', default=None)
+    ap.add_argument('--size', type=int, default=None,
+                    help=f'output edge in px (default {OUT_SIZE})')
+    ap.add_argument('--full-tile', action='store_true',
+                    help='keep the whole rounded tile instead of cropping to '
+                         'the lens; what you want for an app icon')
+    ap.add_argument('--gui-icon', action='store_true',
+                    help='shorthand: --full-tile at the GUI icon size, '
+                         'written to this product\'s gui/assets path')
     args = ap.parse_args()
+    if args.gui_icon:
+        if args.product not in GUI_ICON:
+            raise SystemExit(f'--product {args.product} has no GUI icon path '
+                             'in this repo; pass --out explicitly')
+        default_out, default_size = GUI_ICON[args.product]
+        args.full_tile = True
+        args.out = args.out or default_out
+        args.size = args.size or default_size
+    args.size = args.size or OUT_SIZE
     if args.out is None:
         args.out = OUT_PATHS[args.product]
         if args.out is None:
@@ -85,11 +109,18 @@ def main():
     rgb = np.array(src)
     w = rgb.shape[1]
 
-    lcx, lcy, lsize = find_lens(rgb)
-    side = int(lsize * LENS_MARGIN)
-    x0 = max(0, min(w - side, lcx - side // 2))
-    y0 = max(0, min(rgb.shape[0] - side, lcy - side // 2))
-    crop = src.crop((x0, y0, x0 + side, y0 + side))
+    if args.full_tile:
+        # The source tile already bleeds to all four edges, so "the whole
+        # tile" is the whole image; only the corners need cutting.
+        side = min(w, rgb.shape[0])
+        crop = src.crop((0, 0, side, side))
+        lsize = side
+    else:
+        lcx, lcy, lsize = find_lens(rgb)
+        side = int(lsize * LENS_MARGIN)
+        x0 = max(0, min(w - side, lcx - side // 2))
+        y0 = max(0, min(rgb.shape[0] - side, lcy - side // 2))
+        crop = src.crop((x0, y0, x0 + side, y0 + side))
 
     ss = 4                       # supersample so the corner arc stays smooth
     radius = int(side * CORNER_RATIO)
@@ -99,13 +130,15 @@ def main():
 
     out = crop.convert('RGBA')
     out.putalpha(mask.resize((side, side), Image.LANCZOS))
-    out = out.resize((OUT_SIZE, OUT_SIZE), Image.LANCZOS)
+    out = out.resize((args.size, args.size), Image.LANCZOS)
 
-    dest = os.path.join(REPO, args.out)
+    dest = args.out if os.path.isabs(args.out) else os.path.join(REPO, args.out)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
     out.save(dest, optimize=True)
-    print(f'{args.out}: {OUT_SIZE}x{OUT_SIZE}, '
+    shape = 'full tile' if args.full_tile else f'lens fills {lsize / side * 100:.0f}%'
+    print(f'{args.out}: {args.size}x{args.size}, '
           f'{os.path.getsize(dest)} bytes, from {SOURCES[args.product]} '
-          f'(lens fills {lsize / side * 100:.0f}% of the mark)')
+          f'({shape})')
 
 
 if __name__ == '__main__':

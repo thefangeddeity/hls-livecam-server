@@ -26,9 +26,11 @@ tabby is mid-luminance and brown/orange. That runs in microseconds and needs
 no training data.
 """
 
+import math
 import time
 
 import numpy as np
+
 import cv2
 
 # COCO indices that matter here. A general model gives these three; the
@@ -581,37 +583,52 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     hud_font = cv2.FONT_HERSHEY_SIMPLEX
     hud_thickness = 1
 
-    # Matched to tina: both rows are the same size and the same ink. An
-    # earlier pass here dimmed and shrank the second row to mark it as
-    # supporting material. At 0.42 that is too small a difference to read as
-    # hierarchy and just reads as the renderer being inconsistent -- two
-    # equal rows are cleaner, and the stacking already says which is which.
-    primary_scale = 0.42
-    secondary_scale = 0.42
+    # Size is a fraction of the frame, not a constant.
+    #
+    # Every node used to draw at a fixed scale of 0.42 -- 11px of cap height
+    # whatever the camera was. That is only "the same size" in the sense that
+    # matters least: tina runs 640x480 and tanzania 1280x720, so identical
+    # pixels meant tina's HUD covered 2.29% of its frame and tanzania's 1.53%,
+    # and side by side in a browser tina's looked half again as large. Which
+    # is exactly what got noticed.
+    #
+    # Deriving it from frame height instead makes one rule cover every node and
+    # every future resolution, with nothing to re-tune when a camera changes.
+    # The fraction is e%, chosen by the operator. There is no derivation here
+    # and it is not pretending to be one -- any value in this neighbourhood
+    # reads well, and a memorable constant is easier to keep consistent across
+    # nodes than a rounder number nobody recalls the reason for.
+    HUD_CAP_FRACTION = math.e / 100.0
+    _CAP_AT_UNIT_SCALE = 27.0        # measured: getTextSize(..., 1.0, 1)[0][1]
+
+    hud_cap = HUD_CAP_FRACTION * h
+    hud_scale = hud_cap / _CAP_AT_UNIT_SCALE
+
+    # Offsets are multiples of the cap height, so the block keeps its shape as
+    # it scales. The multipliers are tina's existing 640x480 geometry
+    # (18/22/42px against an 11px cap) expressed as ratios -- the proportions
+    # being matched, rather than the pixels that only suited one resolution.
+    tx = int(round(1.64 * hud_cap))
+    secondary_y = int(round(h - 2.00 * hud_cap))
+    primary_y = int(round(h - 3.82 * hud_cap))
+
+    # Both rows carry the same ink and the same size; the stacking already says
+    # which is the finding and which is the configuration.
     primary_ink = ink
     secondary_ink = ink
+    primary_scale = hud_scale
+    secondary_scale = hud_scale
 
-    tx = 18
-    # Back to 42 after a detour through 96 and 56. The strip was being
-    # cropped in the web viewer, and moving it up the frame was treating the
-    # symptom: nothing was wrong with the render, the viewer was choosing to
-    # crop the picture (object-fit: cover) after we drew on it. The viewer
-    # now uses object-fit: contain, so the whole frame is shown and this
-    # number can be about composition again rather than about dodging
-    # somebody's window shape.
-    primary_y = h - 42
-    secondary_y = h - 22
-
-    # Both rows float directly over the picture with no background plate.
-    # The quiet ink above reads cleanly against a dark feed and disappears
-    # against a light one (or the reverse) -- there is no single ink value
-    # that survives every scene this camera might be pointed at. A dark
-    # shadow pass underneath, offset by one pixel, fixes both directions: it
-    # reads as depth against a light background and is too faint to matter
-    # against a dark one, same principle a drop shadow uses everywhere else.
+    # Both rows float over the picture with no background plate, so no single
+    # ink survives every scene -- light text reads on a dark feed and vanishes
+    # against a bright one. A black pass one pixel down and right, at the SAME
+    # thickness as the ink pass, leaves black showing only on each glyph's
+    # lower-right edge: depth against a light background, invisible against a
+    # dark one. Equal thickness is the point -- a fatter shadow under a thinner
+    # glyph spreads on every side and reads as the text being out of focus.
     def _put_line(txt, pos, scale, ink_):
         cv2.putText(out, txt, (pos[0] + 1, pos[1] + 1), hud_font, scale,
-                    (0, 0, 0), hud_thickness + 1, cv2.LINE_AA)
+                    (0, 0, 0), hud_thickness, cv2.LINE_AA)
         cv2.putText(out, txt, pos, hud_font, scale,
                     ink_, hud_thickness, cv2.LINE_AA)
 
@@ -642,10 +659,21 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     tag_gap = 12
     tag_height = 24
 
-    # Reserve only the actual two-line HUD footprint in the lower-left.
-    # The old rect guarded the TOP-left while the text drew at h - 42,
-    # so floating target labels were free to land on the telemetry.
-    hud_clear = (8, h - 62, min(w - 8, 540), h - 8)
+    # Reserve the footprint the HUD actually occupies, derived from the same
+    # cap height so it tracks the text instead of drifting out of agreement
+    # with it. (The rect this replaced guarded the TOP-left while the text drew
+    # near the bottom, so floating target labels could land on the telemetry.)
+    _hud_w = max(
+        cv2.getTextSize(text, hud_font, primary_scale, hud_thickness)[0][0],
+        cv2.getTextSize(str(capabilities or ''), hud_font, secondary_scale,
+                        hud_thickness)[0][0],
+    )
+    hud_clear = (
+        tx - int(round(0.5 * hud_cap)),
+        primary_y - int(round(1.4 * hud_cap)),
+        min(w - 8, tx + _hud_w + int(round(0.5 * hud_cap))),
+        min(h - 4, secondary_y + int(round(0.5 * hud_cap))),
+    )
 
     def rects_overlap(a, b, margin=4):
         ax1, ay1, ax2, ay2 = a
