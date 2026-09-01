@@ -499,6 +499,10 @@
      checkbox hard right, so the two boxes teach each other. */
   .modemrow { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
   .modemrow .chk, .modemrow > .modem:last-child { margin-top: 0; margin-left: auto; }
+  /* Ported from amira: Blur and Foveal sit close to each other (they're
+     one family of latching modifier) with room after Reset+label, rather
+     than evenly spread across the row. */
+  .modem-group { display: flex; align-items: center; gap: 6px; margin-left: auto; }
   /* Even keys, the same rule the Show/CV/Hide row above uses. Two today,
      three when the second CV option lands -- and because every child takes
      an equal share of the row rather than a fixed width, that arrival needs
@@ -1085,24 +1089,35 @@
           </div>
         </div>
         <div class="pdiv"></div>
-        <!-- FOUR KEYS, ONE ROW. Exactly one of these is true at any
+        <!-- THREE KEYS, ONE ROW. Exactly one of these is true at any
              moment, so exactly one group says so. CV had its own row for a
              while and the split made the exclusivity invisible: a key alone
              in different metal reads as an independent switch, which implied
              you could have Hide and CV at once. You cannot.
 
-             CV sits at the right end so the Foveal checkbox -- which
-             right-aligns anyway, like Mute buzzes -- lands directly under
-             it. That was the whole reason CV was pulled out of the row, and
-             it turns out the row can have it both ways.
+             Blur moved out to a modem-style button below (with Foveal),
+             matching amira: it is a server-side modifier over whatever the
+             feed is already doing (mode != 'hide' in the writer loop, so
+             Show blurred and CV blurred are both meaningful), and forcing
+             it into this exclusive row as a fourth key was making it LOOK
+             mutually exclusive with CV when the backend never treated it
+             that way -- the same "key alone in different metal reads as
+             independent" problem this row's own comment used to describe
+             for CV, just inverted: here a key IN the row implied exclusivity
+             that didn't exist underneath it.
 
-             Blur is a server-side modifier underneath, but the panel drives
-             it as a picture state: a key in an exclusive row has to behave
-             like one. -->
+             Night takes Blur's old slot rather than a new one -- amira has
+             a working CV-enhanced low-light pipeline (spatial pixel
+             binning + temporal accumulation, since this camera class has
+             no exposure/gain control to fall back on) that hasn't been
+             ported here yet. Placeholder, not wired: pending like Foveal
+             used to be before it had a backend, present as a name so the
+             row's final shape is settled ahead of the port rather than
+             reshuffled again once it lands. -->
         <div class="btnrow">
           <button class="pbtn" id="showBtn" onclick="setPicture('show')">Show</button>
-          <button class="pbtn" id="blurBtn" onclick="setPicture('blur')"
-                  title="Mosaic the picture -- the room is there but not legible">Blur</button>
+          <button class="pbtn pending" id="nightBtn" disabled
+                  title="Night Vision -- ported from amira, not yet available here">Night</button>
           <button class="pbtn guarded" id="hideBtn" onclick="setPicture('hide')"
                   title="Switch the camera off -- publishes nothing but the notice">Hide</button>
           <button class="pbtn" id="cvBtn" onclick="setPicture('cv')"
@@ -1143,8 +1158,16 @@
           <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary"><span class="bulb"></span><span class="n">2D</span></div>
           <div class="led" id="ledScene3d" title="Depth -- not implemented on this branch"><span class="bulb"></span><span class="n">3D</span></div>
         </div>
-        <!-- Foveal belongs to CV, so it sits directly under it, the way
-             Mute buzzes sits under the audio keys. A setting, not an action. -->
+        <!-- Ported from amira's arrangement: Blur and Foveal as tiny
+             modem-style buttons with their own lamp, not a picture-row key
+             (Blur) or a checkbox (Foveal). "Engaged" is a pressed key with
+             its lamp lit -- the same language MUTE uses, so every latching
+             control on this panel looks alike. Foveal keeps its own
+             show/hide behaviour (row.hidden outside CV, not just dimmed --
+             see paintFoveal()): it belongs to CV and nothing else, so
+             outside CV it is GONE, not disabled. Blur has no such
+             restriction -- it modifies Show or CV equally -- so it is
+             never hidden. -->
         <!-- The recessed reset every piece of network hardware has: small,
              out of the way, and deliberately a little awkward, because you
              press it on purpose. It repairs the feed, which is not a casual
@@ -1154,7 +1177,16 @@
           <button class="reset" id="reloadBtn" onclick="manualReload()"
                   title="Repair feed -- restarts the stream" aria-label="Repair feed"><span class="pin"></span></button>
           <span class="eng rstlab">Reset</span>
-          <label class="chk" id="fovealChk"><input type="checkbox" id="fovealCheck" onchange="clickFoveal()"><span class="box"></span><span class="eng">Foveal layer</span></label>
+          <div class="modem-group">
+            <button class="modem" id="blurBtn" onclick="toggleBlur()"
+                    title="Mosaic the picture -- the room is there but not legible, over Show or CV">
+              <span class="bulb" id="blurLamp"></span><span class="cap2">BLUR</span>
+            </button>
+            <button class="modem" id="fovealBtn" onclick="clickFoveal()"
+                    title="Foveal layer -- detection gated to the moving region">
+              <span class="bulb" id="fovealLamp"></span><span class="cap2">FOVEAL</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1163,8 +1195,8 @@
         <div class="panel-title eng">Audio</div>
         <div class="split">
           <div class="vfd">
-            <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
-            <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost">888</span><span class="vlit" id="audioKbps"></span></span></div>
+            <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost" id="audioRateGhost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
+            <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost" id="audioKbpsGhost">888</span><span class="vlit" id="audioKbps"></span></span></div>
             <div class="vind">
               <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i>
             </div>
@@ -1256,7 +1288,7 @@
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
   var muteCheck    = document.getElementById('muteCheck');
-  var fovealCheck  = document.getElementById('fovealCheck');
+  var fovealBtn    = document.getElementById('fovealBtn');
   var sceneChip    = document.getElementById('sceneChip');
   var sceneBadge   = document.getElementById('sceneBadge');
   var sceneReregisterBtn = document.getElementById('sceneReregisterBtn');
@@ -1678,11 +1710,10 @@
   var wasHidden   = null;
 
   function updateFeedButtons() {
-    // One row, one selection. Blur is show-with-the-modifier-on, so Show is
-    // lit only when the picture is actually clear -- otherwise both would
-    // sit pressed and the row would be telling two stories.
-    showBtn.className = 'pbtn' + (feedMode === 'show' && !blurOn ? ' pressed' : '');
-    blurBtn.className = 'pbtn' + (feedMode === 'show' && blurOn  ? ' pressed' : '');
+    // One row, one selection -- three keys now that Blur is an independent
+    // modifier (paintBlur(), called separately) rather than a fourth key
+    // coupled to Show.
+    showBtn.className = 'pbtn' + (feedMode === 'show' ? ' pressed' : '');
     hideBtn.className = 'pbtn guarded' + (feedMode === 'hide' ? ' pressed' : '');
     cvBtn.className   = 'pbtn' + (feedMode === 'cv'   ? ' pressed' : '');
     var iCv = document.getElementById('indCv');
@@ -1712,7 +1743,7 @@
     // Foveal Layer is a modifier on CV Mode, not a mode of its own -- same
     // pattern as B&W was on Blur before the CV Mode pivot. Greyed out
     // (disabled) anywhere but CV Mode, same as B&W's precedent.
-    fovealCheck.disabled = (feedMode !== 'cv');
+    fovealBtn.disabled = (feedMode !== 'cv');
     paintFoveal();
     paintBlur();
     paintLamps();
@@ -1794,14 +1825,19 @@
 
   // ── BLUR — server-side, modifier over Show and CV alike ──
   //
-  // Not a feed mode: the operator has already decided what the camera is
-  // doing, and this decides whether the room is legible while it does it.
-  // Hide has nothing left to cover, so the key goes dark there.
+  // Ported from amira's arrangement: a modem button with its own lamp, not
+  // a picture-row key. Not a feed mode: the operator has already decided
+  // what the camera is doing, and this decides whether the room is legible
+  // while it does it -- Show blurred and CV blurred are both meaningful
+  // (mode != 'hide' in the writer loop), which a fourth exclusive-row key
+  // could never say honestly. "Engaged" is a pressed key with its lamp
+  // lit, the same language MUTE uses.
   var blurOn = false;
   function paintBlur() {
     if (!blurBtn) return;
-    blurBtn.className = 'pbtn' + (feedMode === 'show' && blurOn ? ' pressed' : '');
-    showBtn.className = 'pbtn' + (feedMode === 'show' && !blurOn ? ' pressed' : '');
+    blurBtn.classList.toggle('pressed', blurOn);
+    var lamp = document.getElementById('blurLamp');
+    if (lamp) lamp.classList.toggle('on', blurOn);
   }
   function postBlur(want) {
     return fetch('/api/blur-mode', {
@@ -1813,79 +1849,60 @@
     .catch(function() { return null; })
     .then(function(v) { if (v !== null) blurOn = v.trim() === 'true'; paintBlur(); });
   }
-
-  // Every key in the picture row and CV Mode come through here, so the four
-  // of them cannot disagree about what is selected.
-  //
-  // Blur goes ON before the mode changes and OFF after it: whichever way the
-  // operator is moving, the frame in between is the more private of the two
-  // states, never the less. That ordering is the whole reason this is one
-  // function rather than two independent controls.
-  function setPicture(which) {
-    if (!feedModeKnown) return;
-    var wantBlur = (which === 'blur');
-    var wantMode = (which === 'blur') ? 'show' : which;
-    if (wantMode === feedMode && wantBlur === blurOn) return;
-    if (wantBlur && !blurOn) {
-      postBlur(true).then(function() { if (wantMode !== feedMode) setFeedMode(wantMode); });
-      return;
-    }
-    if (wantMode !== feedMode) setFeedMode(wantMode);
-    if (!wantBlur && blurOn) postBlur(false);
-    else paintBlur();
-  }
-  function pollBlur() {
+  function toggleBlur() { postBlur(!blurOn); }
+  function pollBlurState() {
     fetch('/api/blur-mode', { cache: 'no-store' })
       .then(function(r) { return r.ok ? r.text() : null; })
       .catch(function() { return null; })
       .then(function(v) { if (v !== null) { blurOn = v.trim() === 'true'; paintBlur(); } });
   }
-  pollBlur();
-  setInterval(pollBlur, 5000);
+  pollBlurState();
+  setInterval(pollBlurState, 5000);
 
-  // ── FOVEAL LAYER — server-side, modifier on CV Mode ──
-  var fovealOn = false;
-  function updateFovealCheck() { fovealCheck.checked = fovealOn; paintFoveal(); }
-
-  // The box is the lamp -- checked lights it, the same treatment every other
-  // checkbox on the panel gets. Unavailable is the label going dim, matching
-  // Mute buzzes rather than a dead key.
-  // Foveal belongs to CV and to nothing else, so outside CV it is not dimmed,
-  // it is GONE (PM). The row keeps its height either way -- the reset sits on
-  // it -- so the panel does not jump when the mode changes, which is the one
-  // thing hiding a control is usually punished for.
-  function paintFoveal() {
-    var row = document.getElementById('fovealChk');
-    if (!row) return;
-    row.className = 'chk';
-    row.hidden = fovealCheck.disabled;
+  // Show/Hide/CV come through here; Blur no longer does -- it is
+  // independent now (toggleBlur() above), not coupled to a mode switch.
+  function setPicture(which) {
+    if (!feedModeKnown) return;
+    if (which === feedMode) return;
+    setFeedMode(which);
   }
 
-  // The checkbox remains the state; the key is only how you reach it. Kept
-  // that way so applyFoveal(), updateFovealCheck() and the poll all read one
-  // source rather than three.
-  // onchange, so the input has already flipped itself -- flipping it here too
-  // would put the control back where it started.
-  function clickFoveal() {
-    if (fovealCheck.disabled) return;
-    paintFoveal();
-    toggleFoveal();
+  // ── FOVEAL LAYER — server-side, modifier on CV Mode ──
+  // Ported from amira's arrangement: a modem button with its own lamp,
+  // same treatment as Blur -- "engaged" is pressed with the lamp lit.
+  // Foveal belongs to CV and to nothing else, so outside CV it is not
+  // dimmed, it is GONE (PM), same as before -- the row keeps its height
+  // either way (the reset sits on it), so the panel does not jump when the
+  // mode changes, which is the one thing hiding a control is usually
+  // punished for. That's still row.hidden, just driven by fovealBtn.disabled
+  // instead of a checkbox's.
+  var fovealOn = false;
+  function paintFoveal() {
+    if (!fovealBtn) return;
+    fovealBtn.classList.toggle('pressed', fovealOn);
+    var lamp = document.getElementById('fovealLamp');
+    if (lamp) lamp.classList.toggle('on', fovealOn);
+    fovealBtn.hidden = fovealBtn.disabled;
   }
   function applyFoveal(enabled) {
     fovealOn = enabled;
-    updateFovealCheck();
+    paintFoveal();
   }
   function toggleFoveal() {
-    var newVal = fovealCheck.checked ? 'true' : 'false';
+    if (fovealBtn.disabled) return;
     fetch('/api/foveal-mode', {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
-      body: newVal
+      body: (!fovealOn) ? 'true' : 'false'
     })
     .then(function(r) { return r.ok ? r.text() : null; })
     .catch(function() { return null; })
     .then(function(v) { if (v !== null) applyFoveal(v.trim() === 'true'); });
   }
+  // clickFoveal() kept as the onclick's name (matching Blur's toggleX()
+  // naming would rename the markup too) -- it just delegates now that
+  // there's no checkbox state of its own to paint first.
+  function clickFoveal() { toggleFoveal(); }
   function pollFoveal() {
     fetch('/api/foveal-mode', { cache: 'no-store' })
       .then(function(r) { return r.ok ? r.text() : null; })
@@ -2294,6 +2311,10 @@
           audioReady = false;
           audioRateEl.textContent = '';
           audioKbpsEl.textContent = '';
+          var audioRateGhost = document.getElementById('audioRateGhost');
+          var audioKbpsGhost = document.getElementById('audioKbpsGhost');
+          if (audioRateGhost) audioRateGhost.textContent = '';
+          if (audioKbpsGhost) audioKbpsGhost.textContent = '';
           paintListen();
           return;
         }
@@ -2308,6 +2329,11 @@
           ? (a.rate_hz / 1000).toFixed(1) + '<span class="vunit">KHZ</span>' : '';
         audioKbpsEl.innerHTML = live
           ? a.kbps + '<span class="vunit">KBPS</span>' : '';
+
+        var audioRateGhost = document.getElementById('audioRateGhost');
+        var audioKbpsGhost = document.getElementById('audioKbpsGhost');
+        if (audioRateGhost) audioRateGhost.innerHTML = audioRateEl.innerHTML;
+        if (audioKbpsGhost) audioKbpsGhost.innerHTML = audioKbpsEl.innerHTML;
         paintListen();
       });
   }
