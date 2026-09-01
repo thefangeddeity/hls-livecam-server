@@ -533,6 +533,23 @@
   .reset:active .pin { background: linear-gradient(180deg,#2e2e34,#232327);
     box-shadow: inset 0 1px 2px rgba(0,0,0,.8); }
   .rstlab { font-size: 10px; letter-spacing: .04em; }
+  /* A pilot-light button: a pinhole just large enough to hold its own lamp,
+     for latching toggles (Mute buzzes, Lock message) that used to be
+     checkboxes. Round rather than .reset's oblong tic-tac, since there is no
+     plunger here -- the bulb itself is the whole face of the button, the way
+     a component-stereo power light doubles as its own switch. Label lives
+     outside it, same as Reset's. */
+  .pinled { width: 16px; height: 16px; flex: 0 0 auto; padding: 0; border-radius: 50%;
+    cursor: pointer; font-family: inherit;
+    background: linear-gradient(180deg,#0f0f11 0%,#141416 60%,#1d1d21 100%);
+    border: 1px solid #35353b;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,.85), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
+    display: flex; align-items: center; justify-content: center; }
+  .pinled:active, .pinled.pressed { box-shadow: inset 0 3px 4px rgba(0,0,0,.9); }
+  html[data-theme="light"] .pinled {
+    background: linear-gradient(180deg,#d5d3c8 0%,#e4e2d9 60%,#f2f1eb 100%);
+    border-color: #c4c2b6;
+    box-shadow: inset 0 2px 3px rgba(88,110,117,.35), inset 0 -1px 0 rgba(255,255,255,.9), 0 1px 0 rgba(255,255,255,.8); }
   html[data-theme="light"] .reset {
     background: linear-gradient(180deg,#d5d3c8 0%,#e4e2d9 60%,#f2f1eb 100%);
     border-color: #c4c2b6;
@@ -1158,6 +1175,7 @@
           <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary"><span class="bulb"></span><span class="n">2D</span></div>
           <div class="led" id="ledScene3d" title="Depth -- not implemented on this branch"><span class="bulb"></span><span class="n">3D</span></div>
         </div>
+        <div class="pdiv"></div>
         <!-- Ported from amira's arrangement: Blur and Foveal as tiny
              modem-style buttons with their own lamp, not a picture-row key
              (Blur) or a checkbox (Foveal). "Engaged" is a pressed key with
@@ -1238,8 +1256,14 @@
             <span class="bulb"></span><span class="cap2">BUZZ</span>
           </button>
         </div>
+        <!-- A pilot-light button, not a checkbox: a latching toggle sized to
+             its own lamp, label outside like Reset's own. -->
         <div class="modemrow">
-          <label class="chk"><input type="checkbox" id="muteCheck" onchange="toggleMute()"><span class="box"></span><span class="eng">Mute buzzes</span></label>
+          <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
+                  title="Silence incoming buzz alerts" aria-label="Mute buzzes">
+            <span class="bulb" id="muteBuzzLamp"></span>
+          </button>
+          <span class="eng rstlab">Mute buzzes</span>
         </div>
       </div>
 
@@ -1253,7 +1277,13 @@
           <button class="pbtn" id="clearBtn" onclick="clearMessage()">Clear</button>
           <button class="pbtn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
         </div>
-        <label class="chk"><input type="checkbox" id="lockCheck" onchange="toggleLock()"><span class="box"></span><span class="eng">Lock message</span></label>
+        <div class="modemrow">
+          <button class="pinled" id="lockMsgBtn" onclick="toggleLock()"
+                  title="Prevent Save / Clear / Cancel from being used" aria-label="Lock message">
+            <span class="bulb" id="lockMsgLamp"></span>
+          </button>
+          <span class="eng rstlab">Lock message</span>
+        </div>
       </div>
 
       <div class="modemrow" style="padding:0 2px">
@@ -1287,7 +1317,7 @@
   var cvBtn        = document.getElementById('cvBtn');
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
-  var muteCheck    = document.getElementById('muteCheck');
+  var muteBuzzBtn  = document.getElementById('muteBuzzBtn');
   var fovealBtn    = document.getElementById('fovealBtn');
   var sceneChip    = document.getElementById('sceneChip');
   var sceneBadge   = document.getElementById('sceneBadge');
@@ -1401,11 +1431,20 @@
   }
 
   function updateMuteBtn() {
-    muteCheck.checked = buzzMuted;
+    if (!muteBuzzBtn) return;
+    muteBuzzBtn.classList.toggle('pressed', buzzMuted);
+    var lamp = document.getElementById('muteBuzzLamp');
+    if (lamp) lamp.classList.toggle('on', buzzMuted);
   }
 
   var msgLock = false;
-  function updateLockBtn() { document.getElementById('lockCheck').checked = msgLock; }
+  function updateLockBtn() {
+    var btn = document.getElementById('lockMsgBtn');
+    if (!btn) return;
+    btn.classList.toggle('pressed', msgLock);
+    var lamp = document.getElementById('lockMsgLamp');
+    if (lamp) lamp.classList.toggle('on', msgLock);
+  }
   var msgActions = document.getElementById('msgActions');
   function applyLock(locked) {
     msgLock = locked;
