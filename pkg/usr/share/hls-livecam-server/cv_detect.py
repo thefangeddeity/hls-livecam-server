@@ -567,18 +567,29 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     if candidates:
         text += f" +{candidates} CANDIDATE{'S' if candidates != 1 else ''}"
 
-    # macOS-light-inspired telemetry:
-    # smaller, lighter, quieter, and using the same visual weight as the
-    # floating target labels rather than the old heavy surveillance text.
-    telemetry_ink = tuple(
-        max(1, min(255, int(round(channel * 0.88))))
-        for channel in ink
-    )
+    # Bottom-left telemetry block, two rows, both flush left.
+    #
+    # Was: the capability strip right-aligned on its own line and the banner
+    # left-aligned on another, each drawn a character at a time with three
+    # extra pixels of tracking. Two lines that start at opposite edges do not
+    # read as one block, and the per-character spacing made a monospaced-
+    # looking string that is not actually monospaced -- getTextSize is called
+    # per glyph, so the gaps are even but the glyph widths are not.
+    #
+    # Now both rows start at the same x and stack: what the machine FOUND on
+    # top, how it is LOOKING directly beneath it. One putText per row.
+    hud_font = cv2.FONT_HERSHEY_SIMPLEX
+    hud_thickness = 1
 
-    telemetry_font = cv2.FONT_HERSHEY_SIMPLEX
-    telemetry_scale = 0.52
-    telemetry_thickness = 1
-    telemetry_spacing = 3
+    # Matched to tina: both rows are the same size and the same ink. An
+    # earlier pass here dimmed and shrank the second row to mark it as
+    # supporting material. At 0.42 that is too small a difference to read as
+    # hierarchy and just reads as the renderer being inconsistent -- two
+    # equal rows are cleaner, and the stacking already says which is which.
+    primary_scale = 0.42
+    secondary_scale = 0.42
+    primary_ink = ink
+    secondary_ink = ink
 
     tx = 18
     # Back to 42 after a detour through 96 and 56. The strip was being
@@ -588,79 +599,39 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     # now uses object-fit: contain, so the whole frame is shown and this
     # number can be about composition again rather than about dodging
     # somebody's window shape.
-    ty = h - 42
+    primary_y = h - 42
+    secondary_y = h - 22
 
-    # The capability strip is a SECOND LINE, above the banner, and it is
-    # allowed to be cut short.
-    #
-    # It used to share the banner's baseline, right-aligned, clamped with
-    # max(18, ...). On a node running several tools that clamp guaranteed
-    # the failure it looked like it was preventing: the strip started at
-    # x=18 on top of "DETECTING 2 TARGETS" and the two rendered through each
-    # other into an unreadable smear. Two independent strings cannot share
-    # one line unless something enforces that they fit, and nothing did.
-    #
-    # They are also different kinds of fact -- what the machine FOUND, and
-    # how it is LOOKING -- so they get a line each: configuration above,
-    # findings below, quieter above than below.
-    cap_scale = telemetry_scale * 0.88
-    cap_ink = tuple(max(1, min(255, int(round(c * 0.82)))) for c in telemetry_ink)
-    cap_y = ty - 21
-
-    def _strip_width(txt, scale):
-        wsum = 0
-        for ch_ in txt:
-            (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, scale,
-                                          telemetry_thickness)
-            wsum += cw_ + telemetry_spacing
-        return wsum
-
-    # Both telemetry lines float directly over the picture with no
-    # background plate. The quiet macOS-light-inspired ink above reads
-    # cleanly against a dark feed and disappears against a light one (or
-    # the reverse) -- there's no single ink value that survives every
-    # scene this camera might be pointed at. A dark shadow pass underneath
-    # each character, offset by one pixel, fixes both directions: it reads
-    # as depth against a light background and is too faint to matter
+    # Both rows float directly over the picture with no background plate.
+    # The quiet ink above reads cleanly against a dark feed and disappears
+    # against a light one (or the reverse) -- there is no single ink value
+    # that survives every scene this camera might be pointed at. A dark
+    # shadow pass underneath, offset by one pixel, fixes both directions: it
+    # reads as depth against a light background and is too faint to matter
     # against a dark one, same principle a drop shadow uses everywhere else.
-    def _put_char(ch_, pos, scale, ink_):
-        sx, sy = pos[0] + 1, pos[1] + 1
-        cv2.putText(out, ch_, (sx, sy), telemetry_font, scale,
-                    (0, 0, 0), telemetry_thickness + 1, cv2.LINE_AA)
-        cv2.putText(out, ch_, pos, telemetry_font, scale,
-                    ink_, telemetry_thickness, cv2.LINE_AA)
+    def _put_line(txt, pos, scale, ink_):
+        cv2.putText(out, txt, (pos[0] + 1, pos[1] + 1), hud_font, scale,
+                    (0, 0, 0), hud_thickness + 1, cv2.LINE_AA)
+        cv2.putText(out, txt, pos, hud_font, scale,
+                    ink_, hud_thickness, cv2.LINE_AA)
+
+    _put_line(text, (tx, primary_y), primary_scale, primary_ink)
 
     if capabilities:
         cap = str(capabilities)
-        avail = w - 36
+        avail = w - 2 * tx
         # Trim at a separator rather than mid-word: a strip that ends in
         # "FOVEA" is worse than one that stops at the last whole tool it had
         # room to name.
-        while cap and _strip_width(cap, cap_scale) > avail:
-            cut = cap.rfind(', ')
+        while cap and cv2.getTextSize(cap, hud_font, secondary_scale,
+                                      hud_thickness)[0][0] > avail:
+            cut = max(cap.rfind(', '), cap.rfind(' / '))
             if cut <= 0:
                 cap = cap[:max(0, len(cap) - 2)]
             else:
                 cap = cap[:cut]
         if cap:
-            cx_ = max(18, w - 18 - _strip_width(cap, cap_scale))
-            for ch_ in cap:
-                (cw_, _), _ = cv2.getTextSize(ch_, telemetry_font, cap_scale,
-                                              telemetry_thickness)
-                _put_char(ch_, (cx_, cap_y), cap_scale, cap_ink)
-                cx_ += cw_ + telemetry_spacing
-
-    for char in text:
-        (cw, ch), _ = cv2.getTextSize(
-            char,
-            telemetry_font,
-            telemetry_scale,
-            telemetry_thickness,
-        )
-
-        _put_char(char, (tx, ty), telemetry_scale, telemetry_ink)
-
-        tx += cw + telemetry_spacing
+            _put_line(cap, (tx, secondary_y), secondary_scale, secondary_ink)
 
     tag_font = cv2.FONT_HERSHEY_SIMPLEX
     tag_scale = 0.52
@@ -671,7 +642,10 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     tag_gap = 12
     tag_height = 24
 
-    hud_clear = (8, 8, min(w - 8, 430), 155)
+    # Reserve only the actual two-line HUD footprint in the lower-left.
+    # The old rect guarded the TOP-left while the text drew at h - 42,
+    # so floating target labels were free to land on the telemetry.
+    hud_clear = (8, h - 62, min(w - 8, 540), h - 8)
 
     def rects_overlap(a, b, margin=4):
         ax1, ay1, ax2, ay2 = a

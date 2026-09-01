@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Generate the viewer's header mark from the source artwork.
+
+art/ holds 1254x1254 source images that are deliberately not shipped. This
+builds the one derivative the web viewer asks for (/brand.png) so the mark can
+be regenerated from the art rather than existing only as a binary somebody
+once exported by hand.
+
+Two things the naive resize gets wrong, both handled here:
+
+  * The source's rounded square bleeds to all four edges and only the corners
+    are black. Resized as-is, those corners sit as black notches on the dark
+    header housing. They are cut to transparency by flood-filling inward from
+    each image corner -- the lens barrel is also near-black but is enclosed by
+    navy and therefore unreachable, which a colour threshold would get wrong.
+
+  * The lens occupies 74% of the source tile. At the header's 20 CSS px the
+    surrounding navy margin is pure waste, so the mark is cropped to the lens
+    plus a thin margin (89%) and re-cornered at the source's own radius ratio.
+
+Usage: scripts/make-brand-mark.py [--product livecam|lightcv]
+"""
+import argparse
+import os
+import sys
+
+from PIL import Image, ImageDraw
+import numpy as np
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOURCES = {
+    'livecam': 'art/hls-livecam-server.png',
+    'lightcv': 'art/hls-lightcv-server.png',
+}
+# 20 CSS px in the header; 128 carries a 3x phone with room to spare, at a
+# file size that does not matter. Bigger is shipping an app icon down the
+# wire to draw a 20px square.
+OUT_SIZE = 128
+CORNER_RATIO = 177 / 1254        # measured off the source squircle
+LENS_MARGIN = 1.12               # crop side = lens extent * this
+
+
+def find_lens(rgb):
+    """Lens centre and extent, measured against the navy field rather than
+    assumed. Returns (cx, cy, size)."""
+    h, w = rgb.shape[:2]
+    navy = rgb[40, w // 2].astype(int)
+    row = np.abs(rgb[h // 2].astype(int) - navy).sum(1)
+    col = np.abs(rgb[:, w // 2].astype(int) - navy).sum(1)
+    xs = np.where(row > 60)[0]
+    ys = np.where(col > 60)[0]
+    if not len(xs) or not len(ys):
+        raise SystemExit('could not locate the lens against the navy field')
+    return ((xs[0] + xs[-1]) // 2, (ys[0] + ys[-1]) // 2,
+            max(xs[-1] - xs[0], ys[-1] - ys[0]))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--product', choices=sorted(SOURCES), default='livecam')
+    ap.add_argument('--out', default='pkg/usr/share/hls-livecam-server/brand.png')
+    args = ap.parse_args()
+
+    src_path = os.path.join(REPO, SOURCES[args.product])
+    src = Image.open(src_path).convert('RGB')
+    rgb = np.array(src)
+    w = rgb.shape[1]
+
+    lcx, lcy, lsize = find_lens(rgb)
+    side = int(lsize * LENS_MARGIN)
+    x0 = max(0, min(w - side, lcx - side // 2))
+    y0 = max(0, min(rgb.shape[0] - side, lcy - side // 2))
+    crop = src.crop((x0, y0, x0 + side, y0 + side))
+
+    ss = 4                       # supersample so the corner arc stays smooth
+    radius = int(side * CORNER_RATIO)
+    mask = Image.new('L', (side * ss, side * ss), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, side * ss - 1, side * ss - 1], radius=radius * ss, fill=255)
+
+    out = crop.convert('RGBA')
+    out.putalpha(mask.resize((side, side), Image.LANCZOS))
+    out = out.resize((OUT_SIZE, OUT_SIZE), Image.LANCZOS)
+
+    dest = os.path.join(REPO, args.out)
+    out.save(dest, optimize=True)
+    print(f'{args.out}: {OUT_SIZE}x{OUT_SIZE}, '
+          f'{os.path.getsize(dest)} bytes, from {SOURCES[args.product]} '
+          f'(lens fills {lsize / side * 100:.0f}% of the mark)')
+
+
+if __name__ == '__main__':
+    sys.exit(main())
