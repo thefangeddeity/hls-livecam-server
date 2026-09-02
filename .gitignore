@@ -44,3 +44,10 @@ dist/
 .claude/
 web/cams/cams.json
 state/feed_mode
+
+# Runtime state, rewritten on every service start. Tracking these made the
+# working tree permanently dirty, which put -dirty in the version label the
+# viewer shows -- so the label could never distinguish a real modification
+# from the node simply having been started.
+state/*.pid.start
+state/*.pid
