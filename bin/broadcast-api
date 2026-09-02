@@ -246,6 +246,94 @@ def _apply_svhs_warp(arr):
     return out
 
 
+# -- Talkback player ---------------------------------------------------
+#
+# Ported from amira. A viewer pressing TALK or 2-WAY publishes its microphone
+# to mediamtx's 'talkback' path over WHIP; that half has always worked. What
+# was missing is that nothing on this machine ever READ that path, so the
+# audio arrived and stopped there. Publishing is not playing.
+#
+# This reads talkback and plays it out through AudioToolbox, which is the only
+# audio OUTPUT device ffmpeg exposes on macOS -- avfoundation is input-only
+# here, which is why the obvious symmetric choice is not available.
+#
+# Supervised rather than spawned on demand, and the race is worth naming:
+# mediamtx accepts a WHIP publisher BEFORE its first packet arrives, so a
+# player started the instant a viewer says "talking" can find the path empty,
+# exit, and leave the room silent for a microphone that is in fact about to
+# work. A patient retry loop has no such race -- it is always already waiting.
+TALKBACK_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/talkback"
+
+# The room, again, as Opus on its own path -- the inbound half of 2-WAY.
+#
+# WebRTC cannot carry AAC. mediamtx does not transcode, and says so plainly
+# when a WHEP reader attaches to 'cam': "skipping track with codec MPEG-4
+# Audio", handing over video only. That is fatal for two-way audio twice
+# over -- the room cannot be heard during a call, and the browser's echo
+# canceller has no reference signal, so the far end hears itself back.
+#
+# So the same microphone leaves here a second time in a codec WebRTC accepts.
+# One extra encode off a capture that is already running; the AAC track on
+# 'cam' is untouched, and HLS viewers see no difference at all.
+ROOM_AUDIO_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/roomaudio"
+_talkback_proc = None
+
+
+def _roomaudio_output(audio_map, audio_filter):
+    """Second output for a capture ffmpeg: the mic again, as Opus.
+
+    No -ar/-ac here, deliberately. ffmpeg 8.1.2 refuses to open an
+    avfoundation microphone at all when either appears ANYWHERE in the
+    command -- the regression this tree already works around with an aformat
+    filter -- and a rate/channel argument added for the benefit of an output
+    would take the capture's input down with it. libopus takes the 48 kHz
+    stereo the aformat filter already guarantees, so neither is needed.
+    """
+    return [
+        '-map', audio_map, '-c:a', 'libopus', '-b:a', '64k',
+        '-application', 'voip',
+        *audio_filter,
+        '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
+    ]
+
+
+def _talkback_loop():
+    global _talkback_proc
+    idle_wait = 4.0
+    while True:
+        try:
+            _talkback_proc = subprocess.Popen(
+                # -vn and an explicit audio map: talkback carries the caller's
+                # camera as well as their voice once 2-WAY publishes both, and
+                # this player only ever wanted the audio.
+                [FFMPEG, '-hide_banner', '-loglevel', 'error',
+                 '-rtsp_transport', 'tcp', '-i', TALKBACK_URL,
+                 '-vn', '-map', '0:a:0',
+                 '-f', 'audiotoolbox', '-'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            # Blocks for as long as somebody is talking. Returns the moment the
+            # publisher goes away, which is the signal to go back to waiting.
+            _, err = _talkback_proc.communicate()
+            rc = _talkback_proc.returncode
+            msg = (err or b'').decode('utf-8', 'replace').strip()
+            # "404" here is the ordinary case -- nobody is talking -- and must
+            # not be logged as a fault, or the log becomes useless.
+            if msg and '404' not in msg and 'Not Found' not in msg:
+                print(f'broadcast-api: talkback player: {msg}', flush=True)
+            elif rc == 0:
+                print('broadcast-api: talkback ended', flush=True)
+        except Exception as e:
+            print(f'broadcast-api: talkback player failed to start: {e}',
+                  flush=True)
+        finally:
+            _talkback_proc = None
+        time.sleep(idle_wait)
+
+
+threading.Thread(target=_talkback_loop, daemon=True).start()
+print('broadcast-api: talkback player waiting on ' + TALKBACK_URL, flush=True)
+
+
 def _start_publisher():
     """Publisher ffmpeg: reads processed RGB frames from stdin, pushes RTSP.
 
@@ -632,6 +720,7 @@ def _start_cv_publisher(mode='cv'):
         '-c:a', 'aac', '-b:a', '96k',
         *audio_filter_args(),
         '-rtsp_transport', 'tcp', '-f', 'rtsp', rtsp_url,
+        *_roomaudio_output('1:a:0', audio_filter_args()),
     ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
        stderr=_open_ffmpeg_log(), bufsize=0)
 
@@ -756,6 +845,12 @@ def _start_combined_av_publisher(mode='show'):
         '-rtsp_transport', 'tcp',
         '-f', 'rtsp',
         rtsp_url,
+
+        # Follows whichever input the audio came from: hide draws silence from
+        # anullsrc as a second input, every other mode takes the mic off the
+        # same avfoundation device as the picture.
+        *_roomaudio_output('1:a:0' if mode == 'hide' else '0:a:0',
+                           audio_filter if mode != 'hide' else []),
     ]
 
     print(

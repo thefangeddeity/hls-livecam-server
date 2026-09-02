@@ -141,9 +141,14 @@ paths:
   cam:
   # The reverse direction, published by a browser and read by the node's
   # speaker player. Separate from `cam` on purpose: opposite direction,
-  # opposite lifetime -- `cam` is up as long as the node is, `talkback` exists
-  # only while somebody holds a key -- and publishing the reverse leg into
-  # `cam` would put a viewer's microphone into the stream everyone is watching.
+  # opposite lifetime -- \`cam\` is up as long as the node is, \`talkback\`
+  # exists only while somebody holds a key -- and publishing the reverse leg
+  # into \`cam\` would put a viewer's microphone into the stream everyone is
+  # watching.
+  #
+  # Those backticks are escaped because this is an UNQUOTED heredoc: bare ones
+  # ran as command substitutions, printed "talkback: command not found" on
+  # every start, and wrote the comment out with the words missing.
   talkback:
   all_others:
 EOF

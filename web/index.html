@@ -1513,18 +1513,19 @@
              place and made MUTE and STOP look like rivals; they were never the
              same category.
 
-             Talk and 2-Way are DISABLED here: this node has no talkback
-             backend yet. Present as names, not faked as working controls --
-             the precedent FOVEAL already sets. -->
+             Talk and 2-Way are live now: broadcast-api reads mediamtx's
+             'talkback' path and plays it out, and publishes the room a second
+             time as Opus for the return leg. They still disable themselves
+             off a secure context, because getUserMedia does. -->
         <div class="btnrow">
           <button type="button" class="btn" id="audioPlayBtn"
                   title="Room audio in">Play</button>
           <button type="button" class="btn guarded" id="audioStopBtn"
                   title="Neither direction open">Stop</button>
-          <button type="button" class="btn" id="toRoomButton" disabled
-                  title="Talk to the room -- no talkback backend on this node yet">Talk</button>
-          <button type="button" class="btn" id="talkButton" disabled
-                  title="Two-way audio -- no talkback backend on this node yet">2-Way</button>
+          <button type="button" class="btn" id="toRoomButton"
+                  title="Talk to the room -- your voice out, room audio held">Talk</button>
+          <button type="button" class="btn" id="talkButton"
+                  title="Two-way audio with the room">2-Way</button>
         </div>
 
         <!-- The counterpart to VIDEO's FPS trace: what is actually being
@@ -1557,6 +1558,12 @@
 
           <!-- hls.js attaches here; the keys above drive it. -->
           <audio id="roomAudioPlayer" preload="none" playsinline hidden></audio>
+
+          <!-- The room during a call, over WebRTC rather than HLS. Separate
+               element on purpose: it has to be the thing the browser rendered
+               through a PeerConnection, or the echo canceller has no reference
+               signal to cancel against. -->
+          <audio id="twoWayRx" playsinline hidden></audio>
         </div>
 
         <div class="divider"></div>
@@ -1678,6 +1685,13 @@
   // through normally. That made CV look like the only button that worked and
   // the de facto way to start the stream, and Show look dead.
   var feedModeKnown = false;
+  /* Has THIS page opened the picture yet? Viewer-local, and deliberately not
+     the same question as what the node is publishing. A fresh load opens with
+     the tube dark whatever mode the node is in -- the same reason the audio
+     transport opens on STOP -- and the first press of a feed key is what
+     turns it on. Nothing here changes the node's mode, so one person
+     reloading never blanks the feed for anybody else. */
+  var playerStarted = false;
 
   var hostEl = document.getElementById('hostVal');
   var protoEl = document.getElementById('protoVal');
@@ -2011,7 +2025,15 @@
     // doing nothing. The early return this replaces is why Show "had to follow
     // CV": on a cold load the server is already in show, so Show was a no-op
     // and only a mode CHANGE ever reached reloadStream().
-    if (feedModeKnown && mode === feedMode) { reloadStream(); return; }
+    if (feedModeKnown && mode === feedMode) {
+      // Also the ordinary way the picture gets opened now: on a fresh load the
+      // node is usually already in the mode being pressed, so this branch is
+      // what has to power the tube back on -- reloadStream() alone would fetch
+      // a stream into a screen still held dark.
+      if (!playerStarted) { playerStarted = true; applyFeedModeVisual(mode, true); }
+      reloadStream();
+      return;
+    }
     /* Switching the tube off is the whole transition, so the switch-cover
        countdown would just be a second, slower animation on top of it. */
     if (mode === 'hide') {
@@ -2019,7 +2041,11 @@
       applyFeedModeVisual('hide', true);
       setTimeout(endFeedSwitch, HOLD_SECONDS * 1000);
     }
-    else { if (feedMode === 'hide') applyFeedModeVisual(mode, true); fadeOut(); }
+    else {
+      if (feedMode === 'hide' || !playerStarted) applyFeedModeVisual(mode, true);
+      fadeOut();
+    }
+    if (mode !== 'hide') playerStarted = true;
     var nightBtn = document.getElementById('nightBtn');
     showBtn.disabled = true; hideBtn.disabled = true;
     if (cvBtn) cvBtn.disabled = true;
@@ -2062,19 +2088,24 @@
              only one that initiated the change.) */
           beginFeedSwitch();
           setTimeout(endFeedSwitch, HOLD_SECONDS * 1000);
-          if (wasHidden !== (mode === 'hide')) applyFeedModeVisual(mode, true);
+          /* Only for a viewer that has actually opened the picture. Somebody
+             else switching the node out of hide must not light up a tube this
+             viewer never turned on. */
+          if (playerStarted && wasHidden !== (mode === 'hide')) {
+            applyFeedModeVisual(mode, true);
+          }
         }
         feedModeKnown = true;
         if (feedModeFirstPoll) {
           feedModeFirstPoll = false;
-          applyFeedModeVisual(feedMode, false);   // no animation on arrival
-          /* The stream starts here, not unconditionally at page load. Until
-             this first response lands, feedMode is only a client-side guess
-             ('show') -- starting hls.js against that guess raced the real
-             mode and could briefly show or connect against the wrong one.
-             If the fetch fails (server not up yet), feedModeFirstPoll stays
-             true and this fires on whichever retry of the 3s poll succeeds. */
-          initHLS();
+          /* Dark on arrival, whatever the node says it is publishing. The
+             stream does NOT start here any more: a page that opens already
+             showing a live room is a default nobody chose, and the feed keys
+             are one press away. updateFeedButtons() still reports the node's
+             real mode, so the panel tells the truth about the node while the
+             tube tells the truth about this viewer -- the same split the
+             audio row already draws between its lamps and its transport. */
+          applyFeedModeVisual('hide', false);   // no animation on arrival
         }
       });
   }
@@ -2954,6 +2985,10 @@
        be retried. This is not the old "unmute implies play" behaviour coming
        back: the transport is already in 'play' by then, the element simply
        never got permission to start. A stopped transport stays stopped. */
+    /* The call leg is a different element, and MUTE means "silence what I
+       hear" regardless of which transport is carrying it. */
+    var rxEl = document.getElementById('twoWayRx');
+    if (rxEl) rxEl.muted = muted;
     if (!muted && audio.paused && audioDir === 'play') {
       var pr = audio.play();
       if (pr && pr.catch) pr.catch(function () {});
@@ -3112,11 +3147,17 @@
     // Native first, same reasoning as the picture above.
     if (audio.canPlayType('application/vnd.apple.mpegurl')) {
       audio.src = url;
+      /* The element is preload="none", so on iOS nothing is fetched until
+         something calls play() -- which means hanging the start off
+         'loadedmetadata' deadlocks: no load without a play, no play without
+         the load. Start first, and leave the listener to light the lamp when
+         the metadata does arrive. hls.js has no such problem, because
+         attachMedia() begins fetching on its own. */
       audio.addEventListener('loadedmetadata', function () {
         stage(hlsLed, 'ok');
         setAudioState('Room audio');
-        beginIfPlaying();
       }, { once: true });
+      beginIfPlaying();
       return;
     }
 
@@ -3151,6 +3192,197 @@
 
   resolveAudioUrl(startAudio);
 
+  // ── TALK and 2-WAY ────────────────────────────────────
+  //
+  // Ported from amira. WHIP out, WHEP in, in this page rather than through
+  // mediamtx's own publish page.
+  //
+  // WHY THE INBOUND SIDE LEAVES HLS. The room normally arrives on
+  // #roomAudioPlayer over HLS. The browser's echo canceller -- the same AEC3
+  // the videocall apps use, switched on by the getUserMedia constraints below
+  // -- can only cancel what it has a reference signal for, and it only has
+  // that for audio it rendered itself through a PeerConnection. Leave the room
+  // on HLS while publishing a microphone and there is nothing to cancel
+  // against: the far end hears itself back, delayed by the whole HLS buffer,
+  // which is the worst-sounding echo available. So 2-WAY stops the HLS audio
+  // and takes the room over WHEP instead, and hanging up puts it back.
+  //
+  // This node's 2-WAY is audio in both directions. Amira additionally swaps
+  // the picture onto WebRTC and shows a self-view; that is not ported here
+  // yet, and the button says what it does rather than implying more.
+  //
+  // WHIP/WHEP handshake adapted from mediamtx's own reference player
+  // (github.com/bluenviron/mediamtx, MIT).
+  var twoWay = { on: false, pub: null, sub: null, stream: null,
+                 pubRes: null, subRes: null, timer: null,
+                 busy: false, wasSilent: true };
+
+  // Bounded by design. A page that crashes with the microphone open would
+  // otherwise leave this room live until somebody noticed -- and nobody would
+  // be looking at the panel to see the lamp.
+  var TWOWAY_MAX_SECONDS = 600;
+
+  function twoWayBase() {
+    // Direct to mediamtx on 8889. Not through this page's origin: the /hls
+    // prefix is already spoken for by Tailscale Serve, and a proxy that must
+    // be taught WebRTC's header set is worse than no proxy.
+    return window.location.protocol + '//' + window.location.hostname + ':8889';
+  }
+
+  function whipWhep(url, pc, dir) {
+    return pc.createOffer().then(function (offer) {
+      return pc.setLocalDescription(offer).then(function () {
+        return fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body: offer.sdp
+        });
+      });
+    }).then(function (res) {
+      if (res.status !== 201) {
+        throw new Error(dir + ' refused: HTTP ' + res.status);
+      }
+      var loc = res.headers.get('Location');
+      return res.text().then(function (sdp) {
+        return pc.setRemoteDescription(
+          new RTCSessionDescription({ type: 'answer', sdp: sdp })
+        ).then(function () { return loc; });
+      });
+    });
+  }
+
+  function twoWaySupported() {
+    // isSecureContext is the one that bites: over plain http the browser
+    // refuses the microphone outright, and says so only in the console.
+    return !!(window.isSecureContext && navigator.mediaDevices &&
+              navigator.mediaDevices.getUserMedia && window.RTCPeerConnection);
+  }
+
+  // nextMode is where this teardown is GOING, and it has to be passed in.
+  // Switching Talk <-> 2-Way tears down before it builds up, and a teardown
+  // that assumed 'play' would restart HLS room audio underneath the session
+  // about to open. Defaults to 'stop', not 'play': a dropped or expired
+  // microphone session should leave you silent rather than start playing the
+  // room at you unasked.
+  function stopTwoWay(reason, nextMode) {
+    if (twoWay.timer) { clearTimeout(twoWay.timer); twoWay.timer = null; }
+    // Best-effort release. If the node already went away there is nothing to
+    // free and the local teardown below is what actually matters.
+    [twoWay.pubRes, twoWay.subRes].forEach(function (r) {
+      if (r) { fetch(r, { method: 'DELETE' }).catch(function () {}); }
+    });
+    twoWay.pubRes = twoWay.subRes = null;
+    [twoWay.pub, twoWay.sub].forEach(function (pc) {
+      if (pc) { try { pc.close(); } catch (e) {} }
+    });
+    twoWay.pub = twoWay.sub = null;
+    if (twoWay.stream) {
+      twoWay.stream.getTracks().forEach(function (t) { t.stop(); });
+      twoWay.stream = null;
+    }
+    var rx = document.getElementById('twoWayRx');
+    if (rx) { rx.srcObject = null; }
+    twoWay.on = false;
+    audioDir = nextMode || 'stop';
+    // Room audio returns to HLS only if that is where we are headed.
+    try {
+      if (audioDir === 'play' && !twoWay.wasSilent) {
+        resolveAudioUrl(startAudio);
+      } else if (audio) {
+        try { audio.pause(); } catch (e) {}
+      }
+    } catch (e) {}
+    applyGainNode();
+    paintAudioModes(reason);
+    paintTransport();
+  }
+
+  function startTwoWay(mode) {
+    if (!twoWaySupported()) { paintAudioModes(); return; }
+    twoWay.busy = true;
+    paintAudioModes('connecting...');
+
+    navigator.mediaDevices.getUserMedia({
+      // This is the whole echo-cancellation story. Not our algorithm -- the
+      // browser's, and it is the same one the videocall apps use.
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      },
+      // No camera in either mode on this node: TALK reverses the audio
+      // direction and nothing else, and 2-WAY is audio here too until the
+      // picture leg is ported.
+      video: false
+    }).then(function (stream) {
+      twoWay.stream = stream;
+
+      twoWay.pub = new RTCPeerConnection();
+      stream.getTracks().forEach(function (t) { twoWay.pub.addTrack(t, stream); });
+
+      // The HLS room audio is held in BOTH modes, for different reasons. In a
+      // call it would be a second, seconds-late copy of a room already
+      // arriving over WebRTC. In TALK it is the echo path itself: local
+      // speakers playing the room with the microphone open sends the room its
+      // own voice back, and nothing is arriving through a PeerConnection for
+      // the canceller to reference.
+      twoWay.wasSilent = !!(audio && audio.paused);
+      try {
+        if (audio) { audio.pause(); }
+        if (hlsAudio) { hlsAudio.destroy(); hlsAudio = null; }
+      } catch (e) {}
+
+      var legs = [whipWhep(twoWayBase() + '/talkback/whip', twoWay.pub,
+                           'publish')];
+
+      if (mode === 'two-way') {
+        twoWay.sub = new RTCPeerConnection();
+        twoWay.sub.addTransceiver('audio', { direction: 'recvonly' });
+        twoWay.sub.ontrack = function (ev) {
+          var rx = document.getElementById('twoWayRx');
+          if (rx) {
+            rx.srcObject = ev.streams[0];
+            rx.muted = audioMuted;   // honour the mute key already set
+            rx.play().catch(function () {});
+          }
+        };
+        // 'roomaudio', not 'cam': cam's audio track is AAC and WebRTC drops it.
+        legs.push(whipWhep(twoWayBase() + '/roomaudio/whep', twoWay.sub,
+                           'receive'));
+      }
+
+      return Promise.all(legs);
+    }).then(function (locs) {
+      twoWay.pubRes = locs[0];
+      twoWay.subRes = locs[1] || null;   // absent in TALK
+      twoWay.on = true;
+      twoWay.busy = false;
+      audioDir = mode;
+      applyGainNode();
+      twoWay.timer = setTimeout(function () {
+        stopTwoWay('ended automatically after ' +
+                   (TWOWAY_MAX_SECONDS / 60) + ' minutes', 'stop');
+      }, TWOWAY_MAX_SECONDS * 1000);
+      paintAudioModes();
+      paintTransport();
+    }).catch(function (err) {
+      twoWay.busy = false;
+      // A refusal here is nearly always one of two things, and naming which
+      // saves somebody opening the wrong file.
+      var msg = (err && err.name === 'NotAllowedError')
+        ? 'microphone permission refused'
+        : (err && err.message) || 'could not connect';
+      stopTwoWay(msg, 'stop');
+    });
+  }
+
+  // Deliberately NOT restored from localStorage, unlike mute and volume.
+  // Reopening a page must never silently reopen a live microphone in
+  // somebody's home; the convenience is not worth the failure mode.
+  window.addEventListener('beforeunload', function () {
+    if (twoWay.on) stopTwoWay();
+  });
+
   // ── The audio mode bank ───────────────────────────────────────────────
   //
   // Ported from amira. One exclusive selection, the same shape as VIDEO's
@@ -3160,9 +3392,17 @@
   //
   // Talk and 2-Way are present but disabled: this node has no talkback
   // backend. When one lands, they wire to the same selection.
-  var audioDir = 'play';   // 'play' | 'stop' | 'to' | 'two-way'
+  /* STOP on every fresh load, never the last mode. Two reasons, and the
+     second is the one that decides it: a page that opens already playing a
+     live room is a privacy default nobody chose, and a mode restored from
+     storage would eventually restore a microphone direction. Play is one
+     key away; a room you did not mean to open is not.
+     Not persisted either, for the same reason mute and volume ARE: those are
+     listening preferences, this is a channel. */
+  var audioDir = 'stop';   // 'play' | 'stop' | 'to' | 'two-way'
 
-  function paintAudioModes() {
+  function paintAudioModes(note) {
+    var micOk = twoWaySupported();
     [['audioPlayBtn', 'play'], ['audioStopBtn', 'stop'],
      ['toRoomButton', 'to'],   ['talkButton', 'two-way']].forEach(function (e) {
       var b = document.getElementById(e[0]);
@@ -3172,7 +3412,19 @@
       b.className = 'btn'
         + (e[1] === 'stop' ? ' guarded' : '')
         + (audioDir === e[1] ? ' pressed' : '');
+      // The two microphone keys are the only ones that can be genuinely
+      // unavailable: getUserMedia needs a secure context. A key that looks
+      // live but cannot open a microphone is worse than one that says so.
+      if (e[1] === 'to' || e[1] === 'two-way') {
+        b.disabled = !micOk || twoWay.busy;
+        b.title = !micOk
+          ? 'Needs https and microphone permission'
+          : (note || (e[1] === 'to'
+              ? 'Talk to the room -- your voice out, room audio held'
+              : 'Two-way audio with the room'));
+      }
     });
+    indicator(document.getElementById('indTalk'), twoWay.on);
     var lab = document.getElementById('levelLab');
     if (lab) lab.textContent = 'LEVEL';
   }
@@ -3185,6 +3437,22 @@
      every time rather than trusting the variable. Both branches are
      idempotent, so re-applying the current mode costs nothing. */
   function setAudioMode(mode) {
+    if (twoWay.busy) return;
+    // Pressing the lit microphone key releases it -- to STOP, not to Play.
+    // These keys open a microphone in somebody's home; letting one go should
+    // close the channel, not swap it for a different open one.
+    if (twoWay.on && mode === audioDir) { stopTwoWay('stopped', 'stop'); return; }
+    if (twoWay.on) {
+      // Never two publishers on one microphone: close the open direction
+      // before opening another, and hand the incoming mode to the teardown so
+      // it neither paints Play nor restarts HLS underneath the new session.
+      stopTwoWay(null, mode);
+      if (mode === 'to' || mode === 'two-way') {
+        setTimeout(function () { startTwoWay(mode); }, 150);
+        return;
+      }
+    }
+    if (mode === 'to' || mode === 'two-way') { startTwoWay(mode); return; }
     audioDir = mode;
     try {
       if (mode === 'play') { audio.play().catch(function () {}); }
@@ -3195,7 +3463,8 @@
   }
 
   (function () {
-    var map = { audioPlayBtn: 'play', audioStopBtn: 'stop' };
+    var map = { audioPlayBtn: 'play', audioStopBtn: 'stop',
+                toRoomButton: 'to',   talkButton: 'two-way' };
     Object.keys(map).forEach(function (id) {
       var b = document.getElementById(id);
       if (b) b.addEventListener('click', function () { setAudioMode(map[id]); });
@@ -3227,7 +3496,11 @@
     if (!levelGain) return;
     var v = 1, sl = document.getElementById('audioVol');
     if (sl) v = Math.max(0, Math.min(1, (parseFloat(sl.value) || 0) / 100));
-    levelGain.gain.value = (audioMuted || audioDir === 'stop') ? 0 : v;
+    // TALK is one-way OUT, so the room is as silent here as it is under
+    // STOP -- for a different reason: not "nothing is open" but "what is open
+    // points the other way", and leaving it audible is the echo path.
+    levelGain.gain.value =
+      (audioMuted || audioDir === 'stop' || audioDir === 'to') ? 0 : v;
   }
 
   function levelAttach(el) {
@@ -3263,7 +3536,9 @@
       }
       v = Math.min(1, peak / 128);
     }
-    if (audioDir === 'stop') v = 0;   // honest flat, like the FPS trace at 0
+    // Honest flat, like the FPS trace at 0. TALK joins STOP here: this lane
+    // measures what THIS viewer hears, and during TALK that is nothing.
+    if (audioDir === 'stop' || audioDir === 'to') v = 0;
     levelHist.push(v); levelHist.shift();
   }
 
