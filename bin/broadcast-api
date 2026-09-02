@@ -830,12 +830,44 @@ def _kill_hard(proc):
         pass
 
 
-# Startup-race watchdog tuning. CONNECT_TIMEOUT is a startup budget, not a
-# steady-state poll: a healthy capture connects in well under a second.
-CONNECT_TIMEOUT  = 5.0
-CONNECT_POLL     = 0.5
+# Startup watchdog. It measures SILENCE, not elapsed time.
+#
+# Asking "has it connected within N seconds?" has no right answer: 5 was too
+# short for a cold AVFoundation open, so the watchdog killed the capture
+# mid-open and relaunched it -- 41 consecutive failures on a 5s cadence, each
+# retry interrupting a device that was still coming up. Raising N only moves
+# the guess, and on OCLP Sonoma (the slow end this fleet must survive) the
+# right N is not knowable in advance.
+#
+# Time with NO sign of life -- process alive, not connected, log not growing --
+# before the capture is declared hung. This is the real watchdog: it measures
+# silence, not elapsed time, so a slow device is waited out and a wedged one is
+# still caught promptly.
+STALL_TIMEOUT         = 12.0
+# Backstop only, for a process that logs cheerfully and never connects. Should
+# never be the thing that fires on healthy hardware.
+CONNECT_CEILING       = 180.0
+CONNECT_POLL          = 0.5
 MAX_FAST_RETRIES = 3
 BACKOFF_SECONDS  = 15.0
+
+
+# Set once the first capture of this process actually publishes. Distinguishes
+# "the device has never come up" from "the device stopped", which want very
+# different patience.
+_ever_connected = False
+
+
+def _ffmpeg_log_size():
+    """Bytes in the capture log, or -1 if it is not there yet.
+
+    Growth is the cheapest available proof that the capture is still doing
+    something. It does not matter what it wrote -- only that it wrote.
+    """
+    try:
+        return os.path.getsize(FFMPEG_LOG)
+    except OSError:
+        return -1
 
 
 def _writer_loop():
@@ -877,14 +909,29 @@ def _writer_loop():
             # back. So confirm the connection actually happened. Only the
             # startup window is polled; once connected we go back to a plain
             # wait() for the rest of the process's life.
-            deadline  = time.monotonic() + CONNECT_TIMEOUT
+            # Cold budget only while nothing has connected yet in this
+            # process: once one capture has published, the device is warm and
+            # a slow open really is a fault.
+            ceiling   = time.monotonic() + CONNECT_CEILING
+            last_sign  = time.monotonic()
+            last_size  = _ffmpeg_log_size()
             connected = False
-            while time.monotonic() < deadline:
+            while time.monotonic() < ceiling:
                 if proc.poll() is not None:
-                    break
+                    break                      # died: a real failure, retry now
                 if _has_rtsp_connection(proc.pid, RTSP_PORT):
                     connected = True
+                    globals()['_ever_connected'] = True
                     break
+                # Anything written to the capture log is a sign of life: the
+                # device is being opened, negotiated, complained about. Reset
+                # the patience window rather than counting down through it.
+                size = _ffmpeg_log_size()
+                if size != last_size:
+                    last_size = size
+                    last_sign = time.monotonic()
+                if time.monotonic() - last_sign > STALL_TIMEOUT:
+                    break                      # alive, quiet, unconnected: hung
                 time.sleep(CONNECT_POLL)
 
             if not connected:
@@ -892,8 +939,8 @@ def _writer_loop():
                 if proc.poll() is None:
                     print(
                         f'broadcast-api: combined AV capture (pid {proc.pid}) '
-                        f'never connected to {RTSP_URL} within '
-                        f'{CONNECT_TIMEOUT:.0f}s -- hung opening the capture '
+                        f'never connected to {RTSP_URL} and went quiet for '
+                        f'{STALL_TIMEOUT:.0f}s -- hung opening the capture '
                         f'device; killing and relaunching '
                         f'[consecutive failures: {failures}]',
                         file=sys.stderr, flush=True,

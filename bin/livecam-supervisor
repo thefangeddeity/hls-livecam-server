@@ -185,8 +185,19 @@ metrics: no
 pprof: no
 playback: no
 rtmp: no
-webrtc: no
 srt: no
+
+# The browser's only route for outgoing audio is WHIP, served from here.
+webrtc: yes
+webrtcAddress: :{cfg.get('WEBRTC_PORT', '8889')}
+webrtcAllowOrigin: '*'
+# Host candidates only. Every node lives inside a WireGuard tailnet and is
+# directly addressable there, so STUN would be asking a public server to
+# discover an address we already know -- a dependency and a round trip for
+# nothing.
+webrtcLocalUDPAddress: :{cfg.get('WEBRTC_UDP_PORT', '8189')}
+webrtcIPsFromInterfaces: yes
+webrtcICEServers2: []
 
 rtsp: yes
 rtspTransports: [tcp]
@@ -202,6 +213,11 @@ hlsSegmentDuration: 1s
 
 paths:
   cam:
+  # The reverse direction: published by a browser, read by this node's speaker
+  # player. Kept off `cam` deliberately -- opposite direction, opposite
+  # lifetime, and merging them would broadcast a viewer's microphone to every
+  # other viewer.
+  talkback:
   all_others:
 """
 
