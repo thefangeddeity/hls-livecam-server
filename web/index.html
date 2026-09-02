@@ -4,7 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HLS Livecam</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
+<!-- The mark the header already shows, claimed as the tab icon. Same file, so
+     it costs nothing extra to fetch, and it is what tells one fleet tab from
+     another when several are open. apple-touch-icon is the Add-to-Home-Screen
+     icon on iOS, which is how this page is opened on a phone. -->
+<link rel="icon" type="image/png" href="/brand.png">
+<link rel="apple-touch-icon" href="/brand.png">
+<!-- Vendored, not from a CDN: a blocking <script src> to the public internet
+     makes rendering this page depend on the CLIENT's egress rather than the
+     node's, and a phone on a restricted or slow path stalls before any of our
+     code runs. /vendor/ and not /hls.min.js because Tailscale Serve routes the
+     /hls prefix to mediamtx on this host. -->
+<script src="/vendor/hls.min.js"></script>
 <script>
   // Light theme (run-8/9 §5). Applied ASAP (before DOMContentLoaded) to avoid a
   // dark->light flash on load; persisted per-browser since there is no server
@@ -1325,8 +1336,8 @@
     <!-- A strip of the same tube the panels use. Version is substituted at
          render time from `git describe`; hovering gives the build stamp and
          commit, which is what distinguishes two installs of the same tag. -->
-    <span class="hdr-vfd" title="mac-v1.8.0-8-ge1b76c9 · dev · e1b76c9">
-      <span class="vlit">mac-v1.8.0-8-ge1b76c9</span><span class="vlit hdr-host" id="hdrHost"></span>
+    <span class="hdr-vfd" title="mac-v1.8.0-15-g9b68592-dirty · dev · 9b68592">
+      <span class="vlit">mac-v1.8.0-15-g9b68592-dirty</span><span class="vlit hdr-host" id="hdrHost"></span>
     </span>
   </div>
   <div class="status-bar">
@@ -1637,7 +1648,10 @@
   </div>
 
 <script>
-  var HLS_URL = 'http://' + window.location.hostname + ':8888/cam/index.m3u8';
+  // Same origin, same scheme, always. See the note on /hls in the header:
+  // an absolute http:// URL here is invisible over HTTPS -- the browser drops
+  // it as mixed content and the viewer looks like a dead camera.
+  var HLS_URL = window.location.origin + '/hls/cam/index.m3u8';
   var video        = document.getElementById('video');
   var liveInd      = document.getElementById('liveIndicator');
   var errorOverlay = document.getElementById('errorOverlay');
@@ -1709,7 +1723,7 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION  = 'mac-v1.8.0-8-ge1b76c9';
+  var BUILD_VERSION  = 'mac-v1.8.0-15-g9b68592-dirty';
   var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
@@ -1720,7 +1734,14 @@
                    + (node ? ' @' + node : '');
   }
   setTabTitle(window.location.hostname);
-  if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
+  // Report the path that will actually be taken, not the one hls.js claims it
+  // could take -- on iOS those disagree, and the readout was reporting HLS.js
+  // on a device that was about to play natively (or fail).
+  if (protoEl) {
+    protoEl.textContent =
+      document.createElement('video').canPlayType('application/vnd.apple.mpegurl')
+        ? 'Native' : (window.Hls && Hls.isSupported() ? 'HLS.js' : 'none');
+  }
 
   // ── BUZZ ──
   var buzzMuted = localStorage.getItem('buzzMuted') === 'true';
@@ -1986,7 +2007,11 @@
   }
 
   function setFeedMode(mode) {
-    if (feedModeKnown && mode === feedMode) return;
+    // Pressing the mode you are already in re-fetches the picture instead of
+    // doing nothing. The early return this replaces is why Show "had to follow
+    // CV": on a cold load the server is already in show, so Show was a no-op
+    // and only a mode CHANGE ever reached reloadStream().
+    if (feedModeKnown && mode === feedMode) { reloadStream(); return; }
     /* Switching the tube off is the whole transition, so the switch-cover
        countdown would just be a second, slower animation on top of it. */
     if (mode === 'hide') {
@@ -2135,14 +2160,23 @@
     retryTimer = setTimeout(initHLS, ms);
   }
 
+  var nativeWatchdog = null;
+  var NATIVE_START_TIMEOUT_MS = 7000;
+
   function initHLS() {
     recovering = false;
+    if (nativeWatchdog) { clearTimeout(nativeWatchdog); nativeWatchdog = null; }
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     if (hls) { hls.destroy(); hls = null; }
     setStatus('CONNECTING');
 
-    if (!Hls.isSupported()) {
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // NATIVE FIRST. Not a fallback -- a preference. Hls.isSupported() is true
+    // on modern iOS (Managed Media Source) while MSE playback still does not
+    // work there, so asking hls.js first is what produced a dead picture on
+    // every iOS browser at once. Anything that can play the Apple MIME type
+    // should play it natively.
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      {
         video.src = HLS_URL;
         video.load();
         video.play().catch(function() {
@@ -2151,10 +2185,32 @@
             video.removeEventListener('click', handler);
           });
         });
-        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); if (!isDark) liftDarkOverlay(); }, { once: true });
-        video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
-      } else { setStatus('UNSUPPORTED'); showError(); }
+        video.addEventListener('loadedmetadata', function() {
+          if (nativeWatchdog) { clearTimeout(nativeWatchdog); nativeWatchdog = null; }
+          setStatus('LIVE', 'live'); if (!isDark) liftDarkOverlay();
+        }, { once: true });
+        video.addEventListener('error', function() {
+          if (nativeWatchdog) { clearTimeout(nativeWatchdog); nativeWatchdog = null; }
+          showError(); scheduleRetry(5000);
+        }, { once: true });
+        // Silence is a failure mode here. iOS fires neither 'loadedmetadata'
+        // nor 'error' when the manifest loads but nothing decodes -- it just
+        // sits. With no error there is no scheduleRetry, so the page waits
+        // forever. Nothing but a timer catches a failure that reports nothing.
+        if (nativeWatchdog) clearTimeout(nativeWatchdog);
+        nativeWatchdog = setTimeout(function () {
+          nativeWatchdog = null;
+          if (video.readyState === 0) { showError(); scheduleRetry(2000); }
+        }, NATIVE_START_TIMEOUT_MS);
+      }
       return;
+    }
+
+    // window.Hls, not bare Hls: if the script failed to load this is a
+    // ReferenceError that takes the whole handler down, and the picture is
+    // already gone -- no reason to lose the error message too.
+    if (!window.Hls || !Hls.isSupported()) {
+      setStatus('UNSUPPORTED'); showError(); return;
     }
 
     hls = new Hls({
@@ -2690,9 +2746,11 @@
  * fall back to the master URL, which is wasteful but still produces sound.
  */
 (function () {
-  var MASTER_URL =
-    window.location.protocol + '//' +
-    window.location.hostname + ':8888/cam/index.m3u8';
+  // Same-origin for the same reason as HLS_URL above. Following the page's
+  // protocol was not enough on its own: mediamtx serves :8888 over plain
+  // HTTP only, so an https://host:8888/ URL fails at the socket rather
+  // than at the mixed-content check -- a different error, the same silence.
+  var MASTER_URL = window.location.origin + '/hls/cam/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
@@ -3027,6 +3085,16 @@
   }
 
   function startAudio(url) {
+    // Native first, same reasoning as the picture above.
+    if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+      audio.src = url;
+      audio.addEventListener('loadedmetadata', function () {
+        stage(hlsLed, 'ok');
+        setAudioState('Room audio');
+      }, { once: true });
+      return;
+    }
+
     if (window.Hls && Hls.isSupported()) {
       hlsAudio = new Hls({ lowLatencyMode: true, enableWorker: true });
       hlsAudio.loadSource(url);
@@ -3048,16 +3116,6 @@
           setAudioState('Audio unavailable');
         }
       });
-      return;
-    }
-
-    // Native HLS, primarily Safari and iOS.
-    if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-      audio.src = url;
-      audio.addEventListener('loadedmetadata', function () {
-        stage(hlsLed, 'ok');
-        setAudioState('Room audio');
-      }, { once: true });
       return;
     }
 

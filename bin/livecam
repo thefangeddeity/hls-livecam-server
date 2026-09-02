@@ -158,7 +158,12 @@ EOF
 # ── service control (background + pidfiles) ──────────────────────
 start_mediamtx() {
   if pid_alive "$MMTX_PID"; then echo "  mediamtx already running"; return; fi
-  [ -f "$MEDIAMTX_YML" ] || gen_mediamtx_yml
+  # Unconditional on purpose. gen_mediamtx_yml compares content and returns
+  # without writing when nothing changed, so this cannot cause the reload storm
+  # -- whereas write-if-missing meant a config change never reached a node that
+  # already had the file, which is exactly how WebRTC stayed off after being
+  # switched on.
+  gen_mediamtx_yml
   nohup "$MEDIAMTX_BIN" "$MEDIAMTX_YML" >>"$LOG_DIR/mediamtx.log" 2>&1 &
   echo $! > "$MMTX_PID"
   echo -e "  ${G}mediamtx started${N} (pid $(cat "$MMTX_PID"))"
@@ -274,16 +279,27 @@ start_supervisor() {
 # the supervisor from immediately undoing a manual stop.
 cmd_start() {
   load_ports
+  # macOS grants the camera per *session*, not per user. A process in the
+  # Background session -- ssh, cron, a plain LaunchDaemon -- is refused, and
+  # avfoundation answers that refusal by hanging on the open forever instead
+  # of returning an error, which is why this looked like a capture bug for so
+  # long. When we are not in Aqua and the LaunchAgent is installed, hand the
+  # start to launchd so the stack comes up inside the GUI session; `livecam
+  # start` over ssh then does the right thing instead of wedging.
+  if [ "$(launchctl managername 2>/dev/null)" != "Aqua" ] && [ -f "$AGENT_PLIST" ]; then
+    echo -e "${B}Not a GUI session -- handing start to the LaunchAgent...${N}"
+    launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null || true
+    launchctl kickstart -k "gui/$(id -u)/${AGENT_LABEL}" 2>/dev/null || true
+    sleep 3
+    echo ""
+    cmd_urls
+    return 0
+  fi
   echo -e "${B}Starting hls-livecam...${N}"
   set_flag True
-  start_supervisor
-  # caffeinate ties its assertion to broadcast-api's pid, so wait for the
-  # supervisor to actually bring it up before reading the pidfile.
-  local i=0
-  while [ $i -lt 20 ]; do
-    pid_alive "$API_PID" && break
-    sleep 0.5; i=$((i+1))
-  done
+  start_mediamtx
+  sleep 1
+  start_api
   start_caffeinate
   echo ""
   cmd_urls
@@ -388,6 +404,7 @@ write_agent_plist() {
         <string>start</string>
     </array>
     <key>RunAtLoad</key><true/>
+    <key>AbandonProcessGroup</key><true/>
     <key>StandardOutPath</key><string>${LOG_DIR}/autostart.log</string>
     <key>StandardErrorPath</key><string>${LOG_DIR}/autostart.log</string>
 </dict>
@@ -417,6 +434,19 @@ STARTER_APP="$HOME/Applications/HLS Livecam Startup.app"
 login_item_registered() {
   osascript -e 'tell application "System Events" to get name of every login item' \
     2>/dev/null | grep -q "HLS Livecam Startup"
+}
+
+# The Login Item shim predates the LaunchAgent and exec'd the supervisor
+# directly. Both mechanisms fire at login, so leaving this registered means a
+# reboot races two stacks for one camera -- and avfoundation resolves that race
+# by hanging. Retiring it is part of enabling the agent, not a manual step
+# somebody has to remember.
+retire_login_item() {
+  login_item_registered || return 0
+  osascript -e 'tell application "System Events" to delete login item "HLS Livecam Startup"' \
+    >/dev/null 2>&1 || true
+  rm -rf "$STARTER_APP"
+  echo -e "  ${Y}retired the old Login Item starter${N}"
 }
 
 write_starter_app() {
@@ -481,21 +511,46 @@ register_login_item() {
   return 1
 }
 
+# A LaunchAgent bootstrapped into gui/<uid> -- the Aqua session domain -- so
+# everything it starts is inside the GUI session and macOS will hand over the
+# camera. This is what amira does, and why her camera survives a reboot.
+#
+# It replaces a login item registered via osascript/System Events: that needed
+# Automation consent, which an operator can dismiss, after which registration
+# fails silently and the box needs SSH surgery after every reboot. It also
+# produced an app launch rather than a session-domain agent, which is the part
+# that actually mattered for the camera.
 cmd_enable() {
-  local rc=0
-  register_login_item || rc=1
+  retire_login_item
+  write_agent_plist
+  launchctl bootout "gui/$(id -u)/${AGENT_LABEL}" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null || \
+    launchctl load "$AGENT_PLIST" 2>/dev/null || true
+  if launchctl print "gui/$(id -u)/${AGENT_LABEL}" >/dev/null 2>&1; then
+    echo -e "  ${G}login agent enabled${N} (Aqua session; starts at login + now)"
+  else
+    echo -e "  ${R}login agent NOT bootstrapped${N} -- camera will be refused" >&2
+  fi
   cmd_start
-  return $rc
 }
 
 cmd_disable() {
+  launchctl bootout "gui/$(id -u)/${AGENT_LABEL}" 2>/dev/null || \
+    launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+  rm -f "$AGENT_PLIST"
+  echo -e "  ${Y}login agent disabled${N}"
   cmd_stop
-  echo -e "  ${Y}streaming disabled${N} (login item left registered; flag persists)"
 }
 
 cmd_enabled() {
   echo "streaming:  $(flag_state)"
-  login_item_registered && echo "autostart:  registered" || echo "autostart:  not registered"
+  if launchctl print "gui/$(id -u)/${AGENT_LABEL}" >/dev/null 2>&1; then
+    echo "autostart:  agent bootstrapped (Aqua)"
+  elif [ -f "$AGENT_PLIST" ]; then
+    echo "autostart:  plist present but NOT bootstrapped"
+  else
+    echo "autostart:  not registered"
+  fi
 }
 
 cmd_urls() {
