@@ -2950,6 +2950,15 @@
     // the analyser and flatten the trace for a reason unrelated to the room.
     audio.muted = levelGain ? false : muted;
     applyGainNode();
+    /* Unmuting is a user gesture, and the only moment a refused autoplay can
+       be retried. This is not the old "unmute implies play" behaviour coming
+       back: the transport is already in 'play' by then, the element simply
+       never got permission to start. A stopped transport stays stopped. */
+    if (!muted && audio.paused && audioDir === 'play') {
+      var pr = audio.play();
+      if (pr && pr.catch) pr.catch(function () {});
+      paintTransport();
+    }
     try {
       localStorage.setItem('hls-livecam-mute-audio', muted ? '1' : '0');
     } catch (e) { /* private mode */ }
@@ -3084,6 +3093,21 @@
       .catch(function () { cb(MASTER_URL); });
   }
 
+  /* The transport starts itself once the stream is ready. The panel opens
+     muted (gain 0), and a silent start is exactly what autoplay policy
+     allows -- so "ready, not started" bought nothing and cost everything:
+     STOP sat lit beside a PLAY key that could not clear it, and MUTE, the one
+     control that should produce sound, was acting on a paused element.
+     If the browser refuses anyway, the next unmute is a user gesture and
+     retries it. Only 'play' auto-starts, so a viewer who chose STOP keeps
+     that choice across a reconnect. */
+  function beginIfPlaying() {
+    if (audioDir !== 'play') return;
+    var pr = audio.play();
+    if (pr && pr.catch) pr.catch(function () { setAudioState('Tap to enable'); });
+    paintTransport();
+  }
+
   function startAudio(url) {
     // Native first, same reasoning as the picture above.
     if (audio.canPlayType('application/vnd.apple.mpegurl')) {
@@ -3091,6 +3115,7 @@
       audio.addEventListener('loadedmetadata', function () {
         stage(hlsLed, 'ok');
         setAudioState('Room audio');
+        beginIfPlaying();
       }, { once: true });
       return;
     }
@@ -3108,6 +3133,7 @@
       hlsAudio.on(Hls.Events.MANIFEST_PARSED, function () {
         stage(hlsLed, 'ok');
         setAudioState('Room audio');
+        beginIfPlaying();
       });
 
       hlsAudio.on(Hls.Events.ERROR, function (_e, data) {
@@ -3151,8 +3177,14 @@
     if (lab) lab.textContent = 'LEVEL';
   }
 
+  /* No early return on an unchanged mode. `audioDir` starts at 'play' while
+     the element is still paused -- nothing has started it yet -- so guarding
+     on `mode === audioDir` made the PLAY key dead on a fresh load, and the
+     panel sat there claiming a transport state it had never actually applied.
+     Same bug the feed row had, same fix: reconcile the element to the mode
+     every time rather than trusting the variable. Both branches are
+     idempotent, so re-applying the current mode costs nothing. */
   function setAudioMode(mode) {
-    if (mode === audioDir) return;
     audioDir = mode;
     try {
       if (mode === 'play') { audio.play().catch(function () {}); }
