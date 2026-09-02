@@ -13,7 +13,7 @@ macOS differences from the Linux original:
     files (broadcast.txt, buzz.txt, dark.png, cams.json) — replacing
     nginx. Everything is on WEB_PORT; no root, no port-80 conflict.
 """
-import os, subprocess, time, sys, threading, io, signal, socket, re, shutil
+import os, subprocess, time, sys, threading, io, signal, socket, re, shutil, select
 import numpy as np
 from PIL import Image
 from flask import Flask, request, abort, send_from_directory, Response
@@ -471,14 +471,48 @@ def _read_exact(src, n):
     return bytes(buf)
 
 
-def _cv_pump(src, dst, proc):
-    """Read raw frames from A, process, write to B. Owns neither process."""
+def _read_exact_deadline(src, n, timeout):
+    """_read_exact with a wall-clock bound. Returns None on EOF or timeout.
+
+    select() on the pipe rather than a read timeout: the camera leg can be
+    alive, holding the device, and simply never delivering, which a blocking
+    read cannot distinguish from slow.
+    """
+    buf = bytearray()
+    end = time.monotonic() + timeout
+    fd = src.fileno()
+    while len(buf) < n:
+        left = end - time.monotonic()
+        if left <= 0:
+            return None                # timed out, caller must clean up
+        r, _, _ = select.select([fd], [], [], left)
+        if not r:
+            continue
+        chunk = src.read(n - len(buf))
+        if not chunk:
+            return None                # real EOF
+        buf += chunk
+    return bytes(buf)
+
+
+def _cv_pump(src, dst, proc, first_raw=None):
+    """Read raw frames from A, process, write to B. Owns neither process.
+
+    first_raw is the frame the caller already pulled off A to prove the
+    camera session was open before it opened the microphone. It is a real
+    frame of the room, not a probe, so it goes through the pipeline like
+    any other rather than being thrown away.
+    """
     nbytes = FRAME_W * FRAME_H * 3
     dropped = 0
+    pending = first_raw
     while not _cv_stop.is_set():
-        raw = _read_exact(src, nbytes)
-        if raw is None:
-            break                      # A exited or was killed
+        if pending is not None:
+            raw, pending = pending, None
+        else:
+            raw = _read_exact(src, nbytes)
+            if raw is None:
+                break                  # A exited or was killed
         try:
             frame = np.frombuffer(raw, np.uint8).reshape(FRAME_H, FRAME_W, 3)
             proc.set_blur(_cv_blur_mode)  # re-read every frame, same as feed mode
@@ -550,14 +584,39 @@ def _start_cv_publisher(mode='cv'):
 
     # A and B each open their own AVFoundation session (A: camera, B: mic --
     # split so the video leg can be piped through CVProcessor while audio
-    # passes straight to the encoder). Spawning both at once intermittently
-    # left B's mic-only session failing fast with "Input/output error"
-    # while A's camera session was still completing its own AVFoundation
-    # startup -- observed live, not everywhere, which is the signature of
-    # two concurrent AVCaptureSession opens racing rather than a hard
-    # incompatibility. Giving A a head start to finish opening the camera
-    # before B so much as asks for the microphone removes the overlap.
-    time.sleep(1.0)
+    # passes straight to the encoder). Opening both at once leaves B's
+    # mic-only session failing fast with "audio format is not supported" /
+    # "Input/output error" while A's camera session is still completing its
+    # AVFoundation startup -- two concurrent AVCaptureSession opens racing.
+    # B is the leg holding RTSP, so when B dies the whole publisher dies and
+    # the viewer shows static with a camera that is working fine.
+    #
+    # This used to be `time.sleep(1.0)`. A sleep is a bet on how long a
+    # capture session takes to open on a machine whose load we do not
+    # control, and the bet was calibrated against one framerate but taken at
+    # two: night asks for NIGHT_FPS (5) and won it, cv asks for FRAMERATE
+    # (15) under a YOLO pass and lost it every time -- which is exactly the
+    # shape the bug had, night working and cv publishing nothing.
+    #
+    # A's FIRST DELIVERED FRAME is not a bet. A frame came out of the
+    # session, so the session is open; there is nothing left to race.
+    # BOUNDED. An unbounded wait here is not a gate, it is a second way to
+    # hang: when the camera is not free -- the very case this exists to catch
+    # -- A stays alive and silent, this function never returns, _cv_procs is
+    # never assigned, and no teardown path can find A to kill it. That leaked
+    # two camera legs at once on ariana within minutes of the gate landing.
+    first_raw = _read_exact_deadline(a.stdout, FRAME_W * FRAME_H * 3,
+                                     float(_cfg.get('CV_FIRST_FRAME_TIMEOUT_S', 8)))
+    if first_raw is None:
+        # No frame in time: either A died, or something else still holds the
+        # camera. Either way B must not be spawned -- it would only add a
+        # second failure to explain -- and A must not be left running.
+        print('broadcast-api: CV capture: camera leg produced no frame in '
+              'time; not opening the microphone', file=sys.stderr, flush=True)
+        try: _kill_hard(a)
+        except Exception: pass
+        _cv_proc_instance = None
+        return None
 
     b = subprocess.Popen([
         FFMPEG, '-hide_banner', '-loglevel', 'error',
@@ -577,7 +636,8 @@ def _start_cv_publisher(mode='cv'):
        stderr=_open_ffmpeg_log(), bufsize=0)
 
     _cv_stop.clear()
-    _cv_thread = threading.Thread(target=_cv_pump, args=(a.stdout, b.stdin, proc),
+    _cv_thread = threading.Thread(target=_cv_pump,
+                                  args=(a.stdout, b.stdin, proc, first_raw),
                                   daemon=True, name='cv-pump')
     _cv_thread.start()
     _cv_procs[:] = [a, b]
