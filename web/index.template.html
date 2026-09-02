@@ -2007,7 +2007,11 @@
   }
 
   function setFeedMode(mode) {
-    if (feedModeKnown && mode === feedMode) return;
+    // Pressing the mode you are already in re-fetches the picture instead of
+    // doing nothing. The early return this replaces is why Show "had to follow
+    // CV": on a cold load the server is already in show, so Show was a no-op
+    // and only a mode CHANGE ever reached reloadStream().
+    if (feedModeKnown && mode === feedMode) { reloadStream(); return; }
     /* Switching the tube off is the whole transition, so the switch-cover
        countdown would just be a second, slower animation on top of it. */
     if (mode === 'hide') {
@@ -2156,8 +2160,12 @@
     retryTimer = setTimeout(initHLS, ms);
   }
 
+  var nativeWatchdog = null;
+  var NATIVE_START_TIMEOUT_MS = 7000;
+
   function initHLS() {
     recovering = false;
+    if (nativeWatchdog) { clearTimeout(nativeWatchdog); nativeWatchdog = null; }
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     if (hls) { hls.destroy(); hls = null; }
     setStatus('CONNECTING');
@@ -2177,8 +2185,23 @@
             video.removeEventListener('click', handler);
           });
         });
-        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); if (!isDark) liftDarkOverlay(); }, { once: true });
-        video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
+        video.addEventListener('loadedmetadata', function() {
+          if (nativeWatchdog) { clearTimeout(nativeWatchdog); nativeWatchdog = null; }
+          setStatus('LIVE', 'live'); if (!isDark) liftDarkOverlay();
+        }, { once: true });
+        video.addEventListener('error', function() {
+          if (nativeWatchdog) { clearTimeout(nativeWatchdog); nativeWatchdog = null; }
+          showError(); scheduleRetry(5000);
+        }, { once: true });
+        // Silence is a failure mode here. iOS fires neither 'loadedmetadata'
+        // nor 'error' when the manifest loads but nothing decodes -- it just
+        // sits. With no error there is no scheduleRetry, so the page waits
+        // forever. Nothing but a timer catches a failure that reports nothing.
+        if (nativeWatchdog) clearTimeout(nativeWatchdog);
+        nativeWatchdog = setTimeout(function () {
+          nativeWatchdog = null;
+          if (video.readyState === 0) { showError(); scheduleRetry(2000); }
+        }, NATIVE_START_TIMEOUT_MS);
       }
       return;
     }
