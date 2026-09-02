@@ -386,11 +386,11 @@ def audio_filter_args():
     filter chain is two places for the gain to drift apart, and the one
     that drifts is always the one nobody is listening to.
     """
-    audio_filter = []
+    chain = []
     raw_filter = str(_cfg.get('AUDIO_FILTER', '')).strip()
     gain_db_raw = str(_cfg.get('AUDIO_GAIN_DB', '')).strip()
     if raw_filter:
-        audio_filter = ['-af', raw_filter]
+        chain.append(raw_filter)
     elif gain_db_raw:
         try:
             gain_db = float(gain_db_raw)
@@ -399,9 +399,24 @@ def audio_filter_args():
                   f'{gain_db_raw!r}', file=sys.stderr, flush=True)
         else:
             if gain_db:
-                audio_filter = ['-af',
-                                f'volume={gain_db}dB,alimiter=limit=0.95']
-    return audio_filter
+                chain.append(f'volume={gain_db}dB,alimiter=limit=0.95')
+    # The 48k/stereo guarantee lives HERE, not in -ar/-ac, and the difference
+    # is not cosmetic: ffmpeg 8.1.2 refuses to open an avfoundation mic at all
+    # when -ar or -ac appears anywhere in the command -- even as an output
+    # option after -c:a, which is where it sat. Measured on ariana:
+    #
+    #   -f avfoundation -i ":Built-in Microphone" -t 1 -f null -    -> opens,
+    #                                                    48000 Hz, stereo
+    #   ... the same command plus -ar 48000 -ac 2                   -> "audio
+    #                     format is not supported", input I/O error
+    #
+    # The publisher then died on input #1 on every attempt and took the
+    # picture down with it, because one ffmpeg carries both -- which is why
+    # this read as "Show does not trigger" rather than as an audio fault.
+    # A filter is applied after the demuxer has already opened, so it can
+    # state the same requirement without being able to cause this.
+    chain.append('aformat=sample_rates=48000:channel_layouts=stereo')
+    return ['-af', ','.join(chain)]
 
 
 # ── CV mode ──────────────────────────────────────────────────────
@@ -555,7 +570,7 @@ def _start_cv_publisher(mode='cv'):
         '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-vf', 'format=yuv420p', '-profile:v', 'high', '-level', '4.0',
         '-b:v', '1500k', '-g', str(fr),
-        '-c:a', 'aac', '-b:a', '96k', '-ar', '48000', '-ac', '2',
+        '-c:a', 'aac', '-b:a', '96k',
         *audio_filter_args(),
         '-rtsp_transport', 'tcp', '-f', 'rtsp', rtsp_url,
     ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -676,8 +691,6 @@ def _start_combined_av_publisher(mode='show'):
 
         '-c:a', 'aac',
         '-b:a', '96k',
-        '-ar', '48000',
-        '-ac', '2',
         *(audio_filter if mode != 'hide' else []),
 
         '-rtsp_transport', 'tcp',
