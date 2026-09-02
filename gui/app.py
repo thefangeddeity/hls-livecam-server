@@ -247,12 +247,14 @@ class FeedPanel(Panel):
         self.b_show = _compact(QPushButton("Show"))
         self.b_blur = _compact(QPushButton("Blur"))
         self.b_hide = _compact(QPushButton("Hide"))
+        self.b_hide.setObjectName("Guarded")
         for b, m in ((self.b_show, "show"), (self.b_blur, "cloak"), (self.b_hide, "hide")):
             b.clicked.connect(lambda _=False, mode=m: self._set_mode(mode))
             strip.addWidget(b)
 
         # "&&" — Qt eats a single & as a mnemonic marker and would render "BW".
-        self.bw = _compact(QCheckBox("B&&W"))
+        self.bw = _compact(QPushButton("B&&W"))
+        self.bw.setCheckable(True)   # a latching key, like Blur beside it
         self.bw.clicked.connect(self._toggle_bw)
         strip.addSpacing(GUTTER)
         strip.addWidget(self.bw)

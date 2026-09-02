@@ -299,6 +299,17 @@ QPushButton#Primary:disabled {{
     background: {PANEL}; border-color: {BORDER}; color: {TEXT_MUTED};
 }}
 
+/* Red withdraws a signal. Hide takes the picture away; Stop, on the surfaces
+   that have it, takes the audio. Deliberately the heaviest treatment on the
+   panel -- these are the keys that make something stop being available. */
+QPushButton#Guarded {{
+    background: #87251c; border-color: #551410; color: #ffe9e4; font-weight: 700;
+}}
+QPushButton#Guarded:hover {{ background: #a63a2d; border-color: #6f1a13; }}
+QPushButton#Guarded:checked, QPushButton#Guarded:pressed {{
+    background: #5f150f; border-color: #4a110d; color: #ffffff;
+}}
+
 QPushButton#Buzz {{
     background: {BUZZ}; border-color: {BUZZ}; color: {BUZZ_INK}; font-weight: 700;
 }}
