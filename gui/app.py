@@ -266,6 +266,14 @@ class FeedPanel(Panel):
         strip.addStretch(1)
         strip.addWidget(Divider(vertical=True))
         strip.addSpacing(GUTTER)
+        # Call and Buzz sit together: the same gesture at two volumes. Buzz
+        # shakes a viewer already open, Call summons someone who is not.
+        # Disabled until a call backend exists -- named, not faked.
+        self.b_call = _compact(QPushButton("Call"))
+        self.b_call.setObjectName("Call")
+        self.b_call.setEnabled(False)
+        self.b_call.setToolTip("Call a viewer — not wired yet")
+        strip.addWidget(self.b_call)
         self.b_buzz = _compact(QPushButton("Buzz"))
         self.b_buzz.setObjectName("Buzz")
         self.b_buzz.clicked.connect(self._buzz)

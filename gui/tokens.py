@@ -37,7 +37,16 @@ WARN     = "#ff9f0a"   # degraded / reconnecting
 HEALTHY  = "#30d158"   # service up / OK
 OFFLINE  = "#6e6e73"   # stopped / no-signal / disabled
 
-BUZZ = "#ff3b30"       # §5 danger/buzz button fill
+# Amber, not red -- the grammar the web panel settled on and this surface
+# must not contradict, because it is the same operator looking at the same
+# node: RED withdraws a signal (Hide, Stop), AMBER interrupts everyone (Buzz),
+# GREEN opens a channel (Call). Buzz interrupts; it does not withdraw.
+#
+# Contrast measured, not eyeballed: white on the old red was 3.15:1, under the
+# 4.5:1 floor, and white on amber would be worse at 2.06:1. Near-black on amber
+# is 9.08:1. Bright faces take dark legends.
+BUZZ = "#ff9f0a"       # §5 buzz button fill -- interrupts, so amber
+BUZZ_INK = "#1a1102"   # 9.08:1 on the above
 
 # Dimmed LIVE, for the pill's pulse trough (§2: "red, pulsing")
 LIVE_DIM = "#7a2019"
@@ -164,7 +173,7 @@ _DARK = dict(
     BG=BG, PANEL=PANEL, PANEL_2=PANEL_2, BORDER=BORDER, BORDER_STRONG=BORDER_STRONG,
     TEXT=TEXT, TEXT_DIM=TEXT_DIM, TEXT_MUTED=TEXT_MUTED,
     ACCENT=ACCENT, ACCENT_HOVER=ACCENT_HOVER,
-    LIVE=LIVE, CRITICAL=CRITICAL, WARN=WARN, HEALTHY=HEALTHY, OFFLINE=OFFLINE,
+    BUZZ_INK=BUZZ_INK, LIVE=LIVE, CRITICAL=CRITICAL, WARN=WARN, HEALTHY=HEALTHY, OFFLINE=OFFLINE,
     BUZZ=BUZZ, LIVE_DIM=LIVE_DIM,
 )
 _LIGHT = dict(
@@ -291,9 +300,20 @@ QPushButton#Primary:disabled {{
 }}
 
 QPushButton#Buzz {{
-    background: {BUZZ}; border-color: {BUZZ}; color: #ffffff; font-weight: 700;
+    background: {BUZZ}; border-color: {BUZZ}; color: {BUZZ_INK}; font-weight: 700;
 }}
-QPushButton#Buzz:hover {{ background: {LIVE}; border-color: {LIVE}; }}
+QPushButton#Buzz:hover {{ background: #ffb340; border-color: #ffb340; }}
+
+/* Green opens a channel. Dark face with a light legend -- the same
+   construction Hide's red uses, measured 7.48:1. Disabled until a call
+   backend exists: present as a name, not faked as a working control. */
+QPushButton#Call {{
+    background: #1f5c2e; border-color: #123f1d; color: #eafcef; font-weight: 700;
+}}
+QPushButton#Call:hover {{ background: #2d7a3f; border-color: #1f5c2e; }}
+QPushButton#Call:disabled {{
+    background: {PANEL}; border-color: {BORDER}; color: {TEXT_MUTED};
+}}
 
 /* §5 Input / textarea (.msg-box) */
 QPlainTextEdit#MsgBox {{
