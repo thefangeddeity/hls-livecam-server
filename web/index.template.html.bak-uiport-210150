@@ -611,7 +611,6 @@
      duplicated, because two copies drift. */
   :root {
     --emboss:        #8a8a90;
-    --key-legend:  #bdbdc4;   /* 7.88:1 on the modem face -- WCAG AAA */
     --emboss-strong: #a2a2a8;
     --emboss-dim:    #6a6a70;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -627,7 +626,6 @@
   }
   html[data-theme="light"] {
     --emboss:        #5c5c63;
-    --key-legend:  #2b3636;   /* 11.4:1 on the light face */
     --emboss-strong: #3a3a40;
     --emboss-dim:    #85858c;
   }
@@ -875,32 +873,6 @@
     background: linear-gradient(180deg,#8a2318 0%,#a02f22 100%);
     box-shadow: inset 0 2px 4px rgba(0,0,0,.35);
   }
-  /* Amber interrupts everyone. Bright face, near-black legend: measured
-     9.08:1, where white would be 2.06:1 -- bright faces take dark legends. */
-  .panel .modem.alerting {
-    border-color: #b06d05;
-    background: linear-gradient(180deg,#ffb340 0%,#ff9f0a 54%,#ef9008 100%);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 1px 1px rgba(0,0,0,.35);
-  }
-  .panel .modem.alerting .cap2 { color: #1a1102; }
-  .panel .modem.alerting:active, .panel .modem.alerting.pressed {
-    border-color: #9a5f04;
-    background: linear-gradient(180deg,#ef9008 0%,#ffa81f 100%);
-    box-shadow: inset 0 2px 4px rgba(0,0,0,.45);
-  }
-  /* Green opens a channel. Dark face, light legend -- Hide's construction,
-     measured 7.48:1 against Hide's own 7.80:1. */
-  .panel .modem.calling {
-    border-color: #123f1d;
-    background: linear-gradient(180deg,#2d7a3f 0%,#1f5c2e 54%,#174a24 100%);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 1px 1px rgba(0,0,0,.35);
-  }
-  .panel .modem.calling .cap2 { color: #eafcef; }
-  .panel .modem.calling:active, .panel .modem.calling.pressed {
-    border-color: #0e3316;
-    background: linear-gradient(180deg,#174a24 0%,#226631 100%);
-    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
-  }
   .panel .btn .badge {
     display: block; font-family: var(--mono); font-size: 7px;
     letter-spacing: .1em; color: var(--phos-label); margin-top: 2px;
@@ -1048,7 +1020,7 @@
      touching this layout again. */
   .modem-group { display: flex; align-items: center; gap: 6px; margin-left: auto; }
   .modem {
-    width: 62px; height: 32px; padding: 0 7px; border-radius: 7px;
+    min-width: 54px; height: 32px; padding: 0 7px; border-radius: 7px;
     display: flex; align-items: center; justify-content: center; gap: 6px;
     flex: 0 0 auto; cursor: pointer; font-family: inherit;
     background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
@@ -1057,7 +1029,7 @@
   .modem:disabled { cursor: not-allowed; opacity: .55; }
   .modem:active { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
   .modem.pressed { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); border-color: #3c3c44; }
-  .modem .cap2 { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; color: var(--key-legend); }
+  .modem .cap2 { font-family: var(--mono); font-size: 7.5px; letter-spacing: .1em; color: var(--emboss); }
   .modem:disabled .cap2 { color: var(--emboss-dim); }
   .modem.on .bulb {
     background: var(--led-on);
@@ -1322,8 +1294,8 @@
     <!-- A strip of the same tube the panels use. Version is substituted at
          render time from `git describe`; hovering gives the build stamp and
          commit, which is what distinguishes two installs of the same tag. -->
-    <span class="hdr-vfd" title="mac-v1.8.0-1-g64e69e7-dirty · dev · 64e69e7">
-      <span class="vlit">mac-v1.8.0-1-g64e69e7-dirty</span><span class="vlit hdr-host" id="hdrHost"></span>
+    <span class="hdr-vfd" title="@BUILD_LABEL@">
+      <span class="vlit">@VERSION@</span><span class="vlit hdr-host" id="hdrHost"></span>
     </span>
   </div>
   <div class="status-bar">
@@ -1487,81 +1459,55 @@
         </div>
 
         <div class="divider"></div>
-        <!-- Four keys, the same shape as VIDEO's Show/Hide/CV/Night, because
-             they are the same KIND of thing: one exclusive selection of what
-             the audio path is doing. Ported from amira.
+        <div class="sub-title">Listen</div>
 
-             Stop is a MODE meaning "neither direction is open", NOT a
-             transport paired against Talk. That is what leaves MUTE free to
-             be a modifier -- it silences locally without changing which
-             direction is open, exactly as BLUR modifies a video mode without
-             being one. The old Listen/Send split drew the line in a different
-             place and made MUTE and STOP look like rivals; they were never the
-             same category.
-
-             Talk and 2-Way are DISABLED here: this node has no talkback
-             backend yet. Present as names, not faked as working controls --
-             the precedent FOVEAL already sets. -->
-        <div class="btnrow">
-          <button type="button" class="btn" id="audioPlayBtn"
-                  title="Room audio in">Play</button>
-          <button type="button" class="btn guarded" id="audioStopBtn"
-                  title="Neither direction open">Stop</button>
-          <button type="button" class="btn" id="toRoomButton" disabled
-                  title="Talk to the room -- no talkback backend on this node yet">Talk</button>
-          <button type="button" class="btn" id="talkButton" disabled
-                  title="Two-way audio -- no talkback backend on this node yet">2-Way</button>
-        </div>
-
-        <!-- The counterpart to VIDEO's FPS trace: what is actually being
-             heard, last 60s, drawn from the audio itself via WebAudio rather
-             than from a bitrate -- bytes moving says the pipe is up, not that
-             anything is audible. Log-scaled, because hearing is: speech near
-             -30 dBFS is 3% of a linear height and reads as silence. -->
-        <div class="modemrow">
-          <div class="fpsglass" id="levelGlass"
-               title="Audio level actually reaching this viewer, last 60 seconds">
-            <canvas id="levelGraph" width="240" height="60"></canvas>
-            <span class="glab glab-l" id="levelLab">LEVEL</span>
-            <span class="glab glab-r">60s</span>
-          </div>
-        </div>
-
-        <!-- MUTE sits at the slider's ZERO end: it says the same thing the
-             slider says at its left stop, so the right end read as a separate
-             idea placed beside volume rather than the bottom of it. -->
+        <!-- One row, read left to right in the order you reach for it:
+             start it, set the level, silence it. The LISTEN heading already
+             says what the row is, so the old "Sound in room" caption was
+             spending the panel's scarcest axis on a restatement. -->
         <div class="listen" id="roomAudio">
-          <button type="button" class="modem mute-key" id="muteAudio"
-                  aria-pressed="true" aria-label="Mute room audio"
-                  title="Silence what you hear; the connection stays up">
-            <span class="bulb"></span><span class="cap2">MUTE</span>
+          <button type="button" class="transport" id="audioToggle"
+                  aria-label="Play or pause room audio">
+            <span class="bulb"></span>
+            <svg id="audioIcon" width="11" height="12" viewBox="0 0 12 13" aria-hidden="true">
+              <rect x="1" y="1" width="3.4" height="11" rx="1"></rect>
+              <rect x="7.6" y="1" width="3.4" height="11" rx="1"></rect>
+            </svg>
           </button>
 
           <input type="range" id="audioVol" class="vol"
                  min="0" max="100" step="1" value="100"
                  aria-label="Room audio volume">
 
-          <!-- hls.js attaches here; the keys above drive it. -->
+          <button type="button" class="mute-key" id="muteAudio"
+                  aria-pressed="true" aria-label="Mute room audio">
+            <span class="bulb"></span><span class="eng">MUTE</span>
+          </button>
+
+          <!-- hls.js attaches here; the keys either side drive it. -->
           <audio id="roomAudioPlayer" preload="none" playsinline hidden></audio>
         </div>
 
         <div class="divider"></div>
+        <!-- Listen is what comes in; these two are what goes out. TALK and
+             Buzz are the same class of action -- reaching into the room --
+             so they are built as one set rather than separated by a rule. -->
+        <div class="sub-title">Send</div>
 
-        <!-- What you ADJUST above, what you DO below. CALL and BUZZ are the
-             same gesture at two volumes: BUZZ shakes a viewer already open,
-             CALL summons someone who is not. Neither is a mode, so neither
-             takes a lamp. -->
-        <div class="modemrow">
-          <div class="modem-group">
-            <button class="modem calling" id="callBtn" disabled
-                    title="Call a viewer -- not wired yet">
-              <span class="cap2">CALL</span>
-            </button>
-            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
-                    title="Shake and sound every viewer's screen">
-              <span class="cap2">BUZZ</span>
-            </button>
-          </div>
+        <div class="btnrow">
+          <button type="button" class="buzz pending" id="talkButton" disabled
+                  title="Talk-back — not yet available">
+            <span class="bulb"></span>
+            <span class="eng">TALK</span>
+          </button>
+          <button type="button" class="buzz" id="buzzBtn" onclick="sendBuzz()">
+            <span class="bulb"></span>
+            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 1a4 4 0 0 0-4 4v3.2L2.6 10.4A.8.8 0 0 0 3.3 11.6h9.4a.8.8 0 0 0 .7-1.2L12 8.2V5a4 4 0 0 0-4-4Z"></path>
+              <path d="M6.4 12.8a1.6 1.6 0 0 0 3.2 0Z"></path>
+            </svg>
+            <span class="eng">BUZZ</span>
+          </button>
         </div>
 
         <!-- The two mutes are one set: each silences the side of the panel
@@ -1629,7 +1575,7 @@
   </div>
 
 <script>
-  var HLS_URL = 'http://' + window.location.hostname + ':8888/cam/index.m3u8';
+  var HLS_URL = 'http://' + window.location.hostname + ':@HLS_PORT@/cam/index.m3u8';
   var video        = document.getElementById('video');
   var liveInd      = document.getElementById('liveIndicator');
   var errorOverlay = document.getElementById('errorOverlay');
@@ -1701,7 +1647,7 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION  = 'mac-v1.8.0-1-g64e69e7-dirty';
+  var BUILD_VERSION  = '@VERSION@';
   var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
@@ -2673,7 +2619,7 @@
 (function () {
   var MASTER_URL =
     window.location.protocol + '//' +
-    window.location.hostname + ':8888/cam/index.m3u8';
+    window.location.hostname + ':@HLS_PORT@/cam/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
@@ -2869,10 +2815,7 @@
      reach for next. */
   function setMuted(muted) {
     audioMuted  = muted;
-    // Only without a WebAudio graph: muting the element would also silence
-    // the analyser and flatten the trace for a reason unrelated to the room.
-    audio.muted = levelGain ? false : muted;
-    applyGainNode();
+    audio.muted = muted;
     try {
       localStorage.setItem('hls-livecam-mute-audio', muted ? '1' : '0');
     } catch (e) { /* private mode */ }
@@ -2937,8 +2880,6 @@
      mute this panel already has, and their volume slider could only ever cut
      below the source level, which is the opposite of what a quiet room mic
      needs. Play/pause is the one thing they offered that this panel did not. */
-  // Removed with the transport key: Play and Stop replaced it. Left as a
-  // null-safe lookup so the handlers below no-op instead of throwing.
   var toggleBtn = document.getElementById('audioToggle');
   var iconEl    = document.getElementById('audioIcon');
   var PAUSE_ICON = '<rect x="1" y="1" width="3.4" height="11" rx="1"></rect>'
@@ -3047,152 +2988,6 @@
   }
 
   resolveAudioUrl(startAudio);
-
-  // ── The audio mode bank ───────────────────────────────────────────────
-  //
-  // Ported from amira. One exclusive selection, the same shape as VIDEO's
-  // mode row, because it is the same kind of thing. Stop is a MODE meaning
-  // "neither direction is open" -- which is what leaves MUTE free to be a
-  // modifier rather than a rival to it.
-  //
-  // Talk and 2-Way are present but disabled: this node has no talkback
-  // backend. When one lands, they wire to the same selection.
-  var audioDir = 'play';   // 'play' | 'stop' | 'to' | 'two-way'
-
-  function paintAudioModes() {
-    [['audioPlayBtn', 'play'], ['audioStopBtn', 'stop'],
-     ['toRoomButton', 'to'],   ['talkButton', 'two-way']].forEach(function (e) {
-      var b = document.getElementById(e[0]);
-      if (!b) return;
-      // Rebuilt from scratch each time, so 'guarded' has to be re-applied or
-      // Stop quietly loses its red on the first state change.
-      b.className = 'btn'
-        + (e[1] === 'stop' ? ' guarded' : '')
-        + (audioDir === e[1] ? ' pressed' : '');
-    });
-    var lab = document.getElementById('levelLab');
-    if (lab) lab.textContent = 'LEVEL';
-  }
-
-  function setAudioMode(mode) {
-    if (mode === audioDir) return;
-    audioDir = mode;
-    try {
-      if (mode === 'play') { audio.play().catch(function () {}); }
-      else { audio.pause(); }
-    } catch (e) {}
-    paintAudioModes();
-    applyGainNode();
-  }
-
-  (function () {
-    var map = { audioPlayBtn: 'play', audioStopBtn: 'stop' };
-    Object.keys(map).forEach(function (id) {
-      var b = document.getElementById(id);
-      if (b) b.addEventListener('click', function () { setAudioMode(map[id]); });
-    });
-  })();
-
-  // ── Level trace ───────────────────────────────────────────────────────
-  //
-  // Drawn from the audio itself, not from a bitrate: bytes moving says the
-  // pipe is up, not that anything is audible.
-  //
-  // The tap sits BEFORE the volume stage, and that is the point.
-  // createMediaElementSource is gated by the element's own .muted, and this
-  // viewer starts muted -- tapping after it would measure the listener rather
-  // than the room, and the trace would read flat while the room was plainly
-  // audible. The FPS trace does not stop when you look away; neither does this.
-  //
-  //   source -> analyser              (tap: always sees the room)
-  //   source -> gain -> destination   (what you actually hear)
-  //
-  // Mute and volume therefore act on the GAIN node and the element is left
-  // unmuted. createMediaElementSource INTERCEPTS rather than taps: whatever it
-  // takes must be connected onward to destination or the room goes silent with
-  // nothing to say why.
-  var levelCtx = null, levelAnalyser = null, levelGain = null, levelSrcEl = null;
-  var levelHist = new Array(120).fill(0);
-
-  function applyGainNode() {
-    if (!levelGain) return;
-    var v = 1, sl = document.getElementById('audioVol');
-    if (sl) v = Math.max(0, Math.min(1, (parseFloat(sl.value) || 0) / 100));
-    levelGain.gain.value = (audioMuted || audioDir === 'stop') ? 0 : v;
-  }
-
-  function levelAttach(el) {
-    if (!el || levelSrcEl === el) return;
-    try {
-      if (!levelCtx) {
-        var AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return;
-        levelCtx = new AC();
-        levelAnalyser = levelCtx.createAnalyser();
-        levelAnalyser.fftSize = 512;
-        levelGain = levelCtx.createGain();
-        levelGain.connect(levelCtx.destination);
-      }
-      var src = levelCtx.createMediaElementSource(el);
-      src.connect(levelAnalyser);
-      src.connect(levelGain);      // NOT optional -- the only path to output
-      el.muted = false;            // the gain node owns silence now
-      levelSrcEl = el;
-      applyGainNode();
-    } catch (e) { /* already attached, or not analysable */ }
-  }
-
-  function levelSample() {
-    var v = 0;
-    if (levelAnalyser && levelCtx && levelCtx.state === 'running') {
-      var buf = new Uint8Array(levelAnalyser.frequencyBinCount);
-      levelAnalyser.getByteTimeDomainData(buf);
-      var peak = 0;
-      for (var i = 0; i < buf.length; i++) {
-        var d = Math.abs(buf[i] - 128);
-        if (d > peak) peak = d;
-      }
-      v = Math.min(1, peak / 128);
-    }
-    if (audioDir === 'stop') v = 0;   // honest flat, like the FPS trace at 0
-    levelHist.push(v); levelHist.shift();
-  }
-
-  function levelDraw() {
-    var c = document.getElementById('levelGraph');
-    if (!c || !c.getContext) return;
-    var g = c.getContext('2d'), w = c.width, h = c.height;
-    g.clearRect(0, 0, w, h);
-    // Log scale, because hearing is. Speech near -30 dBFS is 3% of a linear
-    // height and indistinguishable from silence. Baseline lifted 12px so bars
-    // are not drawn through the LEVEL and 60s legends.
-    var base = h - 12, top = 4, span = base - top, step = w / levelHist.length;
-    g.fillStyle = 'rgba(48,209,88,.55)';
-    for (var i = 0; i < levelHist.length; i++) {
-      var val = levelHist[i];
-      var db = val > 0 ? 20 * Math.log(val) / Math.LN10 : -100;
-      var f = Math.max(0, Math.min(1, (db + 60) / 60));
-      var bh = f > 0 ? Math.max(1, f * span) : 0;
-      if (bh) g.fillRect(i * step, base - bh, Math.max(1, step - 1), bh);
-    }
-    g.fillStyle = 'rgba(48,209,88,.18)';
-    g.fillRect(0, base, w, 1);
-  }
-
-  setInterval(function () { levelSample(); levelDraw(); }, 500);
-
-  // A gesture is what lets an AudioContext run at all; every key is one.
-  document.addEventListener('click', function () {
-    if (levelCtx && levelCtx.state === 'suspended') levelCtx.resume();
-    levelAttach(audio);
-  });
-  (function () {
-    var sl = document.getElementById('audioVol');
-    if (sl) sl.addEventListener('input', applyGainNode);
-  })();
-
-  paintAudioModes();
-
 })();
 </script>
 </body>

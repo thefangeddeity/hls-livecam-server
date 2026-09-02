@@ -254,8 +254,19 @@ def _stretch_np(luma):
 
 
 def _grid_to_canvas(cell):
-    """(rows*2, cols, 3) halfblock grid -> full-size frame, nearest-neighbour."""
-    return _np.asarray(
+    """(rows*2, cols, 3) halfblock grid -> full-size frame, nearest-neighbour.
+
+    np.asarray() on a PIL image wraps its internal buffer read-only. That was
+    invisible here -- nothing in this module writes back into the canvas --
+    until cv_processor started drawing HUD/detection boxes onto blur's output
+    with cv2.putText/rectangle, which need a writable Mat and fail with
+    "Bad argument ... marked as readonly" on every single call. The failure
+    was swallowed by the pump's per-frame error handler, which passed the
+    original unblurred frame through instead -- so Blur silently never
+    rendered at all, on any frame, and looked like a no-op rather than a
+    crash. np.array() (copy, not view) makes the buffer this function's own.
+    """
+    return _np.array(
         Image.fromarray(cell, "RGB").resize((OUTPUT_W, OUTPUT_H), Image.NEAREST))
 
 

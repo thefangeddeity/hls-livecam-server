@@ -1,0 +1,848 @@
+ffmpeg started on 2026-08-25 at 09:29:29
+Report written to "ffmpeg-20260825-092929.log"
+Log level: 48
+Command line:
+ffmpeg -hide_banner -v error -i http://127.0.0.1:8888/cam/index.m3u8 -t 2 -frames:v 20 -vf signalstats -f null - -report -loglevel info
+Splitting the commandline.
+Reading option '-hide_banner' ... matched as option 'hide_banner' (do not show program banner) with argument '1'.
+Reading option '-v' ... matched as option 'v' (set logging level) with argument 'error'.
+Reading option '-i' ... matched as input url with argument 'http://127.0.0.1:8888/cam/index.m3u8'.
+Reading option '-t' ... matched as option 't' (stop transcoding after specified duration) with argument '2'.
+Reading option '-frames:v' ... matched as option 'frames' (set the number of frames to output) with argument '20'.
+Reading option '-vf' ... matched as option 'vf' (alias for -filter:v (apply filters to video streams)) with argument 'signalstats'.
+Reading option '-f' ... matched as option 'f' (force container format (auto-detected otherwise)) with argument 'null'.
+Reading option '-' ... matched as output url.
+Reading option '-report' ... matched as option 'report' (generate a report) with argument '1'.
+Reading option '-loglevel' ... matched as option 'loglevel' (set logging level) with argument 'info'.
+Finished splitting the commandline.
+Parsing a group of options: global .
+Applying option hide_banner (do not show program banner) with argument 1.
+Applying option v (set logging level) with argument error.
+Applying option report (generate a report) with argument 1.
+Applying option loglevel (set logging level) with argument info.
+Successfully parsed a group of options.
+Parsing a group of options: input url http://127.0.0.1:8888/cam/index.m3u8.
+Successfully parsed a group of options.
+Opening an input file: http://127.0.0.1:8888/cam/index.m3u8.
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/index.m3u8' for reading
+[http @ 0x7fe60d704e00] Setting default whitelist 'http,https,tls,rtp,tcp,udp,crypto,httpproxy,data'
+[tcp @ 0x7fe60d704f00] Original list of addresses:
+[tcp @ 0x7fe60d704f00] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60d704f00] Interleaved list of addresses:
+[tcp @ 0x7fe60d704f00] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60d704f00] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60d704f00] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60d704e00] request: GET /cam/index.m3u8 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: close
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] Format hls probed with size=2048 and score=100
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-VERSION:9')
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-INDEPENDENT-SEGMENTS')
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/audio2_stream.m3u8' for reading
+[tcp @ 0x7fe60e005280] Original list of addresses:
+[tcp @ 0x7fe60e005280] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e005280] Interleaved list of addresses:
+[tcp @ 0x7fe60e005280] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e005280] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60e005280] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60e0051c0] request: GET /cam/audio2_stream.m3u8 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-VERSION:10')
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-PROGRAM-DATE-TIME:2026-08-25T09:29:29.296-05:00')
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-PROGRAM-DATE-TIME:2026-08-25T09:29:29.343-05:00')
+[http @ 0x7fe60e814800] Opening 'http://127.0.0.1:8888/cam/video1_stream.m3u8' for reading
+[http @ 0x7fe60e0051c0] request: GET /cam/video1_stream.m3u8 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-VERSION:10')
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-PROGRAM-DATE-TIME:2026-08-25T09:29:29.296-05:00')
+[in#0 @ 0x7fe60d704a40] Skip ('#EXT-X-PROGRAM-DATE-TIME:2026-08-25T09:29:29.343-05:00')
+[in#0 @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_init.mp4', offset 0, playlist 0
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_init.mp4' for reading
+[tcp @ 0x7fe60e105480] Original list of addresses:
+[tcp @ 0x7fe60e105480] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e105480] Interleaved list of addresses:
+[tcp @ 0x7fe60e105480] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e105480] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60e105480] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60e1053c0] request: GET /cam/84c921255bf4_audio2_init.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] Downloading an initialization section of size 632
+[AVIOContext @ 0x7fe60e005340] Statistics: 632 bytes read, 0 seeks
+[http @ 0x7fe60e1053c0] Statistics: 1 connection, 1 request, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60e1053c0] Latency: 0.25 ms avg, 0.25 ms max
+[in#0 @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_seg1026.mp4', offset 0, playlist 0
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_seg1026.mp4' for reading
+[tcp @ 0x7fe60e005880] Original list of addresses:
+[tcp @ 0x7fe60e005880] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e005880] Interleaved list of addresses:
+[tcp @ 0x7fe60e005880] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e005880] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60e005880] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60e005340] request: GET /cam/84c921255bf4_audio2_seg1026.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_seg1027.mp4', offset 0, playlist 0
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_seg1027.mp4' for reading
+[tcp @ 0x7fe60e204800] Original list of addresses:
+[tcp @ 0x7fe60e204800] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e204800] Interleaved list of addresses:
+[tcp @ 0x7fe60e204800] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e204800] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60e204800] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60e204700] request: GET /cam/84c921255bf4_audio2_seg1027.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_seg1028.mp4', offset 0, playlist 0
+[http @ 0x7fe60e817200] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_audio2_seg1028.mp4' for reading
+[http @ 0x7fe60e005340] request: GET /cam/84c921255bf4_audio2_seg1028.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+Format mov,mp4,m4a,3gp,3g2,mj2 probed with size=2048 and score=100
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] ISO: File Type Major Brand: mp42
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] Unknown dref type 0x206c7275 size 12
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] advanced_editlist does not work with fragmented MP4. disabling.
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] found tfdt time 49715077, using it for dts
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] Before avformat_find_stream_info() pos: 992 bytes read:2227 seeks:0 nb_streams:1
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 64, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 64, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_pfa_3xM_inv_float_c - type: mdct_float, len: 96, factors[2]: [3, any], flags: [unaligned, out_of_place, inv_only]
+        fft16_ns_float_fma3 - type: fft_float, len: 16, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 120, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 60, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft4_fwd_asm_float_sse2 - type: fft_float, len: 4, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 128, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 64, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 480, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 240, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft16_asm_float_fma3 - type: fft_float, len: 16, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 512, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 256, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_pfa_3xM_inv_float_c - type: mdct_float, len: 768, factors[2]: [3, any], flags: [unaligned, out_of_place, inv_only]
+        fft_sr_ns_float_fma3 - type: fft_float, len: 128, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 960, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 480, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 1024, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 512, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_fwd_float_c - type: mdct_float, len: 1024, factors[2]: [2, any], flags: [unaligned, out_of_place, fwd_only]
+        fft_sr_ns_float_fma3 - type: fft_float, len: 512, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] All info found
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] After avformat_find_stream_info() pos: 998 bytes read:2227 seeks:0 frames:1
+[in#0 @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_video1_init.mp4', offset 0, playlist 1
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_video1_init.mp4' for reading
+[tcp @ 0x7fe60d70a880] Original list of addresses:
+[tcp @ 0x7fe60d70a880] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60d70a880] Interleaved list of addresses:
+[tcp @ 0x7fe60d70a880] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60d70a880] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60d70a880] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60d707700] request: GET /cam/84c921255bf4_video1_init.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] Downloading an initialization section of size 681
+[AVIOContext @ 0x7fe60e105dc0] Statistics: 681 bytes read, 0 seeks
+[http @ 0x7fe60d707700] Statistics: 1 connection, 1 request, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60d707700] Latency: 0.11 ms avg, 0.11 ms max
+[in#0 @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_video1_seg1026.mp4', offset 0, playlist 1
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_video1_seg1026.mp4' for reading
+[tcp @ 0x7fe60e105e80] Original list of addresses:
+[tcp @ 0x7fe60e105e80] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e105e80] Interleaved list of addresses:
+[tcp @ 0x7fe60e105e80] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60e105e80] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60e105e80] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60e105dc0] request: GET /cam/84c921255bf4_video1_seg1026.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[in#0 @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_video1_seg1027.mp4', offset 0, playlist 1
+[in#0 @ 0x7fe60d704a40] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_video1_seg1027.mp4' for reading
+[tcp @ 0x7fe60d707840] Original list of addresses:
+[tcp @ 0x7fe60d707840] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60d707840] Interleaved list of addresses:
+[tcp @ 0x7fe60d707840] Address 127.0.0.1 port 8888
+[tcp @ 0x7fe60d707840] Starting connection attempt to 127.0.0.1 port 8888
+[tcp @ 0x7fe60d707840] Successfully connected to 127.0.0.1 port 8888
+[http @ 0x7fe60d70a840] request: GET /cam/84c921255bf4_video1_seg1027.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+Format mov,mp4,m4a,3gp,3g2,mj2 probed with size=2048 and score=100
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60d707380] ISO: File Type Major Brand: mp42
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60d707380] Unknown dref type 0x206c7275 size 12
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60d707380] advanced_editlist does not work with fragmented MP4. disabling.
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60d707380] found tfdt time 93240000, using it for dts
+[in#0/hls @ 0x7fe60d704a40] Before avformat_find_stream_info() pos: 322 bytes read:322 seeks:0 nb_streams:2
+[h264 @ 0x7fe60e108000] nal_unit_type: 7(SPS), nal_ref_idc: 3
+[h264 @ 0x7fe60e108000] Decoding VUI
+[h264 @ 0x7fe60e108000] nal_unit_type: 8(PPS), nal_ref_idc: 3
+[NULL @ 0x7fe60e107380] nal_unit_type: 7(SPS), nal_ref_idc: 3
+[NULL @ 0x7fe60e107380] Decoding VUI
+[NULL @ 0x7fe60e107380] nal_unit_type: 8(PPS), nal_ref_idc: 3
+[NULL @ 0x7fe60e107380] Decoding VUI
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 64, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 64, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_pfa_3xM_inv_float_c - type: mdct_float, len: 96, factors[2]: [3, any], flags: [unaligned, out_of_place, inv_only]
+        fft16_ns_float_fma3 - type: fft_float, len: 16, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 120, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 60, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft4_fwd_asm_float_sse2 - type: fft_float, len: 4, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 128, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 64, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 480, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 240, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft16_asm_float_fma3 - type: fft_float, len: 16, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 512, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 256, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_pfa_3xM_inv_float_c - type: mdct_float, len: 768, factors[2]: [3, any], flags: [unaligned, out_of_place, inv_only]
+        fft_sr_ns_float_fma3 - type: fft_float, len: 128, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 960, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 480, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 1024, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 512, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_fwd_float_c - type: mdct_float, len: 1024, factors[2]: [2, any], flags: [unaligned, out_of_place, fwd_only]
+        fft_sr_ns_float_fma3 - type: fft_float, len: 512, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+[h264 @ 0x7fe60e108000] nal_unit_type: 7(SPS), nal_ref_idc: 3
+[h264 @ 0x7fe60e108000] nal_unit_type: 8(PPS), nal_ref_idc: 3
+[h264 @ 0x7fe60e108000] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60e108000] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60e108000] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60e108000] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60e108000] Decoding VUI
+[h264 @ 0x7fe60e108000] Format yuv420p chosen by get_format().
+[h264 @ 0x7fe60e108000] Reinit context to 1280x720, pix_fmt: yuv420p
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60e108000] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] found tfdt time 49748869, using it for dts
+[in#0/hls @ 0x7fe60d704a40] HLS request for url 'http://127.0.0.1:8888/cam/84c921255bf4_video1_seg1028.mp4', offset 0, playlist 1
+[http @ 0x7fe60d812c00] Opening 'http://127.0.0.1:8888/cam/84c921255bf4_video1_seg1028.mp4' for reading
+[http @ 0x7fe60e105dc0] request: GET /cam/84c921255bf4_video1_seg1028.mp4 HTTP/1.1
+User-Agent: Lavf/62.12.102
+Accept: */*
+Range: bytes=0-
+Connection: keep-alive
+Host: 127.0.0.1:8888
+Icy-MetaData: 1
+
+
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60d707380] found tfdt time 93330000, using it for dts
+[NULL @ 0x7fe60e107380] Decoding VUI
+[in#0/hls @ 0x7fe60d704a40] All info found
+[in#0/hls @ 0x7fe60d704a40] After avformat_find_stream_info() pos: 322 bytes read:322 seeks:0 frames:97
+Input #0, hls, from 'http://127.0.0.1:8888/cam/index.m3u8':
+  Duration: N/A, start: 1035.730771, bitrate: 31 kb/s
+  Program 0 
+    Metadata:
+      variant_bitrate : 31200
+  Stream #0:0[0x0](und), 76, 1/48000: Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 2 kb/s, start 1035.730771 (default)
+    Metadata:
+      variant_bitrate : 31200
+      handler_name    : SoundHandler
+      major_brand     : mp42
+      minor_version   : 1
+      compatible_brands: mp41mp42isomhlsf
+      comment         : audio2
+  Stream #0:1[0x1](und), 21, 1/90000: Video: h264 (Constrained Baseline) (avc1 / 0x31637661), yuv420p, 1280x720 [SAR 1:1 DAR 16:9], 28 kb/s, 15 fps, 15 tbr, 90k tbn, start 1036.000000 (default)
+    Metadata:
+      variant_bitrate : 31200
+      handler_name    : VideoHandler
+      major_brand     : mp42
+      minor_version   : 1
+      compatible_brands: mp41mp42isomhlsf
+Successfully opened the file.
+Parsing a group of options: output url -.
+Applying option t (stop transcoding after specified duration) with argument 2.
+Applying option frames:v (set the number of frames to output) with argument 20.
+Applying option vf (alias for -filter:v (apply filters to video streams)) with argument signalstats.
+Applying option f (force container format (auto-detected otherwise)) with argument null.
+Successfully parsed a group of options.
+Opening an output file: -.
+[out#0/null @ 0x7fe60e0065c0] No explicit maps, mapping streams automatically...
+[vost#0:0/wrapped_avframe @ 0x7fe60e009dc0] Created video stream from input stream 0:1
+detected 4 logical cores
+[h264 @ 0x7fe60d709740] nal_unit_type: 7(SPS), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] Decoding VUI
+[h264 @ 0x7fe60d709740] nal_unit_type: 8(PPS), nal_ref_idc: 3
+[aost#0:1/pcm_s16le @ 0x7fe60d738f00] Created audio stream from input stream 0:0
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 64, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 64, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_pfa_3xM_inv_float_c - type: mdct_float, len: 96, factors[2]: [3, any], flags: [unaligned, out_of_place, inv_only]
+        fft16_ns_float_fma3 - type: fft_float, len: 16, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 120, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 60, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft4_fwd_asm_float_sse2 - type: fft_float, len: 4, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 128, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 64, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 480, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 240, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft16_asm_float_fma3 - type: fft_float, len: 16, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 512, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 256, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_pfa_3xM_inv_float_c - type: mdct_float, len: 768, factors[2]: [3, any], flags: [unaligned, out_of_place, inv_only]
+        fft_sr_ns_float_fma3 - type: fft_float, len: 128, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 960, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_pfa_15xM_asm_float_avx2 - type: fft_float, len: 480, factors[2]: [15, 2], flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+            fft32_asm_float_fma3 - type: fft_float, len: 32, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_inv_float_avx2 - type: mdct_float, len: 1024, factors[2]: [2, any], flags: [aligned, out_of_place, inv_only]
+        fft_sr_asm_float_fma3 - type: fft_float, len: 512, factor: 2, flags: [aligned, inplace, out_of_place, preshuf, asm_call]
+Transform tree:
+    mdct_fwd_float_c - type: mdct_float, len: 1024, factors[2]: [2, any], flags: [unaligned, out_of_place, fwd_only]
+        fft_sr_ns_float_fma3 - type: fft_float, len: 512, factor: 2, flags: [aligned, inplace, out_of_place, preshuf]
+Successfully opened the file.
+Stream mapping:
+  Stream #0:1 -> #0:0 (h264 (native) -> wrapped_avframe (native))
+  Stream #0:0 -> #0:1 (aac (native) -> pcm_s16le (native))
+[vost#0:0/wrapped_avframe @ 0x7fe60e009dc0] Starting thread...
+[aost#0:1/pcm_s16le @ 0x7fe60d738f00] Starting thread...
+[vf#0:0 @ 0x7fe60e82e200] Starting thread...
+[af#0:1 @ 0x7fe60f818800] Starting thread...
+[vist#0:1/h264 @ 0x7fe60e006380] [dec:h264 @ 0x7fe60d708300] Starting thread...
+[aist#0:0/aac @ 0x7fe60e006200] [dec:aac @ 0x7fe60d73b200] Starting thread...
+[in#0/hls @ 0x7fe60d7048c0] Starting thread...
+Press [q] to stop, [?] for help
+[graph_-1_in_0:0 @ 0x7fe60e006780] Setting 'time_base' to value '1/48000'
+[graph_-1_in_0:0 @ 0x7fe60e006780] Setting 'sample_rate' to value '48000'
+[graph_-1_in_0:0 @ 0x7fe60e006780] Setting 'sample_fmt' to value 'fltp'
+[graph_-1_in_0:0 @ 0x7fe60e006780] Setting 'channel_layout' to value 'stereo'
+[graph_-1_in_0:0 @ 0x7fe60e006780] tb:1/48000 samplefmt:fltp samplerate:48000 chlayout:stereo
+[format_out_#0:1 @ 0x7fe60e006d00] Setting 'sample_fmts' to value 's16'
+[format_out_#0:1 @ 0x7fe60e006d00] auto-inserting filter 'auto_aresample_0' between the filter 'Parsed_anull_0' and the filter 'format_out_#0:1'
+[AVFilterGraph @ 0x7fe60e107900] query_formats: 5 queried, 12 merged, 16 already done, 0 delayed
+[auto_aresample_0 @ 0x7fe60e0078c0] [SWR @ 0x7fe60e3bc000] Using fltp internally between filters
+[auto_aresample_0 @ 0x7fe60e0078c0] ch:2 chl:stereo fmt:fltp r:48000Hz -> ch:2 chl:stereo fmt:s16 r:48000Hz
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.0213333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.0426667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.064
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.0853333
+[h264 @ 0x7fe60d709740] nal_unit_type: 7(SPS), nal_ref_idc: 3
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.106667
+[h264 @ 0x7fe60d709740] nal_unit_type: 8(PPS), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.128
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.149333
+[h264 @ 0x7fe60d709740] Decoding VUI
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.170667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.192
+[h264 @ 0x7fe60d709740] Format yuv420p chosen by get_format().
+[h264 @ 0x7fe60d709740] Reinit context to 1280x720, pix_fmt: yuv420p
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.213333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.234667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.256
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.277333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.298667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.32
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.341333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.362667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.384
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.405333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.426667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.448
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.469333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.490667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.512
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.533333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.554667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.576
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.597333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.618667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.64
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.661333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.682667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.704
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.725333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.746667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.768
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.789333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.810667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.832
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.853333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.874667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.896
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.917333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.938667
+[graph -1 input from stream 0:1 @ 0x7fe60d745d80] w:1280 h:720 pixfmt:yuv420p tb:1/90000 fr:15/1 sar:1/1 csp:unknown range:unknown alpha:unspecified
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.96
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 0.981333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.002667
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[AVFilterGraph @ 0x7fe60e10b5c0] query_formats: 4 queried, 12 merged, 0 already done, 0 delayed
+[graph -1 input from stream 0:1 @ 0x7fe60d745d80] video frame properties congruent with link at pts_time: 0.269233
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.024
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.045333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.066667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.088
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.109333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.130667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.152
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.173333
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.194667
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.216
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.237333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.258667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.28
+Output #0, null, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.12.102
+  Stream #0:0(und), 0, 1/15: Video: wrapped_avframe, yuv420p(progressive), 1280x720 [SAR 1:1 DAR 16:9], q=2-31, 200 kb/s, 15 fps, 15 tbn (default)
+    Metadata:
+      encoder         : Lavc62.28.102 wrapped_avframe
+      variant_bitrate : 31200
+      handler_name    : VideoHandler
+      major_brand     : mp42
+      minor_version   : 1
+      compatible_brands: mp41mp42isomhlsf
+  Stream #0:1(und), 0, 1/48000: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s (default)
+    Metadata:
+      encoder         : Lavc62.28.102 pcm_s16le
+      variant_bitrate : 31200
+      handler_name    : SoundHandler
+      major_brand     : mp42
+      minor_version   : 1
+      compatible_brands: mp41mp42isomhlsf
+      comment         : audio2
+[out#0/null @ 0x7fe60e0065c0] Starting thread...
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.333333
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.333333 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.0213333 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.0426667 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.064 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.0853333 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.106667 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.128 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.149333 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.170667 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.192 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.213333 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.234667 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.256 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.277333 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.298667 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.32 queue head 0 ts 0.333333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.301333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.322667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.344
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.365333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.386667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.408
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.4 queue head 0 ts 0.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.341333 queue head 0 ts 0.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.362667 queue head 0 ts 0.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.384 queue head 0 ts 0.4
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.429333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.450667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.472
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.466667 queue head 0 ts 0.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.405333 queue head 0 ts 0.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.426667 queue head 0 ts 0.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.448 queue head 0 ts 0.466667
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.493333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.514667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.536
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.533333 queue head 0 ts 0.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.469333 queue head 0 ts 0.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.490667 queue head 0 ts 0.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.512 queue head 0 ts 0.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.533333 queue head 0 ts 0.533333
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.557333
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.578667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.621333
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.6 queue head 0 ts 0.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.554667 queue head 0 ts 0.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.576 queue head 0 ts 0.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.597333 queue head 0 ts 0.6
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.642667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.664
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.685333
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.666667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.666667 queue head 0 ts 0.666667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.618667 queue head 0 ts 0.666667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.64 queue head 0 ts 0.666667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.661333 queue head 0 ts 0.666667
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.706667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.728
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.749333
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.733333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.733333 queue head 0 ts 0.733333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.682667 queue head 0 ts 0.733333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.704 queue head 0 ts 0.733333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.725333 queue head 0 ts 0.733333
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.770667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.792
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.813333
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.8
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.8 queue head 0 ts 0.8
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.746667 queue head 0 ts 0.8
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.768 queue head 0 ts 0.8
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.789333 queue head 0 ts 0.8
+[h264 @ 0x7fe60d709740] nal_unit_type: 7(SPS), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 8(PPS), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] nal_unit_type: 5(IDR), nal_ref_idc: 3
+[h264 @ 0x7fe60d709740] Decoding VUI
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.834667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.856
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.877333
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.866667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.866667 queue head 0 ts 0.866667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.810667 queue head 0 ts 0.866667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.832 queue head 0 ts 0.866667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.853333 queue head 0 ts 0.866667
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.898667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.92
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.941333
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 0.933333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 0.933333 queue head 0 ts 0.933333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.874667 queue head 0 ts 0.933333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.896 queue head 0 ts 0.933333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.917333 queue head 0 ts 0.933333
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.962667
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 1.984
+[out#0/null @ 0x7fe60e0065c0] sq: send 1 ts 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1 queue head 0 ts 1
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.938667 queue head 0 ts 1
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.96 queue head 0 ts 1
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 0.981333 queue head 0 ts 1
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: 1 EOF
+[out#0/null @ 0x7fe60e0065c0] sq: finish 1; head ts 2
+[out_#0:1 @ 0x7fe60e006b40] EOF on sink link out_#0:1:default.
+[af#0:1 @ 0x7fe60f818800] Filtergraph returned EOF, finishing
+[af#0:1 @ 0x7fe60f818800] All consumers returned EOF
+[out#0/null @ 0x7fe60e0065c0] sq: 1 EOF
+[af#0:1 @ 0x7fe60f818800] Terminating thread with return code 0 (success)
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.066667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.066667 queue head 0 ts 1.066667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.002667 queue head 0 ts 1.066667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.024 queue head 0 ts 1.066667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.045333 queue head 0 ts 1.066667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.066667 queue head 0 ts 1.066667
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60e105000] found tfdt time 49816453, using it for dts
+[aist#0:0/aac @ 0x7fe60e006200] [dec:aac @ 0x7fe60d73b200] Decoder returned EOF, finishing
+[aist#0:0/aac @ 0x7fe60e006200] [dec:aac @ 0x7fe60d73b200] Terminating thread with return code 0 (success)
+[aist#0:0/aac @ 0x7fe60e006200] All consumers of this stream are done
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.133333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.133333 queue head 0 ts 1.133333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.088 queue head 0 ts 1.133333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.109333 queue head 0 ts 1.133333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.130667 queue head 0 ts 1.133333
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.2
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.2 queue head 0 ts 1.2
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.152 queue head 0 ts 1.2
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.173333 queue head 0 ts 1.2
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.194667 queue head 0 ts 1.2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fe60d707380] found tfdt time 93420000, using it for dts
+[NULL @ 0x7fe60e107380] Decoding VUI
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.266667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.266667 queue head 0 ts 1.266667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.216 queue head 0 ts 1.266667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.237333 queue head 0 ts 1.266667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.258667 queue head 0 ts 1.266667
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.333333 queue head 0 ts 1.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.28 queue head 0 ts 1.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.301333 queue head 0 ts 1.333333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.322667 queue head 0 ts 1.333333
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d725180] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.4 queue head 0 ts 1.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.344 queue head 0 ts 1.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.365333 queue head 0 ts 1.4
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.386667 queue head 0 ts 1.4
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d72ec80] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.466667 queue head 0 ts 1.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.408 queue head 0 ts 1.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.429333 queue head 0 ts 1.466667
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.450667 queue head 0 ts 1.466667
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d709740] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.533333 queue head 0 ts 1.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.472 queue head 0 ts 1.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.493333 queue head 0 ts 1.533333
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.514667 queue head 0 ts 1.533333
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d711d40] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[out#0/null @ 0x7fe60e0065c0] sq: send 0 ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: 0 frames_max 20 reached
+[out#0/null @ 0x7fe60e0065c0] sq: finish 0; head ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: finish queue
+[out#0/null @ 0x7fe60e0065c0] sq: receive 0 ts 1.6 queue head 0 ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.536 queue head 0 ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.557333 queue head 0 ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.578667 queue head 0 ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: receive 1 ts 1.6 queue head 0 ts 1.6
+[out#0/null @ 0x7fe60e0065c0] sq: 0 EOF
+[out#0/null @ 0x7fe60e0065c0] sq: finish queue
+[aost#0:1/pcm_s16le @ 0x7fe60d738f00] [enc:pcm_s16le @ 0x7fe60d7398c0] Encoder thread received EOF
+[vost#0:0/wrapped_avframe @ 0x7fe60e009dc0] [enc:wrapped_avframe @ 0x7fe60e00a440] Encoder thread received EOF
+[aost#0:1/pcm_s16le @ 0x7fe60d738f00] Terminating thread with return code 0 (success)
+[out#0/null @ 0x7fe60e0065c0] All streams finished
+[vost#0:0/wrapped_avframe @ 0x7fe60e009dc0] Terminating thread with return code 0 (success)
+[out#0/null @ 0x7fe60e0065c0] Terminating thread with return code 0 (success)
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[h264 @ 0x7fe60d71b680] nal_unit_type: 1(Coded slice of a non-IDR picture), nal_ref_idc: 2
+[in#0/hls @ 0x7fe60d7048c0] Terminating thread with return code 0 (success)
+[vf#0:0 @ 0x7fe60e82e200] All consumers returned EOF
+[out#0/null @ 0x7fe60e0065c0] sq: 0 EOF
+[out#0/null @ 0x7fe60e0065c0] sq: finish queue
+[vist#0:1/h264 @ 0x7fe60e006380] [dec:h264 @ 0x7fe60d708300] Decoder returned EOF, finishing
+[vf#0:0 @ 0x7fe60e82e200] Terminating thread with return code 0 (success)
+[vist#0:1/h264 @ 0x7fe60e006380] [dec:h264 @ 0x7fe60d708300] Terminating thread with return code 0 (success)
+[out#0/null @ 0x7fe60e0065c0] Output file #0 (pipe:):
+[out#0/null @ 0x7fe60e0065c0]   Output stream #0:0 (video): 20 frames encoded; 20 packets muxed (8480 bytes); 
+[out#0/null @ 0x7fe60e0065c0]   Output stream #0:1 (audio): 75 frames encoded (76800 samples); 75 packets muxed (307200 bytes); 
+[out#0/null @ 0x7fe60e0065c0]   Total: 95 packets (315680 bytes) muxed
+[out#0/null @ 0x7fe60e0065c0] video:8KiB audio:300KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=   20 fps=0.0 q=-0.0 Lsize=N/A time=00:00:01.60 bitrate=N/A speed=8.99x elapsed=0:00:00.17    
+[in#0/hls @ 0x7fe60d7048c0] Input file #0 (http://127.0.0.1:8888/cam/index.m3u8):
+[in#0/hls @ 0x7fe60d7048c0]   Input stream #0:0 (audio): 100 packets read (617 bytes); 98 frames decoded; 0 decode errors (100352 samples); 
+[in#0/hls @ 0x7fe60d7048c0]   Input stream #0:1 (video): 37 packets read (10446 bytes); 24 frames decoded; 0 decode errors; 
+[in#0/hls @ 0x7fe60d7048c0]   Total: 137 packets (11063 bytes) demuxed
+[AVIOContext @ 0x7fe60e204580] Statistics: 1116 bytes read, 0 seeks
+[http @ 0x7fe60e005340] Statistics: 1 connection, 2 requests, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60e005340] Latency: 0.18 ms avg, 0.33 ms max
+[AVIOContext @ 0x7fe60e1053c0] Statistics: 1037 bytes read, 0 seeks
+[http @ 0x7fe60e204700] Statistics: 1 connection, 1 request, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60e204700] Latency: 0.30 ms avg, 0.30 ms max
+[AVIOContext @ 0x7fe60d707700] Statistics: 7798 bytes read, 0 seeks
+[http @ 0x7fe60e105dc0] Statistics: 1 connection, 2 requests, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60e105dc0] Latency: 0.52 ms avg, 0.55 ms max
+[AVIOContext @ 0x7fe60e005400] Statistics: 3900 bytes read, 0 seeks
+[http @ 0x7fe60d70a840] Statistics: 1 connection, 1 request, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60d70a840] Latency: 0.15 ms avg, 0.15 ms max
+[AVIOContext @ 0x7fe60e104640] Statistics: 1152 bytes read, 0 seeks
+[http @ 0x7fe60e0051c0] Statistics: 1 connection, 2 requests, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60e0051c0] Latency: 0.73 ms avg, 1.30 ms max
+[AVIOContext @ 0x7fe60e204380] Statistics: 322 bytes read, 0 seeks
+[http @ 0x7fe60d704e00] Statistics: 1 connection, 1 request, 0 retries, 0 reconnections, 0 redirects
+[http @ 0x7fe60d704e00] Latency: 0.07 ms avg, 0.07 ms max
+
+Exiting with exit code 0
