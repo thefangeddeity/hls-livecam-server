@@ -1637,7 +1637,10 @@
   </div>
 
 <script>
-  var HLS_URL = 'http://' + window.location.hostname + ':@HLS_PORT@/cam/index.m3u8';
+  // Same origin, same scheme, always. See the note on /hls in the header:
+  // an absolute http:// URL here is invisible over HTTPS -- the browser drops
+  // it as mixed content and the viewer looks like a dead camera.
+  var HLS_URL = window.location.origin + '/hls/cam/index.m3u8';
   var video        = document.getElementById('video');
   var liveInd      = document.getElementById('liveIndicator');
   var errorOverlay = document.getElementById('errorOverlay');
@@ -2690,9 +2693,11 @@
  * fall back to the master URL, which is wasteful but still produces sound.
  */
 (function () {
-  var MASTER_URL =
-    window.location.protocol + '//' +
-    window.location.hostname + ':@HLS_PORT@/cam/index.m3u8';
+  // Same-origin for the same reason as HLS_URL above. Following the page's
+  // protocol was not enough on its own: mediamtx serves :@HLS_PORT@ over plain
+  // HTTP only, so an https://host:@HLS_PORT@/ URL fails at the socket rather
+  // than at the mixed-content check -- a different error, the same silence.
+  var MASTER_URL = window.location.origin + '/hls/cam/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
