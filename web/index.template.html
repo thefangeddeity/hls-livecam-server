@@ -3852,6 +3852,46 @@
      source node is built over the track it is rendering; the microphone is
      rendered by nothing, it goes to a PeerConnection. There is no output here
      to lose, so there is nothing to protect. */
+
+  /* ── THE PICTURE MUST NOT HOLD THE AUDIO SESSION ──────────────────
+     The <video> above is muted, and muted is NOT the same as "not decoding
+     audio". The master manifest carries both tracks, so the picture element
+     decodes an audio track it will never render -- and on iOS a media element
+     that decodes audio can hold the audio session whether or not it is muted.
+
+     That is why "a brief burst, then silence" survived every fix aimed at the
+     audio element, and survived changing transport entirely: HLS and WHEP both
+     failed identically because neither was the problem. #roomAudioPlayer would
+     start, be audible for the instant before the picture settled, and then
+     lose the session to an element playing nothing.
+
+     WebKit implements HTMLMediaElement.audioTracks, which most engines dropped.
+     That is exactly the platform that needs this, so the one place the API
+     survives is the one place it matters. Elsewhere it is absent and this is a
+     no-op, which is correct: no other engine has the conflict.
+
+     Re-applied on a timer rather than once. Tracks appear asynchronously after
+     metadata, and a stream reload or a mode change builds new ones -- a single
+     call at load would silence the first track and miss every one after it. */
+  var vidAudState = '-';
+
+  function silenceVideoAudio() {
+    try {
+      var v = document.getElementById('video');
+      if (!v) { vidAudState = 'novid'; return; }
+      var at = v.audioTracks;
+      if (!at) { vidAudState = 'noapi'; return; }   // not WebKit; no conflict
+      var n = at.length, live = 0;
+      for (var i = 0; i < n; i++) {
+        if (at[i].enabled) { at[i].enabled = false; }
+        if (at[i].enabled) live++;                  // refused to turn off
+      }
+      vidAudState = n + (live ? ':' + live + 'on' : ':off');
+    } catch (e) {
+      vidAudState = 'err';
+    }
+  }
+
   var levelOutTap = null, levelOutAnalyser = null;
   var levelOutHist = new Array(120).fill(0);
 
@@ -4107,7 +4147,11 @@
     g.fillText('OUT', 3, mid + 10);
   }
 
-  setInterval(function () { levelSample(); levelDraw(); }, 500);
+  setInterval(function () {
+    silenceVideoAudio();   // cheap, and must survive stream reloads
+    levelSample();
+    levelDraw();
+  }, 500);
 
   /* A gesture is what lets an AudioContext run at all, and every key is one.
      This no longer has anything to do with whether the room is audible -- the
@@ -4258,6 +4302,7 @@
              observer is wired up but its context is not running, which reads
              as a flat lane and must not be confused with a quiet room. */
           'tx=' + roomTx + (roomWhy ? '(' + roomWhy.slice(0, 16) + ')' : '') +
+            ' vaud=' + vidAudState +
             ' ctx=' + (ctx ? ctx.state : 'none') + ' tap=' + yn(levelTap) +
             ' meter=' + (levelState === 'na' ? 'na'
                        : levelMeasuring()    ? 'live'
