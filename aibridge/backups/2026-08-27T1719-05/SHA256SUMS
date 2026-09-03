@@ -1,4 +1,16 @@
-79dfceaae066eac2e72cc12ff0ad638b60427394a0b479663edb7c0314a02284  shared/amicusbriefs/backups/2026-08-27T1719-05/repository-before-ios-firefox-fix.tar.gz
-bf57060b6f1a7ca53877cdc15a1a4d1cf2e9ffe6320f76791488f7653281472f  shared/amicusbriefs/backups/2026-08-27T1719-05/tanzania-live-index.html
-bf57060b6f1a7ca53877cdc15a1a4d1cf2e9ffe6320f76791488f7653281472f  shared/amicusbriefs/backups/2026-08-27T1719-05/tanzania-live-index-before-video-only-firefox-ios.html
-4c4aa2f480d08a6b996e21eb43fc4992b1d5b2933914a10f8bc5aa0b683a75e2  shared/amicusbriefs/backups/2026-08-27T1719-05/tanzania-live-index-before-firefox-ios-fps-watchdog.html
+# Regenerated 2026-09-02. Two entries were dropped from this manifest along
+# with their files:
+#
+#   repository-before-ios-firefox-fix.tar.gz  27 MB pre-change snapshot of the
+#       working tree. Its source is in git history; its .deb payloads are
+#       superseded by tagged releases; yolov8n.onnx is re-downloadable; its two
+#       shared/amicusbriefs/*.md were earlier, shorter drafts of the files now
+#       in ../../handoffs/. The only content that existed nowhere else was
+#       screenshots/ -- 20 annotated design-review captures, restored to
+#       ../../reference-screenshots/ before the tarball was removed.
+#
+#   tanzania-live-index-before-video-only-firefox-ios.html  byte-identical to
+#       tanzania-live-index.html (sha bf57060b...), so it recorded no state the
+#       other file did not.
+4c4aa2f480d08a6b996e21eb43fc4992b1d5b2933914a10f8bc5aa0b683a75e2  backups/2026-08-27T1719-05/tanzania-live-index-before-firefox-ios-fps-watchdog.html
+bf57060b6f1a7ca53877cdc15a1a4d1cf2e9ffe6320f76791488f7653281472f  backups/2026-08-27T1719-05/tanzania-live-index.html

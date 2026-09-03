@@ -14,3 +14,9 @@ compare-xdog/
 # art directory across two products is how a fork ends up branded as the thing
 # it forked from (see art/README.md).
 art/hls-lightcv-server.png
+
+# The AI staging area. Scratch, handoffs, and reference captures -- never
+# part of a release, and it holds camera frames that must not reach a public
+# repo. Untracked-but-not-ignored is how a `git add -A` sweeps a directory in
+# by accident; two such sweeps happened before this line existed.
+aibridge/
