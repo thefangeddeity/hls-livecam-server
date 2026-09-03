@@ -3757,6 +3757,39 @@
     return levelState === 'ok' && !!levelCtx && levelCtx.state === 'running';
   }
 
+  /* iOS refuses scripted playback volume: HTMLMediaElement.volume is
+     read-only there, the assignment is silently ignored, and the fader
+     becomes a knob that does nothing -- the exact class of dead control this
+     panel has spent three commits removing. It only became reachable now:
+     the gain node used to carry volume on iOS, and taking the graph out of
+     the audible path handed the job back to the element.
+
+     Feature-detected, not UA-sniffed: write a value, read it back, restore.
+     The probe step is 0.01 -- inaudible -- and it runs once. The slider is
+     left ENABLED and merely dimmed with an explanation, for the same reason
+     the microphone keys were: a control that cannot act must still be able
+     to say why, and disabling it takes away the tap that asks. */
+  var volSettable = null;
+  function probeVolume() {
+    if (volSettable !== null || !audio) return volSettable;
+    try {
+      var was   = audio.volume;
+      var probe = (was > 0.5) ? was - 0.01 : was + 0.01;
+      audio.volume = probe;
+      volSettable  = Math.abs(audio.volume - probe) < 0.0005;
+      audio.volume = was;
+    } catch (e) { volSettable = false; }
+    if (volSettable === false) {
+      var sl = document.getElementById('audioVol');
+      if (sl) {
+        sl.style.opacity = '0.45';
+        sl.title = 'This browser fixes playback volume to the device -- ' +
+                   'use the hardware volume buttons. MUTE still works.';
+      }
+    }
+    return volSettable;
+  }
+
   function paintLevelLabel() {
     var lab = document.getElementById('levelLab');
     if (!lab) return;
@@ -3816,6 +3849,7 @@
 
   function levelSample() {
     levelTapTry();
+    probeVolume();          // self-guards after the first call
     // Re-checked every tick, not just on state changes: a context can be
     // interrupted long after the tap was made and the legend has to follow.
     paintLevelLabel();
@@ -4025,7 +4059,11 @@
              volume that is actually in force rather than one of two. */
           'mute=' + yn(audioMuted) +
             ' vol=' + (sl ? sl.value : '-') +
-            ' elv=' + (el ? el.volume.toFixed(2) : '-'),
+            ' elv=' + (el ? el.volume.toFixed(2) : '-') +
+            /* volset=N means the fader cannot bite on this browser (iOS),
+               so elv will not follow vol and that is the platform, not a
+               bug in the slider. */
+            ' volset=' + (volSettable === null ? '?' : yn(volSettable)),
           '2w on=' + yn(twoWay.on) + ' busy=' + yn(twoWay.busy) +
             ' pub=' + pcState(twoWay.pub) + ' sub=' + pcState(twoWay.sub),
           /* What could not be determined remotely: which term of the old
