@@ -3497,6 +3497,7 @@
       if (pc) { try { pc.close(); } catch (e) {} }
     });
     twoWay.pub = twoWay.sub = null;
+    levelOutDetach();
     if (twoWay.stream) {
       twoWay.stream.getTracks().forEach(function (t) { t.stop(); });
       twoWay.stream = null;
@@ -3547,6 +3548,7 @@
       video: false
     }).then(function (stream) {
       twoWay.stream = stream;
+      levelOutAttach(stream);
 
       twoWay.pub = new RTCPeerConnection();
       stream.getTracks().forEach(function (t) { twoWay.pub.addTrack(t, stream); });
@@ -3837,6 +3839,63 @@
   var levelTries = 0;
   var levelHist  = new Array(120).fill(0);
 
+  /* ── THE OUT LANE ────────────────────────────────────────────────
+     One lane could only ever answer "is there sound", which is the wrong
+     question the moment a microphone is open: during TALK the room is
+     deliberately silenced at this end, so a single trace goes flat and looks
+     exactly like a dead channel at the one moment you most need to know your
+     voice is leaving. Divided, the flat half IS the answer -- the room is
+     meant to be quiet, and OUT moving proves the leg is live.
+
+     Tapped straight off the local stream, with no clone. The clone the room
+     lane needs is protection against WebKit taking an ELEMENT's audio when a
+     source node is built over the track it is rendering; the microphone is
+     rendered by nothing, it goes to a PeerConnection. There is no output here
+     to lose, so there is nothing to protect. */
+  var levelOutTap = null, levelOutAnalyser = null;
+  var levelOutHist = new Array(120).fill(0);
+
+  function levelOutAttach(stream) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !stream) return;
+    levelOutDetach();
+    try {
+      if (!levelCtx) {
+        levelCtx = new AC();
+        levelAnalyser = levelCtx.createAnalyser();
+        levelAnalyser.fftSize = 512;
+      }
+      levelOutAnalyser = levelCtx.createAnalyser();
+      levelOutAnalyser.fftSize = 512;
+      levelOutTap = levelCtx.createMediaStreamSource(stream);
+      levelOutTap.connect(levelOutAnalyser);   // analyser only, never output
+      levelResume();
+    } catch (e) {
+      levelOutTap = null; levelOutAnalyser = null;
+    }
+  }
+
+  function levelOutDetach() {
+    if (levelOutTap) { try { levelOutTap.disconnect(); } catch (e) {} }
+    levelOutTap = null;
+    levelOutAnalyser = null;
+    // Zeroed rather than frozen: a trace left holding its last values would
+    // go on showing a voice after the key was released.
+    for (var i = 0; i < levelOutHist.length; i++) levelOutHist[i] = 0;
+  }
+
+  function levelPeak(an) {
+    if (!an) return 0;
+    var buf = new Uint8Array(an.frequencyBinCount);
+    an.getByteTimeDomainData(buf);
+    var peak = 0;
+    for (var i = 0; i < buf.length; i++) {
+      var d = Math.abs(buf[i] - 128);
+      if (d > peak) peak = d;
+    }
+    return Math.min(1, peak / 128);
+  }
+
   /* Mute and volume. The element is the only stage there is now, which is
      what makes this safe: there is no second silencer that can be left in the
      wrong position by a graph that failed to start. */
@@ -3986,16 +4045,15 @@
     // interrupted long after the tap was made and the legend has to follow.
     paintLevelLabel();
     var v = 0;
-    if (levelMeasuring() && levelAnalyser) {
-      var buf = new Uint8Array(levelAnalyser.frequencyBinCount);
-      levelAnalyser.getByteTimeDomainData(buf);
-      var peak = 0;
-      for (var i = 0; i < buf.length; i++) {
-        var d = Math.abs(buf[i] - 128);
-        if (d > peak) peak = d;
-      }
-      v = Math.min(1, peak / 128);
+    if (levelMeasuring() && levelAnalyser) v = levelPeak(levelAnalyser);
+    // The OUT lane is gated on the microphone being open, not on levelMeasuring
+    // -- that answers a question about the ROOM tap, and the two can differ:
+    // the room can be unobservable while your own voice is perfectly readable.
+    var o = 0;
+    if (levelOutAnalyser && levelCtx && levelCtx.state === 'running') {
+      o = levelPeak(levelOutAnalyser);
     }
+    levelOutHist.push(o); levelOutHist.shift();
     // Honest flat, like the FPS trace at 0. TALK joins STOP here: this lane
     // measures what THIS viewer hears, and during TALK that is nothing.
     if (audioDir === 'stop' || audioDir === 'to') v = 0;
@@ -4007,30 +4065,46 @@
     if (!c || !c.getContext) return;
     var g = c.getContext('2d'), w = c.width, h = c.height;
     g.clearRect(0, 0, w, h);
-    var base = h - 12, top = 4, span = base - top, step = w / levelHist.length;
-
-    /* Not measuring -- unsupported, or a context that is not running: draw
-       the baseline and stop. A row of zero-height bars is indistinguishable
-       from a silent room, and the legend beside it already reads LEVEL N/A. */
-    if (!levelMeasuring()) {
-      g.fillStyle = 'rgba(142,142,147,.22)';
-      g.fillRect(0, base, w, 1);
-      return;
-    }
+    var base = h - 12, top = 4, step = w / levelHist.length;
+    // The line is the middle of the lane, not its floor: each direction gets
+    // half the height and grows away from it. Same 12px kept clear at the
+    // bottom so nothing is drawn through the LEVEL and 60s legends.
+    var mid = Math.round((top + base) / 2), half = mid - top;
 
     // Log scale, because hearing is. Speech near -30 dBFS is 3% of a linear
-    // height and indistinguishable from silence. Baseline lifted 12px so bars
-    // are not drawn through the LEVEL and 60s legends.
-    g.fillStyle = 'rgba(48,209,88,.55)';
-    for (var i = 0; i < levelHist.length; i++) {
-      var val = levelHist[i];
-      var db = val > 0 ? 20 * Math.log(val) / Math.LN10 : -100;
-      var f = Math.max(0, Math.min(1, (db + 60) / 60));
-      var bh = f > 0 ? Math.max(1, f * span) : 0;
-      if (bh) g.fillRect(i * step, base - bh, Math.max(1, step - 1), bh);
+    // height and reads as silence on a linear axis.
+    function bars(hist, colour, up) {
+      g.fillStyle = colour;
+      for (var i = 0; i < hist.length; i++) {
+        var val = hist[i];
+        if (!val) continue;
+        var db = 20 * Math.log(val) / Math.LN10;
+        var f = Math.max(0, Math.min(1, (db + 60) / 60));
+        if (f <= 0) continue;
+        var bh = Math.max(1, f * half);
+        g.fillRect(i * step, up ? mid - bh : mid + 1,
+                   Math.max(1, step - 1), bh);
+      }
     }
-    g.fillStyle = 'rgba(48,209,88,.18)';
-    g.fillRect(0, base, w, 1);
+
+    /* The room half can be unmeasurable while the microphone half is fine, so
+       they are drawn independently. Drawing zero-height bars for an
+       unobservable room would be indistinguishable from a silent one -- which
+       is the confusion the divided lane exists to end, not to repeat. */
+    if (levelMeasuring()) bars(levelHist, 'rgba(48,209,88,.55)', true);
+    bars(levelOutHist, 'rgba(255,159,10,.55)', false);
+
+    // Centre rule, and the two ends named. Without labels a mirrored trace is
+    // just a symmetrical squiggle: which half is you is the whole point.
+    g.fillStyle = 'rgba(142,142,147,.28)';
+    g.fillRect(0, mid, w, 1);
+    g.font = '9px ui-monospace, Menlo, monospace';
+    g.fillStyle = levelMeasuring() ? 'rgba(48,209,88,.55)'
+                                   : 'rgba(142,142,147,.35)';
+    g.fillText('IN', 3, mid - 3);
+    g.fillStyle = levelOutTap ? 'rgba(255,159,10,.65)'
+                              : 'rgba(142,142,147,.35)';
+    g.fillText('OUT', 3, mid + 10);
   }
 
   setInterval(function () { levelSample(); levelDraw(); }, 500);
