@@ -11,7 +11,13 @@ alpha channel is the mask, which makes the new icon geometrically identical to
 the one it replaces and to every other icon in the Dock. Only the artwork
 changes, which is the whole intent.
 
-Usage: make-app-icon.py --art ART.png --shape OLD_ICON.png --out NEW.png
+--zoom scales the artwork past the silhouette and centre-crops back to it, which
+trims the tile's own margin without touching the silhouette. The background field
+in this art is generous, so the lens reads small in the Dock at 32px; zooming the
+art is the fix, not shrinking the inset -- the inset is what makes the icon match
+its neighbours.
+
+Usage: make-app-icon.py --art ART.png --shape OLD_ICON.png --out NEW.png [--zoom 1.15]
 """
 import argparse
 from PIL import Image
@@ -23,6 +29,9 @@ def main():
     ap.add_argument('--art', required=True, help='source product artwork')
     ap.add_argument('--shape', required=True, help='existing icon to clone the silhouette from')
     ap.add_argument('--out', required=True)
+    ap.add_argument('--zoom', type=float, default=1.0,
+                    help='enlarge the art past the silhouette, then centre-crop '
+                         'back to it (1.15 trims ~6.5%% off each edge)')
     a = ap.parse_args()
 
     shape = Image.open(a.shape).convert('RGBA')
@@ -39,7 +48,16 @@ def main():
     art = Image.open(a.art).convert('RGB')
     # The source tile bleeds to its own edges, so scaling it to the silhouette's
     # bounding box lines the two up without cropping.
-    art = art.resize((side, side), Image.LANCZOS)
+    if a.zoom == 1.0:
+        art = art.resize((side, side), Image.LANCZOS)
+    else:
+        # Resample once, straight from the source at its native resolution, to
+        # the oversized square -- going via an already-rendered icon would cost
+        # a second resampling for no reason.
+        big = int(round(side * a.zoom))
+        art = art.resize((big, big), Image.LANCZOS)
+        off = (big - side) // 2
+        art = art.crop((off, off, off + side, off + side))
 
     canvas = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     canvas.paste(art, (left, top))
@@ -48,7 +66,7 @@ def main():
     canvas.putalpha(Image.fromarray(alpha))
     canvas.save(a.out, optimize=True)
     print(f'{a.out}: {W}x{H}, silhouette {side}x{side} inset {top}px, '
-          f'shape cloned from {a.shape}')
+          f'art zoom {a.zoom}, shape cloned from {a.shape}')
 
 
 if __name__ == '__main__':
