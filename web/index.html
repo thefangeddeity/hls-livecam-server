@@ -366,7 +366,24 @@
   .btn.buzz-btn:hover { background: #e0352b; border-color: #e0352b; }
   .btn.buzz-btn.muted { background: var(--panel-2); border-color: var(--border-strong); color: var(--text-muted); font-weight: 500; }
   .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+  /* Looks unavailable, still PRESSES. A disabled button cannot receive a
+     click, so it can never tell you why it is disabled -- and `title` is
+     hover-only, which on a phone means invisible. That combination shipped a
+     key that "literally won't push" with its explanation hidden where no
+     touch device can reach it. Dimmed to say "this will not work", live so
+     that pressing it prints the actual reason on screen. */
+  .btn.unavail { opacity: 0.5; }
   .btn[hidden] { display: none; }
+  /* The audio bank's own status line. Every note this panel produces --
+     "connecting...", a refused microphone, a browser that has no
+     getUserMedia -- used to go to a title attribute and was therefore
+     invisible on the device most likely to hit it. */
+  .audionote {
+    font-size: 10.5px; line-height: 1.35; margin: 7px 2px 0;
+    color: var(--text-muted); min-height: 14px;
+  }
+  .audionote.warn { color: var(--warn); }
+  .audionote:empty { display: none; }
 
   /* ── CONTROLS STACK ── */
 
@@ -1528,6 +1545,11 @@
                   title="Two-way audio with the room">2-Way</button>
         </div>
 
+        <!-- Where the audio bank says what just happened. On a phone this is
+             the ONLY channel that works: there is no hover for a title, and
+             nobody is holding a console. -->
+        <div class="audionote" id="audioNote" aria-live="polite"></div>
+
         <!-- The counterpart to VIDEO's FPS trace: what is actually being
              heard, last 60s, drawn from the audio itself via WebAudio rather
              than from a bitrate -- bytes moving says the pipe is up, not that
@@ -1573,7 +1595,11 @@
              CALL summons someone who is not. Neither is a mode, so neither
              takes a lamp. -->
         <div class="modemrow">
-          <button class="reset" id="audioReloadBtn"
+          <!-- type="button" to match its video twin #reconnectBtn. There is no
+               <form> in this document so the default submit type was inert,
+               but the asymmetry was unintentional and a form added later would
+               have turned this into a page reload. -->
+          <button type="button" class="reset" id="audioReloadBtn"
                   title="Repair audio -- restarts the room audio stream"
                   aria-label="Repair audio"><span class="pin"></span></button>
           <span class="eng rstlab">Reset</span>
@@ -1602,7 +1628,13 @@
           </button>
         </div>
 
-        <span id="audioStatus" aria-live="polite" hidden></span>
+        <!-- Was `hidden`, and nothing ever removed the attribute -- so every
+             message setAudioState() has ever written ("Tap to enable",
+             "Audio unavailable", "Audio unsupported") was composed and then
+             thrown away. Those are precisely the strings a viewer needs when
+             the room will not play, so the element is visible now; it stays
+             empty until there is something to say. -->
+        <span class="audionote" id="audioStatus" aria-live="polite"></span>
       </div>
 
       <!-- ══ MESSAGE ════════════════════════════════════════════════ -->
@@ -2821,6 +2853,17 @@
     if (status) status.textContent = text;
   }
 
+  /* The audio bank's visible note line. Everything the transport wants to
+     say goes here as well as to `title`, because `title` needs a pointer to
+     hover and the device that hits these failures hardest has none.
+     `warn` is for a state the viewer has to act on; plain for progress. */
+  var audioNoteEl = document.getElementById('audioNote');
+  function audioNote(text, warn) {
+    if (!audioNoteEl) return;
+    audioNoteEl.textContent = text || '';
+    audioNoteEl.classList.toggle('warn', !!warn);
+  }
+
   /*
    * Mic, MediaMTX and RTSP are server-side facts a browser cannot observe for
    * itself, so broadcast-api measures them and reports them at /api/pipeline.
@@ -2977,9 +3020,12 @@
      reach for next. */
   function setMuted(muted) {
     audioMuted  = muted;
-    // Only without a WebAudio graph: muting the element would also silence
-    // the analyser and flatten the trace for a reason unrelated to the room.
-    audio.muted = levelGain ? false : muted;
+    /* applyGainNode() owns the element's .muted now. It has to: whether
+       muting belongs on the element or on the gain node depends on whether
+       the graph has taken the element yet, and that is a question with one
+       correct answer that should not be duplicated at each call site. This
+       line used to test levelGain, which goes true too early -- see the note
+       in applyGainNode. */
     applyGainNode();
     /* Unmuting is a user gesture, and the only moment a refused autoplay can
        be retried. This is not the old "unmute implies play" behaviour coming
@@ -3036,7 +3082,14 @@
        to audio.volume throws. Reject it before it reaches the element. */
     if (!isFinite(v)) return;
     v = Math.max(0, Math.min(100, v));
-    audio.volume = v / 100;
+    /* Routed through applyGainNode rather than set on the element here.
+       Once the WebAudio graph has the element, the gain node carries volume;
+       setting it on the element as well applied the slider TWICE -- the two
+       stages multiply, so 50% came out at 25% and the fader felt wrong at the
+       bottom of its travel. applyGainNode puts the value on whichever stage
+       is actually in the path. Both callers set volEl.value first, so it
+       reads the settled position. */
+    applyGainNode();
     if (persist) {
       try { localStorage.setItem('hls-livecam-volume', String(v)); } catch (e) {}
     }
@@ -3223,10 +3276,50 @@
   var TWOWAY_MAX_SECONDS = 600;
 
   function twoWayBase() {
-    // Direct to mediamtx on 8889. Not through this page's origin: the /hls
-    // prefix is already spoken for by Tailscale Serve, and a proxy that must
-    // be taught WebRTC's header set is worse than no proxy.
+    /* mediamtx serves :8889 over PLAIN HTTP only. Tailscale Serve terminates
+       TLS on 443 and proxies :8080 and :8888; it does not front :8889 at all,
+       so from the tailnet the old URL below resolved to
+       https://<host>:8889/... and died at the socket before any SDP was sent:
+
+         curl https://ariana.humboldt-polaris.ts.net:8889/roomaudio/whep
+         -> 000 (no TLS listener)
+
+       Exactly the failure MASTER_URL already documents for :8888, and the
+       fix is the same one: go through the origin. Serve strips the mount
+       prefix, so /webrtc/talkback/whip arrives at mediamtx as
+       /talkback/whip -- verified the same way /hls/cam/index.m3u8 arrives as
+       /cam/index.m3u8 and returns 200.
+
+       Only over https. Reached directly on http://<host>:8080 there is no
+       proxy in front of anything and :8889 is the correct, reachable
+       address -- the same split MASTER_URL would need if it were ever
+       served without Serve. */
+    if (window.location.protocol === 'https:') {
+      return window.location.origin + '/webrtc';
+    }
     return window.location.protocol + '//' + window.location.hostname + ':8889';
+  }
+
+  /* Turn the session URL mediamtx hands back into one that can be reached
+     again from here.
+
+     mediamtx answers a successful WHIP/WHEP POST with a ROOT-RELATIVE
+     Location -- "/roomaudio/whep/<uuid>" -- which is rooted at mediamtx's own
+     origin and knows nothing about the /webrtc mount the request arrived
+     through. Used as-is from the page it resolves against the page origin,
+     i.e. https://<host>/roomaudio/whep/<uuid>, which Serve routes to
+     broadcast-api on :8080. Verified: that URL answers 405, so the DELETE
+     that ends a call was never reaching mediamtx at all and every session
+     was left for the server to time out.
+
+     new URL(loc, requestUrl) does NOT fix this: a root-relative path
+     replaces the whole path, so the /webrtc prefix is dropped again. The
+     base has to be re-applied deliberately. */
+  function twoWayResolve(loc, url) {
+    if (!loc) return null;
+    if (/^https?:\/\//i.test(loc)) return loc;      // already absolute
+    if (loc.charAt(0) === '/') return twoWayBase() + loc;
+    try { return new URL(loc, url).href; } catch (e) { return null; }
   }
 
   function whipWhep(url, pc, dir) {
@@ -3242,7 +3335,7 @@
       if (res.status !== 201) {
         throw new Error(dir + ' refused: HTTP ' + res.status);
       }
-      var loc = res.headers.get('Location');
+      var loc = twoWayResolve(res.headers.get('Location'), url);
       return res.text().then(function (sdp) {
         return pc.setRemoteDescription(
           new RTCSessionDescription({ type: 'answer', sdp: sdp })
@@ -3251,12 +3344,40 @@
     });
   }
 
-  function twoWaySupported() {
-    // isSecureContext is the one that bites: over plain http the browser
-    // refuses the microphone outright, and says so only in the console.
-    return !!(window.isSecureContext && navigator.mediaDevices &&
-              navigator.mediaDevices.getUserMedia && window.RTCPeerConnection);
+  /* Returns null when a microphone session is possible, otherwise the reason
+     it is not -- as a sentence a viewer can read.
+
+     It returns the REASON rather than a boolean because the boolean is what
+     made these keys mysterious: four different causes collapsed into one
+     "unavailable" that was then attached to `title`, where no touch device
+     can see it. Naming the failing term also settles by observation, on the
+     phone that actually has the problem, which term is false in Firefox for
+     iOS -- rather than by guessing here. Order matters: check the cheap,
+     deployment-level cause first so it is not misreported as a browser
+     limitation. */
+  function micBlocker() {
+    if (!window.isSecureContext) {
+      return 'needs a secure (https) connection';
+    }
+    if (!window.RTCPeerConnection) {
+      return 'this browser has no WebRTC';
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      /* iOS runs every browser on WebKit, but only some of them are handed
+         the microphone: getUserMedia lives behind an embedder permission
+         that Safari grants itself and third-party browsers have
+         historically not had. So this is a per-app limitation, not an iOS
+         one, and "use Safari" is the actionable half of the message. */
+      return 'this browser will not open a microphone. On iOS, try Safari.';
+    }
+    return null;
   }
+
+  /* twoWaySupported() used to live here and is deliberately gone. It returned
+     a bare boolean, and every caller that had one immediately needed the
+     reason it was false -- which is how the reason ended up in a `title` and
+     the key ended up unpressable. micBlocker() is the single source of truth;
+     `!micBlocker()` is the boolean, for anyone who genuinely only needs that. */
 
   // nextMode is where this teardown is GOING, and it has to be passed in.
   // Switching Talk <-> 2-Way tears down before it builds up, and a teardown
@@ -3298,7 +3419,17 @@
   }
 
   function startTwoWay(mode) {
-    if (!twoWaySupported()) { paintAudioModes(); return; }
+    /* Was a bare `return` after a repaint: the key had already been made
+       unpressable by the same condition, so on the one browser where it
+       still got here the press produced nothing at all. Say it instead --
+       this is the path a viewer reaches by tapping a dimmed key, and the
+       answer to "why won't this work" has to land on the screen. */
+    var blocked = micBlocker();
+    if (blocked) {
+      paintAudioModes((mode === 'to' ? 'Talk' : '2-Way') +
+                      ' unavailable: ' + blocked);
+      return;
+    }
     twoWay.busy = true;
     paintAudioModes('connecting...');
 
@@ -3367,11 +3498,17 @@
       paintTransport();
     }).catch(function (err) {
       twoWay.busy = false;
-      // A refusal here is nearly always one of two things, and naming which
-      // saves somebody opening the wrong file.
-      var msg = (err && err.name === 'NotAllowedError')
-        ? 'microphone permission refused'
-        : (err && err.message) || 'could not connect';
+      /* Name the cause. A bare err.message here is usually WebKit's "Load
+         failed" for a fetch that never reached anyone, which sends the
+         reader looking for a microphone problem when the signalling URL was
+         simply unreachable -- the exact confusion the :8889 bug produced. */
+      var name = (err && err.name) || '';
+      var msg;
+      if (name === 'NotAllowedError')      msg = 'microphone permission refused';
+      else if (name === 'NotFoundError')   msg = 'no microphone on this device';
+      else if (name === 'NotReadableError') msg = 'the microphone is in use by another app';
+      else if (name === 'TypeError')       msg = 'could not reach the audio service at ' + twoWayBase();
+      else msg = (err && err.message) || 'could not connect';
       stopTwoWay(msg, 'stop');
     });
   }
@@ -3402,7 +3539,8 @@
   var audioDir = 'stop';   // 'play' | 'stop' | 'to' | 'two-way'
 
   function paintAudioModes(note) {
-    var micOk = twoWaySupported();
+    var blocker = micBlocker();
+    var micOk = !blocker;
     [['audioPlayBtn', 'play'], ['audioStopBtn', 'stop'],
      ['toRoomButton', 'to'],   ['talkButton', 'two-way']].forEach(function (e) {
       var b = document.getElementById(e[0]);
@@ -3412,13 +3550,26 @@
       b.className = 'btn'
         + (e[1] === 'stop' ? ' guarded' : '')
         + (audioDir === e[1] ? ' pressed' : '');
-      // The two microphone keys are the only ones that can be genuinely
-      // unavailable: getUserMedia needs a secure context. A key that looks
-      // live but cannot open a microphone is worse than one that says so.
+      /* The two microphone keys are the only ones that can be genuinely
+         unavailable, and they are NOT disabled for it any more.
+
+         `b.disabled = !micOk` is what the user hit as "2-Way and Talk
+         literally won't push". The intent was right -- a key that looks live
+         but cannot open a microphone is worse than one that says so -- but
+         the execution said so in `title`, and a title needs hover. On a
+         phone there is no hover and a disabled button does not even receive
+         the tap, so the key could not be pressed AND could not explain
+         itself: the two failures reinforced each other.
+
+         Now it presses, dims to signal that it will not work, and prints the
+         reason on the note line when tapped. `aria-disabled` keeps the
+         meaning for assistive tech without taking the click away. */
       if (e[1] === 'to' || e[1] === 'two-way') {
-        b.disabled = !micOk || twoWay.busy;
+        b.disabled = false;
+        b.classList.toggle('unavail', !micOk);
+        b.setAttribute('aria-disabled', micOk ? 'false' : 'true');
         b.title = !micOk
-          ? 'Needs https and microphone permission'
+          ? 'Unavailable: ' + blocker
           : (note || (e[1] === 'to'
               ? 'Talk to the room -- your voice out, room audio held'
               : 'Two-way audio with the room'));
@@ -3427,6 +3578,14 @@
     indicator(document.getElementById('indTalk'), twoWay.on);
     var lab = document.getElementById('levelLab');
     if (lab) lab.textContent = 'LEVEL';
+    /* A note passed in is always something that just happened -- "connecting",
+       a refusal, a session that timed out -- so it wins the line. With no note
+       the line reports the standing limitation if there is one, and is
+       otherwise empty. It used to reach `title` only, which is why a refused
+       microphone looked identical to a key that did nothing. */
+    // Trailing "..." marks progress rather than trouble, so it stays plain.
+    if (note) audioNote(note, !/\.\.\.$/.test(note));
+    else audioNote(blocker ? 'Talk / 2-Way: ' + blocker : '', !!blocker);
   }
 
   /* No early return on an unchanged mode. `audioDir` starts at 'play' while
@@ -3471,6 +3630,54 @@
     });
   })();
 
+  /* AUDIO RESET -- previously markup only.
+     #audioReloadBtn had no listener and no onclick: the whole file contained
+     exactly one reference to it, the <button> itself. It was the worst of the
+     three dead controls on this panel, because .reset:active gives it a real
+     pressed animation -- it acknowledged every tap and did nothing, so it
+     read as "repair tried, did not help" rather than "not wired".
+
+     Its video twin #reconnectBtn is wired inline as onclick="reloadStream()",
+     which works because that function is global. This block is inside an
+     IIFE, so an inline attribute could never reach anything here -- hence
+     addEventListener, matching how the transport keys above are bound.
+
+     Order matters. Drop a live call first (it holds the microphone and has
+     pushed HLS aside), then tear down hls.js, then rebuild from a clean
+     element. */
+  function resetAudio() {
+    if (twoWay.on || twoWay.busy) {
+      twoWay.busy = false;
+      stopTwoWay('reset', 'stop');
+    }
+    try { if (hlsAudio) { hlsAudio.destroy(); hlsAudio = null; } } catch (e) {}
+    try {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();              // drops the old buffer; the graph survives
+    } catch (e) {}
+
+    /* The usual reason someone reaches for this key is that the room went
+       silent, and on iOS the usual reason for THAT is a suspended
+       AudioContext. This runs inside a click, which is the only context
+       allowed to resume one -- so Reset genuinely recovers the
+       spike-then-silence state rather than rebuilding into it.
+       The element itself is deliberately NOT re-created: its
+       MediaElementSource cannot be detached or made a second time, so a
+       fresh element would leave the graph feeding a corpse. */
+    levelResume();
+
+    stage(hlsLed, 'pending');
+    audioNote('restarting room audio...');
+    resolveAudioUrl(startAudio);   // startAudio() calls beginIfPlaying()
+    paintTransport();
+  }
+
+  (function () {
+    var rb = document.getElementById('audioReloadBtn');
+    if (rb) rb.addEventListener('click', resetAudio);
+  })();
+
   // ── Level trace ───────────────────────────────────────────────────────
   //
   // Drawn from the audio itself, not from a bitrate: bytes moving says the
@@ -3493,35 +3700,118 @@
   var levelHist = new Array(120).fill(0);
 
   function applyGainNode() {
-    if (!levelGain) return;
     var v = 1, sl = document.getElementById('audioVol');
     if (sl) v = Math.max(0, Math.min(1, (parseFloat(sl.value) || 0) / 100));
     // TALK is one-way OUT, so the room is as silent here as it is under
     // STOP -- for a different reason: not "nothing is open" but "what is open
     // points the other way", and leaving it audible is the echo path.
-    levelGain.gain.value =
-      (audioMuted || audioDir === 'stop' || audioDir === 'to') ? 0 : v;
+    var silent = (audioMuted || audioDir === 'stop' || audioDir === 'to');
+
+    /* TWO silencers, and exactly one of them is live at any moment. Which one
+       depends on whether the graph has actually TAKEN the element, and the
+       test for that is levelSrcEl -- the source node -- not levelGain.
+
+       levelGain now exists from the moment the AudioContext is constructed,
+       which can be well before the source is attached (see levelAttach: on
+       WebKit the attach waits for the context to be running). During that
+       window the gain node is connected to destination but nothing feeds it,
+       so setting gain to 0 silences nothing and the element -- still routed
+       straight to the speakers -- would keep playing through a lit MUTE key.
+       Keying off the source node closes that window. */
+    if (levelSrcEl && levelGain) {
+      audio.muted  = false;         // the gain node owns silence now
+      /* ...and it owns volume too, so the element is pinned back to unity.
+         WebKit scales a MediaElementSource's output by the element's own
+         volume, so leaving the slider value on the element here would apply
+         it twice -- and it WOULD be left over: the branch below sets it while
+         the graph is still detaching-or-waiting, which is the normal state
+         for the first moment of playback on iOS. */
+      audio.volume = 1;
+      levelGain.gain.value = silent ? 0 : v;
+    } else {
+      audio.muted  = silent;        // no graph in the path: the element owns it
+      audio.volume = v;
+    }
   }
 
-  function levelAttach(el) {
-    if (!el || levelSrcEl === el) return;
-    try {
-      if (!levelCtx) {
-        var AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return;
+  /* Build the context and its permanent nodes, but attach nothing to it. */
+  function levelEnsureCtx() {
+    if (!levelCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      try {
         levelCtx = new AC();
         levelAnalyser = levelCtx.createAnalyser();
         levelAnalyser.fftSize = 512;
         levelGain = levelCtx.createGain();
         levelGain.connect(levelCtx.destination);
-      }
-      var src = levelCtx.createMediaElementSource(el);
+      } catch (e) { levelCtx = null; return null; }
+      /* The attach is deferred until the context runs, and resume() resolves
+         asynchronously -- so this is what actually performs the attach in the
+         normal iOS case. Without it the graph would wait for a SECOND tap. */
+      levelCtx.onstatechange = function () {
+        if (levelCtx && levelCtx.state === 'running') levelAttach(audio);
+      };
+    }
+    return levelCtx;
+  }
+
+  /* Only ever called from inside a click handler -- that is the whole point.
+     iOS WebKit will not start an AudioContext outside a user gesture. */
+  function levelResume() {
+    var ctx = levelEnsureCtx();
+    if (!ctx) return null;
+    if (ctx.state === 'suspended') {
+      try {
+        var p = ctx.resume();
+        if (p && p.catch) p.catch(function () {});
+      } catch (e) { /* older WebKit resume() is callback-style */ }
+    }
+    return ctx;
+  }
+
+  function levelAttach(el) {
+    if (!el || levelSrcEl === el) return;
+    var ctx = levelEnsureCtx();
+    if (!ctx) return;
+
+    /* THE "SPIKE, THEN SILENCE" BUG, AND WHY THIS WAITS.
+       createMediaElementSource does not tap an element, it INTERCEPTS it:
+       from the moment it is called, the element's only route to the speakers
+       is through this graph. On iOS WebKit a newly constructed AudioContext
+       is ALWAYS 'suspended' -- constructing it inside a user gesture is not
+       enough, only resume() clears it -- so attaching while suspended hands
+       the room to a graph that is not running, and the sound stops dead.
+
+       That is precisely what shipped. The old document click handler read:
+
+           if (levelCtx && levelCtx.state === 'suspended') levelCtx.resume();
+           levelAttach(audio);
+
+       On the FIRST click levelCtx was still null, so the resume() line was
+       skipped -- and levelAttach then CREATED the context (suspended) and
+       immediately attached to it. Meanwhile the button's own listener had
+       already run play(), because a listener on the target fires before one
+       bubbling to document. So the element started, was briefly audible
+       straight to the speakers, and was then taken away by a dead graph:
+       a quick spike, then silence. It never reproduced on desktop, where a
+       context created in a gesture starts 'running'.
+
+       The fix is to refuse to intercept until the context is genuinely
+       running. Interception cannot be undone -- there is no API to give an
+       element its direct output back -- so the only safe order is to be sure
+       first. While we wait, the element plays normally on its own. */
+    if (ctx.state !== 'running') { levelResume(); return; }
+
+    try {
+      var src = ctx.createMediaElementSource(el);
       src.connect(levelAnalyser);
       src.connect(levelGain);      // NOT optional -- the only path to output
-      el.muted = false;            // the gain node owns silence now
       levelSrcEl = el;
-      applyGainNode();
-    } catch (e) { /* already attached, or not analysable */ }
+    } catch (e) {
+      return;                      // already attached, or not analysable
+    }
+    applyGainNode();               // hands silence to the gain node
   }
 
   function levelSample() {
@@ -3565,11 +3855,19 @@
 
   setInterval(function () { levelSample(); levelDraw(); }, 500);
 
-  // A gesture is what lets an AudioContext run at all; every key is one.
+  /* A gesture is what lets an AudioContext run at all; every key is one.
+
+     CAPTURE phase, deliberately. In the bubble phase this ran AFTER the
+     transport key's own listener had already called play(), which is half of
+     what made the old bug audible as a spike. Capturing on document puts the
+     resume() ahead of every button handler on the page, so by the time PLAY
+     starts the element the context is already on its way up -- and the attach
+     either happens before playback or, more usually, lands via onstatechange
+     a moment later without interrupting it. */
   document.addEventListener('click', function () {
-    if (levelCtx && levelCtx.state === 'suspended') levelCtx.resume();
+    levelResume();
     levelAttach(audio);
-  });
+  }, true);
   (function () {
     var sl = document.getElementById('audioVol');
     if (sl) sl.addEventListener('input', applyGainNode);
