@@ -3240,7 +3240,110 @@
     setAudioState('Audio unsupported');
   }
 
-  resolveAudioUrl(startAudio);
+  /* ── ROOM AUDIO TRANSPORT: WHEP FIRST, HLS AS THE FALLBACK ──────────
+     Three reasons, in the order of what they cost the viewer.
+
+     1. HLS produced "a brief burst of sound, then silence" on Firefox for
+        iOS, with the element healthy throughout -- readyState 4, currentTime
+        advancing, no MediaError, no AudioContext anywhere near it. The page
+        loads the room TWICE over HLS: the muted <video> already carries the
+        audio track (see MASTER_URL) and #roomAudioPlayer fetches it again.
+        iOS grants the audio session to one element at a time, and an element
+        that has lost it goes on advancing silently -- which is exactly the
+        reading we got, and why every fix aimed at the element missed.
+     2. WebKit implements no captureStream() on media elements, so the LEVEL
+        meter had no lawful way to observe an HLS element and read N/A on the
+        phone. A WebRTC MediaStream CAN be observed, with
+        createMediaStreamSource. This is what puts the graph back.
+     3. It is the transport the conferencing stack uses for exactly this.
+
+     THE STREAM IS ATTACHED TWICE, DELIBERATELY, AND NEVER AS THE SAME TRACK.
+     srcObject carries the audible path; the meter gets a CLONE. A WebKit
+     MediaStreamAudioSourceNode built over a track an element is also
+     rendering can take the audio with it -- the same interception trap that
+     createMediaElementSource set, arriving by another door. The clone keeps
+     the observer genuinely separate, and if cloning is unavailable the meter
+     is skipped rather than risked. Sound outranks instrumentation. */
+  var roomPc = null, roomLoc = null, roomTx = 'none', roomWhy = '';
+
+  function roomStop() {
+    // The session is ended server-side on the way out. mediamtx otherwise
+    // holds it until its own timeout, which is how the earlier Location bug
+    // leaked one session per call.
+    if (roomLoc) {
+      try { fetch(roomLoc, { method: 'DELETE', keepalive: true }); } catch (e) {}
+      roomLoc = null;
+    }
+    if (roomPc) { try { roomPc.close(); } catch (e) {} roomPc = null; }
+    try { if (audio.srcObject) audio.srcObject = null; } catch (e) {}
+  }
+
+  function roomWhep(onFail) {
+    if (!window.RTCPeerConnection) { onFail('no webrtc'); return; }
+    if (!window.isSecureContext)   { onFail('not secure'); return; }
+
+    var pc, settled = false, timer = null;
+    function fail(why) {
+      if (settled) return;
+      settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      roomStop();
+      onFail(why);
+    }
+
+    try { pc = new RTCPeerConnection({ iceServers: [] }); }
+    catch (e) { onFail('pc: ' + ((e && e.message) || '?')); return; }
+    roomPc = pc;
+    try { pc.addTransceiver('audio', { direction: 'recvonly' }); }
+    catch (e) { fail('transceiver'); return; }
+
+    /* A handshake can answer 201 and then deliver nothing -- ICE blocked,
+       path not publishing. Silence that never resolves is the failure this
+       whole exercise was about, so it is bounded and falls back instead. */
+    timer = setTimeout(function () { fail('no media in 8s'); }, 8000);
+
+    pc.ontrack = function (ev) {
+      if (settled) return;
+      settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      var stream = (ev.streams && ev.streams[0]) || new MediaStream([ev.track]);
+      roomTx = 'whep';
+      // src and srcObject are mutually exclusive; a stale src wins on some
+      // engines and would quietly put us back on HLS.
+      try { audio.removeAttribute('src'); } catch (e) {}
+      try { audio.srcObject = stream; } catch (e) { fail('srcObject'); return; }
+      stage(hlsLed, 'ok');
+      setAudioState('Room audio');
+      try {
+        var t = stream.getAudioTracks()[0];
+        if (t && t.clone) levelTapStream(new MediaStream([t.clone()]));
+      } catch (e) { /* meter only; never fatal */ }
+      beginIfPlaying();
+    };
+
+    whipWhep(twoWayBase() + '/roomaudio/whep', pc, 'room audio')
+      .then(function (loc) { roomLoc = loc; })
+      .catch(function (err) { fail((err && err.message) || 'whep failed'); });
+  }
+
+  /* Started at LOAD, not on the PLAY key, and the ordering is the point: the
+     handshake is asynchronous, so a transport begun inside the tap would land
+     its play() outside the gesture that authorised it, and iOS would refuse.
+     Establishing early means PLAY is a bare play() on an attached stream, in
+     the gesture, every time. Nothing is audible meanwhile -- the transport
+     opens paused, and audioDir defaults to 'stop'. */
+  function startRoomTransport() {
+    roomStop();
+    roomTx = 'none';
+    roomWhy = '';
+    roomWhep(function (why) {
+      roomTx = 'hls';
+      roomWhy = why || 'whep failed';
+      resolveAudioUrl(startAudio);
+    });
+  }
+
+  startRoomTransport();
 
   // ── TALK and 2-WAY ────────────────────────────────────
   //
@@ -3405,7 +3508,7 @@
     // Room audio returns to HLS only if that is where we are headed.
     try {
       if (audioDir === 'play' && !twoWay.wasSilent) {
-        resolveAudioUrl(startAudio);
+        startRoomTransport();
       } else if (audio) {
         try { audio.pause(); } catch (e) {}
       }
@@ -3668,7 +3771,7 @@
 
     stage(hlsLed, 'pending');
     audioNote('restarting room audio...');
-    resolveAudioUrl(startAudio);   // startAudio() calls beginIfPlaying()
+    startRoomTransport();          // WHEP first, HLS fallback
     paintTransport();
   }
 
@@ -3803,7 +3906,36 @@
   /* Best effort, and every failure path is deliberately quiet: by
      construction nothing in here can change what the viewer hears, so a
      meter that cannot start is a cosmetic loss and is reported as one. */
+
+  /* Observes a MediaStream we were handed, rather than one taken off an
+     element. This is the WHEP path's meter, and the reason iOS has a graph
+     again: WebKit has no captureStream() on media elements but does implement
+     createMediaStreamSource. Connected to the analyser and to NOTHING else --
+     the audible path does not come through here and must not be able to. */
+  function levelTapStream(stream) {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !stream) return;
+    if (levelTap) { try { levelTap.disconnect(); } catch (e) {} levelTap = null; }
+    try {
+      if (!levelCtx) {
+        levelCtx = new AC();
+        levelAnalyser = levelCtx.createAnalyser();
+        levelAnalyser.fftSize = 512;
+      }
+      levelTap = levelCtx.createMediaStreamSource(stream);
+      levelTap.connect(levelAnalyser);
+      levelState = 'ok';
+      levelResume();
+    } catch (e) {
+      levelState = 'na';
+    }
+    paintLevelLabel();
+  }
+
   function levelTapTry() {
+    // WHEP owns the meter when it is carrying the room: the element has
+    // no captureStream to give, and asking would only mark it 'na'.
+    if (roomTx === 'whep') return;
     if (levelTap || levelState === 'na' || !audio) return;
     var grab = audio.captureStream || audio.mozCaptureStream;
     var AC   = window.AudioContext || window.webkitAudioContext;
@@ -4051,7 +4183,8 @@
           /* meter distinguishes "tapped" from "measuring": stalled means the
              observer is wired up but its context is not running, which reads
              as a flat lane and must not be confused with a quiet room. */
-          'ctx=' + (ctx ? ctx.state : 'none') + ' tap=' + yn(levelTap) +
+          'tx=' + roomTx + (roomWhy ? '(' + roomWhy.slice(0, 16) + ')' : '') +
+            ' ctx=' + (ctx ? ctx.state : 'none') + ' tap=' + yn(levelTap) +
             ' meter=' + (levelState === 'na' ? 'na'
                        : levelMeasuring()    ? 'live'
                        : levelTap            ? 'stalled' : 'idle'),
