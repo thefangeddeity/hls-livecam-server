@@ -140,7 +140,7 @@ hlsSegmentDuration: 1s
 paths:
   cam:
   # The reverse direction, published by a browser and read by the node's
-  # speaker player. Separate from `cam` on purpose: opposite direction,
+  # speaker player. Separate from \`cam\` on purpose: opposite direction,
   # opposite lifetime -- \`cam\` is up as long as the node is, \`talkback\`
   # exists only while somebody holds a key -- and publishing the reverse leg
   # into \`cam\` would put a viewer's microphone into the stream everyone is
