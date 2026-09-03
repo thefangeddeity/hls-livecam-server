@@ -395,6 +395,11 @@ mkdir -p "$WEB_ROOT"
 mkdir -p "$LIB_DIR"
 
 # Copy web viewer
+mkdir -p "$WEB_ROOT/vendor"
+# The page loads its player from here rather than from cdnjs, so this
+# copy is not optional decoration: without it the viewer has no hls.js
+# on any browser without native HLS.
+cp /usr/share/hls-livecam-server/vendor/hls.min.js "$WEB_ROOT/vendor/hls.min.js"
 cp /usr/share/hls-livecam-server/index.html "$WEB_ROOT/index.html"
 sed -i "s/@HOSTNAME@/$HOSTNAME_VAL/g" "$WEB_ROOT/index.html"
 

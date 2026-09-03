@@ -4,7 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HLS Livecam</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
+<!-- Vendored, not from cdnjs. Fetching the player from the public internet
+     makes rendering this page depend on the CLIENT's egress rather than
+     this node's, and a phone on a captive or filtered network gets a blank
+     viewer for a camera that is working perfectly. It also failed OPEN in
+     the worst way: see the Hls guards below. -->
+<script src="/vendor/hls.min.js"></script>
 <style>
   :root {
     --bg: #111113;
@@ -1512,7 +1517,13 @@
     var h = (window.location.hostname || '').split('.')[0];
     document.title = (h ? h.charAt(0).toUpperCase() + h.slice(1) + ' | ' : '') + 'HLSLS';
   });
-  if (protoEl) protoEl.textContent = Hls.isSupported() ? 'HLS.js' : 'Native';
+  /* window.Hls, not Hls: if the script tag above failed to load, a bare
+     identifier here throws ReferenceError and takes the REST OF THE PAGE'S
+     JAVASCRIPT with it -- controls, polling, everything -- for what is only
+     a status label. Guarded, a missing player degrades to native HLS, which
+     is what iOS wanted anyway. */
+  if (protoEl) protoEl.textContent =
+    (window.Hls && Hls.isSupported()) ? 'HLS.js' : 'Native';
 
   // ── BUZZ ──
   var buzzMuted = localStorage.getItem('buzzMuted') === 'true';
@@ -2186,7 +2197,14 @@
   }
 
   function setFeedMode(mode) {
-    if (mode === feedMode) return;
+    /* Pressing the key that is already lit used to do nothing at all. That is
+       defensible as a state machine and useless as a control: the one moment
+       a viewer reaches for the lit key is when the picture has died while the
+       server still believes the mode is fine, and a bare return is the page
+       refusing to help at exactly that moment. The mode is already correct,
+       so there is nothing to POST -- but the stream is reloaded, which is
+       what the press meant. */
+    if (mode === feedMode) { reloadStream(); return; }
     coverFor(mode);
     var nightBtn = document.getElementById('nightBtn');
     showBtn.disabled = true; cvBtn.disabled = true; hideBtn.disabled = true;
@@ -2320,19 +2338,36 @@
     if (hls) { hls.destroy(); hls = null; }
     setStatus('CONNECTING');
 
-    if (!Hls.isSupported()) {
-      if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = HLS_URL;
-        video.load();
-        video.play().catch(function() {
-          video.addEventListener('click', function handler() {
-            video.play().catch(function(){});
-            video.removeEventListener('click', handler);
-          });
+    /* NATIVE FIRST. This asked hls.js first and fell back to native, which
+       was correct when iOS had no MSE: Hls.isSupported() returned false there,
+       so Safari reached the native path anyway. iOS 17.1 shipped MSE, so that
+       test now returns TRUE on a phone and hands iOS the Media Source path --
+       more buffering, more battery, and the engine's own HLS stack, the better
+       one on that platform, left unused.
+
+       Asking what the browser can play natively BEFORE asking what hls.js can
+       emulate puts every Apple device back on its own decoder, and leaves
+       hls.js doing the job it exists for: browsers with no native HLS. */
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = HLS_URL;
+      video.load();
+      video.play().catch(function() {
+        video.addEventListener('click', function handler() {
+          video.play().catch(function(){});
+          video.removeEventListener('click', handler);
         });
-        video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live');; }, { once: true });
-        video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
-      } else { setStatus('UNSUPPORTED'); showError(); }
+      });
+      video.addEventListener('loadedmetadata', function() { setStatus('LIVE', 'live'); }, { once: true });
+      video.addEventListener('error', function() { showError(); scheduleRetry(5000); }, { once: true });
+      return;
+    }
+
+    /* hls.js is the fallback now, and it may legitimately be absent: the
+       vendored <script> above can fail where the old cdnjs one could too.
+       Unguarded, `Hls` here would throw ReferenceError rather than report an
+       unsupported browser. */
+    if (!window.Hls || !Hls.isSupported()) {
+      setStatus('UNSUPPORTED'); showError();
       return;
     }
 
