@@ -566,13 +566,10 @@
   html[data-theme="light"] .modem.pressed { background: linear-gradient(180deg,#dededf,#eaeaee);
     box-shadow: inset 0 2px 4px rgba(0,0,0,.18); }
   .modem:disabled .cap2 { color: var(--emboss-dim); }
-  /* BUZZ is a plain key in both themes (PM). The tinted face read as a
-     glowing button on a metal panel -- an emissive control among machined
-     ones, which is the one thing this housing does not do. It is now the
-     same key as the rest and its weight comes from where it sits, not from
-     colour. Noted rather than argued: the loudest action on the page no
-     longer looks different from the one that reloads a stream, so if it
-     ever gets hit by accident, this is the place to look. */
+  /* BUZZ was flattened to a plain key here once, on the reasoning that a
+     tinted face reads as emissive on a machined housing. It is amber again --
+     see the COLOUR GRAMMAR block at the foot of this sheet for why the
+     reversal is a rule rather than a preference. */
   .modem { min-width: 54px; height: 32px; padding: 0 7px; border-radius: 7px; display: flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; cursor: pointer; font-family: inherit;
     background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
@@ -1039,6 +1036,84 @@
     --text-muted: #93a1a1;
     --shadow: 0 1px 3px rgba(0,0,0,0.10), 0 4px 14px rgba(0,0,0,0.10);
   }
+
+  /* ══ COLOUR GRAMMAR, ported from amira ═══════════════════════════
+   *
+   * Three colours, three jobs, and nothing else on this panel is tinted:
+   *
+   *   red     withdraws a signal.      Hide, Stop.
+   *   amber   interrupts everyone.     BUZZ.
+   *   green   opens a channel.         CALL.
+   *
+   * This reverses the earlier de-tinting of BUZZ, and the reversal is
+   * deliberate rather than a drift back. The argument then was that a tinted
+   * face reads as an emissive control on a machined housing -- but .pbtn.guarded
+   * already puts red on Hide two panels up, so the housing had settled that
+   * question in the other direction before BUZZ was flattened. What was
+   * actually wrong was that BUZZ was tinted with no rule saying WHEN a key may
+   * be: one coloured key among machined ones is decoration, three keys obeying
+   * a stated grammar is an instrument. Amber rather than red because BUZZ
+   * interrupts; it does not conceal, and red on this panel means concealment.
+   */
+  .modem.calling {
+    border-color: #123f1d;
+    background: linear-gradient(180deg,#2d7a3f 0%,#1f5c2e 54%,#174a24 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 1px 1px rgba(0,0,0,.35); }
+  .modem.calling .cap2 { color: #eafcef; }   /* 7.48:1 -- Hide's legend is 7.80 */
+  .modem.calling:active, .modem.calling.pressed {
+    border-color: #0e3316;
+    background: linear-gradient(180deg,#174a24 0%,#226631 100%);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6); }
+  html[data-theme="light"] .modem.calling {
+    border-color: #1d6a2e;
+    background: linear-gradient(180deg,#3d9450 0%,#2d7a3f 54%,#246a34 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.30), 0 1px 1px rgba(88,110,117,.20); }
+  html[data-theme="light"] .modem.calling .cap2 { color: #f2fff5; }
+  .modem.alerting {
+    border-color: #b06d05;
+    background: linear-gradient(180deg,#ffb340 0%,#ff9f0a 54%,#ef9008 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 1px 1px rgba(0,0,0,.35); }
+  .modem.alerting .cap2 { color: #1a1102; }   /* 9.08:1 on #ff9f0a */
+  .modem.alerting:active, .modem.alerting.pressed {
+    border-color: #9a5f04;
+    background: linear-gradient(180deg,#ef9008 0%,#ffa81f 100%);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.45); }
+  html[data-theme="light"] .modem.alerting {
+    border-color: #c07a12;
+    background: linear-gradient(180deg,#ffbe57 0%,#ffa823 54%,#f79a12 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 1px 1px rgba(88,110,117,.20); }
+  html[data-theme="light"] .modem.alerting .cap2 { color: #1a1102; }
+  /* A disabled coloured key keeps its colour and loses its light: greying it
+     out entirely would delete the grammar exactly where the grammar is doing
+     the most work, on a key that is not wired yet and needs to say what it
+     WILL be. .modem:disabled already drops opacity, which is enough. */
+
+  /* MUTE is a key with a lamp that PRESSES IN, like every other latching
+     control here. It had the lamp already; what it lacked was the recess, so
+     muted and unmuted differed only by a 7px bulb. */
+  .mute-key[aria-pressed="true"] {
+    background: linear-gradient(180deg,#191a1c,#212124);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.6);
+    border-color: #3c3c44; }
+  html[data-theme="light"] .mute-key[aria-pressed="true"] {
+    background: linear-gradient(180deg,#d9d9de,#e6e6ea);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.18); }
+  .mute-key .bulb { transition: background .12s, box-shadow .12s; }
+
+  /* Both pilot lights sit to the right, under the key bank they belong to,
+     rather than starting at the panel's left edge where nothing else does.
+     Lamp last, so it lands flush right under the final key; Reset keeps the
+     opposite order because it is a pinhole in the housing, not a state lamp. */
+  .pinrow { display: flex; align-items: center; gap: 10px; margin: 9px 0 7px;
+    justify-content: flex-end; flex-direction: row; }
+  .pinrow .pinled { order: 2; }
+  .pinrow .rstlab { order: 1;
+    /* A common width so the lamps line up down the panel. .eng inherits a
+       PROPORTIONAL face, so "Disable buzz" and "Lock message" are different
+       pixel widths despite both being twelve characters -- and with the row
+       right-aligned and the lamp leading, that difference would land the two
+       lamps on different axes. */
+    min-width: 74px; text-align: right; }
 </style>
 </head>
 <body>
@@ -1216,7 +1291,7 @@
             <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost" id="audioRateGhost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
             <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost" id="audioKbpsGhost">888</span><span class="vlit" id="audioKbps"></span></span></div>
             <div class="vind">
-              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i>
+              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
           </div>
           <div class="leds">
@@ -1228,42 +1303,105 @@
         </div>
 
         <div class="pdiv"></div>
-        <!-- One box, no sub-headings. LISTEN and SEND split four keys into
-             two groups of two and made the panel look like two boxes wearing
-             one border; the keys are legible without being announced. Every
-             key here is now the same object as RELOAD and FOVEAL upstairs,
-             so the whole panel reads as one instrument rather than three
-             control idioms stacked. -->
+        <!-- FOUR KEYS, ONE BANK -- the same shape as Show/Hide/CV/Night
+             upstairs, because they are the same KIND of thing: one exclusive
+             selection of what the audio path is doing. Play and Stop are not
+             a transport separate from Talk; Stop means neither direction is
+             open, which is why it wears the guarded red Hide wears and why
+             it belongs in this bank rather than in a row of its own.
+
+             MUTE is deliberately NOT in the bank. It silences what you hear
+             without changing which direction is open, exactly as BLUR
+             modifies a video mode without being one.
+
+             2-Way is present and DISABLED rather than wired to nothing --
+             the precedent FOVEAL set on this node and CALL sets on amira.
+             Talkback here is WHIP OUT only (talkPc carries no inbound track),
+             so two-way needs a second peer connection that does not exist on
+             this branch yet. A key that looks operable and silently does
+             nothing is the worst of the three states it could be in. -->
+        <div class="btnrow">
+          <button class="pbtn" id="audioPlayBtn" onclick="setAudioMode('play')"
+                  title="Room audio in">Play</button>
+          <button class="pbtn guarded" id="audioStopBtn" onclick="setAudioMode('stop')"
+                  title="Neither direction open">Stop</button>
+          <button class="pbtn" id="talkBtn" onclick="setAudioMode('talk')"
+                  title="Talk to the room -- your voice out, room audio held">Talk</button>
+          <button class="pbtn" id="twoWayBtn" disabled
+                  title="Two-way audio -- not wired on this node yet">2-Way</button>
+        </div>
+
+        <!-- The counterpart to VIDEO's FPS trace: what is actually being
+             heard, last 60 seconds. Measured off the audio itself rather than
+             off a bitrate number, which only says bytes are moving. This works
+             here WITHOUT amira's media proxy for one reason: HLS_URL is
+             location.origin + '/hls/...', so the element is same-origin, and
+             WebAudio cannot analyse a cross-origin element. If the HLS source
+             ever moves back to mediamtx's own port, this trace goes flat and
+             that is the reason. -->
         <div class="modemrow">
-          <button class="modem" id="listenBtn" onclick="togglePlay()" title="Pause the feed">
-            <span class="bulb" id="listenLamp"></span>
-            <svg id="tPlay" width="11" height="12" viewBox="0 0 11 12" fill="currentColor" style="color:#d6d6da"><path d="M1.5 1.1v9.8a.6.6 0 0 0 .93.5l7.3-4.9a.6.6 0 0 0 0-1L2.43.6a.6.6 0 0 0-.93.5Z"/></svg>
+          <div class="fpsglass" id="levelGlass"
+               title="Audio level actually reaching this viewer, last 60 seconds">
+            <canvas id="levelGraph" width="240" height="60"></canvas>
+            <span class="glab glab-l" id="levelLab">LEVEL</span>
+            <span class="glab glab-r">60s</span>
+          </div>
+        </div>
+
+        <!-- Read left to right in the order you reach for it: silence it,
+             then set the level. -->
+        <div class="listen">
+          <button class="modem mute-key" id="muteAudioBtn" onclick="toggleMuteAudio()"
+                  aria-pressed="false" aria-label="Mute room audio"
+                  title="Silence what you hear; the stream keeps running">
+            <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
           </button>
           <input type="range" class="vol" id="volSlider" min="0" max="100" step="1"
                  value="100" oninput="setVolume()" aria-label="Volume"
                  title="Volume in this browser only">
-          <button class="modem" id="muteAudioBtn" onclick="toggleMuteAudio()" title="Mute audio in this browser only; the stream keeps running">
-            <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
-          </button>
         </div>
 
-        <div class="modemrow even">
-          <button class="modem" id="talkBtn" onclick="clickTalk()" title="Talk to the room">
-            <span class="bulb" id="talkLamp"></span><span class="cap2">TALK</span>
-          </button>
-          <button class="modem" id="buzzBtn" onclick="sendBuzz()"
-                  title="Shake and sound every viewer's screen">
-            <span class="bulb"></span><span class="cap2">BUZZ</span>
-          </button>
-        </div>
-        <!-- A pilot-light button, not a checkbox: a latching toggle sized to
-             its own lamp, label outside like Reset's own. -->
+        <div class="pdiv"></div>
+
         <div class="modemrow">
+          <!-- The recessed reset, matching VIDEO's: same control, same place
+               in the row, repairing this box's stream instead of the
+               picture's. -->
+          <button class="reset" id="audioReloadBtn" onclick="reloadAudio()"
+                  title="Repair audio -- restarts the room audio stream"
+                  aria-label="Repair audio"><span class="pin"></span></button>
+          <span class="eng rstlab">Reset</span>
+          <div class="modem-group">
+            <!-- No lamp on either. Both are momentary acts, not states, so
+                 there is nothing for a lamp to report, and every other
+                 lampless control here omits the socket rather than showing a
+                 dead one. CALL and BUZZ sit together because they are the
+                 same gesture at two volumes: BUZZ shakes a viewer who is
+                 already watching, CALL summons one who is not. -->
+            <button class="modem calling" id="callBtn" disabled
+                    title="Call a viewer -- not wired yet">
+              <span class="cap2">CALL</span>
+            </button>
+            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
+                    title="Shake and sound every viewer's screen">
+              <span class="cap2">BUZZ</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Opting out of the buzz channel entirely: neither heard nor sent.
+             Deliberately NOT called mute. Mute elsewhere on this panel means
+             "what I hear" and never "what I send", and a control governing
+             both directions borrowing that word is how "Mute buzzes" came to
+             describe half of itself -- it silenced incoming alerts while
+             leaving the key that sends them fully live. -->
+        <div class="pinrow">
           <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
-                  title="Silence incoming buzz alerts" aria-label="Mute buzzes">
+                  aria-pressed="false" aria-label="Disable buzz"
+                  title="Opt out of buzz entirely -- neither sent nor received">
             <span class="bulb" id="muteBuzzLamp"></span>
           </button>
-          <span class="eng rstlab">Mute buzzes</span>
+          <span class="eng rstlab">Disable buzz</span>
         </div>
       </div>
 
@@ -1277,7 +1415,7 @@
           <button class="pbtn" id="clearBtn" onclick="clearMessage()">Clear</button>
           <button class="pbtn" id="cancelBtn" onclick="cancelEdit()">Cancel</button>
         </div>
-        <div class="modemrow">
+        <div class="pinrow">
           <button class="pinled" id="lockMsgBtn" onclick="toggleLock()"
                   title="Prevent Save / Clear / Cancel from being used" aria-label="Lock message">
             <span class="bulb" id="lockMsgLamp"></span>
@@ -1433,6 +1571,18 @@
   function updateMuteBtn() {
     if (!muteBuzzBtn) return;
     muteBuzzBtn.classList.toggle('pressed', buzzMuted);
+    muteBuzzBtn.setAttribute('aria-pressed', buzzMuted ? 'true' : 'false');
+    // Opting out is opting out of the CHANNEL. The old control silenced
+    // incoming alerts and left the key that sends them fully live, so a
+    // viewer who had "muted buzzes" could still shake everyone else's
+    // screen -- which is what made the old name describe half of itself.
+    var bb = document.getElementById('buzzBtn');
+    if (bb) {
+      bb.disabled = buzzMuted;
+      bb.title = buzzMuted
+        ? 'Buzz is disabled -- turn the pilot light off to send'
+        : 'Shake and sound every viewer\'s screen';
+    }
     var lamp = document.getElementById('muteBuzzLamp');
     if (lamp) lamp.classList.toggle('on', buzzMuted);
   }
@@ -1502,6 +1652,7 @@
   applyTheme();
 
   function sendBuzz() {
+    if (buzzMuted) return;   // opted out of the channel, both directions
     // Stays pressed in, lamp lit, for as long as the buzz is actually going
     // out -- the same pushed/unpushed language Show/CV/Hide use. A key that
     // springs back the instant you release it says nothing about whether the
@@ -2221,7 +2372,6 @@
   // The element stays muted until a click. Browsers block unmuted autoplay,
   // and a camera that starts talking the moment a page opens is impolite
   // besides.
-  var listenBtn       = document.getElementById('listenBtn');
   var audioRateEl     = document.getElementById('audioRate');
   var audioKbpsEl     = document.getElementById('audioKbps');
   var audioStateLabel = null;   // caption removed: the tube and the lamps
@@ -2259,15 +2409,70 @@
       });
   }
 
-  function togglePlay() {
-    if (roomAudio.paused) {
-      resolveAudioSrc(function() {
+  // ONE EXCLUSIVE CHOICE, four keys. The old pair of independent toggles
+  // (a play/pause key here, a TALK key one row down) could describe states
+  // the node cannot actually be in -- talking while the room plays, on a
+  // half-duplex path where talking necessarily holds the room. The bank
+  // cannot express that, which is the point of making it a bank.
+  var audioMode = 'stop';   // 'play' | 'stop' | 'talk'  ('two-way' unwired)
+
+  function setAudioMode(m) {
+    if (m === audioMode) return;
+    // Leaving talk always closes the mic, whichever key you pressed to leave.
+    if (audioMode === 'talk' && typeof talking !== 'undefined' && talking) stopTalk();
+    audioMode = m;
+    if (m === 'play') {
+      resolveAudioSrc(function () {
         roomAudio.play().then(paintTransport).catch(paintTransport);
       });
     } else {
+      // Talk holds the room rather than mixing it: this node's talkback comes
+      // out of a speaker in the same room as the mic, so playing the room
+      // while talking is a feedback loop, not a feature.
       roomAudio.pause();
-      paintTransport();
     }
+    if (m === 'talk') startTalk();
+    paintTransport();
+    applyAudioSilence();
+  }
+
+  // Kept as the keyboard/legacy entry point; the keys themselves call
+  // setAudioMode directly.
+  function togglePlay() { setAudioMode(audioMode === 'play' ? 'stop' : 'play'); }
+
+  // Pressed-in is the whole state display for the bank -- no lamps, exactly
+  // like Show/Hide/CV/Night, whose keys these are copies of.
+  function paintAudioModes() {
+    var keys = { play: 'audioPlayBtn', stop: 'audioStopBtn', talk: 'talkBtn' };
+    for (var m in keys) {
+      var b = document.getElementById(keys[m]);
+      if (!b) continue;
+      var base = (m === 'stop') ? 'pbtn guarded' : 'pbtn';
+      b.className = base + (audioMode === m ? ' pressed' : '');
+    }
+    var iTalk = document.getElementById('indTalk');
+    if (iTalk) iTalk.className = (audioMode === 'talk') ? 'on' : '';
+    var lab = document.getElementById('levelLab');
+    // In Talk the trace is showing YOUR level, which is the only feedback
+    // that you are being heard, so it says so rather than lying about whose.
+    if (lab) lab.textContent = (audioMode === 'talk') ? 'YOUR LEVEL' : 'LEVEL';
+  }
+
+  // The audio box's own reset pin: re-resolve the rendition and restart, for
+  // when the element is wedged on a stale manifest. Deliberately does not
+  // touch the picture -- that is VIDEO's pin, one panel up.
+  function reloadAudio() {
+    audioSrcResolved = false;
+    var wasPlaying = (audioMode === 'play');
+    roomAudio.pause();
+    roomAudio.removeAttribute('src');
+    roomAudio.load();
+    if (wasPlaying) {
+      resolveAudioSrc(function () {
+        roomAudio.play().then(paintTransport).catch(paintTransport);
+      });
+    }
+    paintTransport();
   }
 
   // Icon reflects the state: stopped shows the play triangle, running shows
@@ -2296,16 +2501,42 @@
     // independent -- one function, one stage, no reaching across.
     var iStop = document.getElementById('indStop');
     if (iStop) iStop.className = roomAudio.paused ? 'on' : '';
+    paintAudioModes();
     paintLamps();
   }
 
   // Mute is local and unsynchronised on purpose: someone silencing the room
   // in their own tab is not deciding for anyone else, and it must not stop
   // the stream -- the picture and the publisher both keep running.
+  // audioMuted, not roomAudio.muted, is the source of truth now. Once
+  // createMediaElementSource has intercepted the element, the element's own
+  // .muted gates the TAP as well as the output -- muting it would blind the
+  // level trace to a room that is plainly still sending. The gain node owns
+  // silence; the element stays unmuted. applyAudioSilence() falls back to the
+  // element when WebAudio is unavailable, which is why it touches both.
+  var audioMuted = false;
+
+  function applyAudioSilence() {
+    var v = 1;
+    var slider = document.getElementById('volSlider');
+    if (slider) v = Math.max(0, Math.min(1, (parseFloat(slider.value) || 0) / 100));
+    // Stop and Talk are silence too: neither has the room open.
+    var silent = audioMuted || audioMode !== 'play';
+    if (levelGain) {
+      levelGain.gain.value = silent ? 0 : v;
+      roomAudio.muted = false;
+      roomAudio.volume = 1;
+    } else {
+      roomAudio.muted = audioMuted;
+      roomAudio.volume = v;
+    }
+  }
+
   function toggleMuteAudio() {
-    roomAudio.muted = !roomAudio.muted;
+    audioMuted = !audioMuted;
+    applyAudioSilence();
     paintMute();
-    try { localStorage.setItem('livecamMuted', roomAudio.muted ? '1' : '0'); } catch (e) {}
+    try { localStorage.setItem('livecamMuted', audioMuted ? '1' : '0'); } catch (e) {}
   }
 
   // Volume is local, like mute: it is the listener's own ear, not a
@@ -2313,7 +2544,7 @@
   function setVolume() {
     var v = document.getElementById('volSlider');
     if (!v) return;
-    roomAudio.volume = Math.max(0, Math.min(1, v.value / 100));
+    applyAudioSilence();
     try { localStorage.setItem('livecamVolume', v.value); } catch (e) {}
     paintMute();   // volume is audibility, not transport
   }
@@ -2323,10 +2554,13 @@
   // shares this because a slider at zero is silence by another route.
   function paintMute() {
     var lamp = document.getElementById('muteLamp');
-    if (lamp) lamp.className = 'bulb' + (roomAudio.muted ? ' alarm' : '');
+    if (lamp) lamp.className = 'bulb' + (audioMuted ? ' alarm' : '');
+    var key = document.getElementById('muteAudioBtn');
+    if (key) key.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
+    var slider = document.getElementById('volSlider');
+    var atZero = slider ? (parseFloat(slider.value) || 0) === 0 : false;
     var iMute = document.getElementById('indMute');
-    if (iMute) iMute.className =
-      (roomAudio.muted || roomAudio.volume === 0) ? 'on' : '';
+    if (iMute) iMute.className = (audioMuted || atZero) ? 'on' : '';
   }
 
   function paintListen() { paintTransport(); paintMute(); }
@@ -2336,13 +2570,13 @@
   // and every reason not to: pressing play on a muted element does exactly
   // nothing you can hear, which reads as "the node has no sound" rather
   // than "you are muted". The key is right there if you want silence.
-  try { roomAudio.muted = localStorage.getItem('livecamMuted') === '1'; } catch (e) { roomAudio.muted = false; }
+  try { audioMuted = localStorage.getItem('livecamMuted') === '1'; } catch (e) { audioMuted = false; }
   try {
     var _sv = localStorage.getItem('livecamVolume');
     var _vs = document.getElementById('volSlider');
     if (_vs && _sv !== null) _vs.value = _sv;
-    if (_vs) roomAudio.volume = Math.max(0, Math.min(1, _vs.value / 100));
   } catch (e) {}
+  applyAudioSilence();
 
   function pollAudio() {
     fetch('/api/audio', { cache: 'no-store' })
@@ -2634,9 +2868,14 @@
     if (!talkBtn) return;
     var ok = talkSupported();
     talkBtn.disabled = !ok;
-    talkBtn.className = 'modem' + (talking ? ' pressed' : '');
-    var l = document.getElementById('talkLamp');
-    if (l) l.className = 'bulb' + (talking ? ' on' : '');
+    // The bank owns pressed-in state; paintAudioModes writes the class, so
+    // this must not fight it with a class of its own.
+    if (!ok && audioMode === 'talk') audioMode = 'stop';
+    paintAudioModes();
+    // A talkback that dies on its own (node timeout, connection lost) has to
+    // move the BANK, not just this key -- otherwise Talk stays lit over a
+    // closed mic, which is the one lie a mic control must never tell.
+    if (!talking && audioMode === 'talk') { audioMode = 'stop'; paintAudioModes(); }
     talkBtn.title = err ? ('Talkback failed: ' + err)
       : !ok ? 'Talkback needs a secure page: open this viewer over its https address'
       : talking ? 'Talking -- the room cannot be heard until you stop'
@@ -2735,6 +2974,109 @@
   setInterval(pollTalk, 4000);
   window.addEventListener('pagehide', function () { if (talking) stopTalk(); });
   paintTalk();
+
+  // ── LEVEL TRACE ──────────────────────────────────────────────────
+  //
+  // VIDEO's FPS trace answers "are frames arriving"; this answers the same
+  // question for sound, and for the same reason: a bitrate readout only says
+  // bytes are moving, which stays true through a silent room and through a
+  // publisher feeding a dead mic.
+  //
+  // createMediaElementSource INTERCEPTS the element. Whatever it takes must be
+  // connected onward to destination or the room goes silent -- that is the one
+  // trap here, and it is why the second connect below is not optional.
+  //
+  // The tap sits BEFORE the volume stage:
+  //
+  //   source -> analyser              (tap: always sees the room)
+  //   source -> gain -> destination   (what you actually hear)
+  //
+  // A tap on the far side of mute would measure what the listener chose to
+  // hear rather than what the room is sending, and would read flat silence
+  // with audio plainly arriving. The FPS trace does not stop when you look
+  // away; neither does this one.
+  var levelCtx = null, levelAnalyser = null, levelSrcEl = null, levelGain = null;
+  var levelHist = new Array(120).fill(0);
+
+  function levelAttach(el) {
+    if (!el || levelSrcEl === el) return;
+    try {
+      if (!levelCtx) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        levelCtx = new AC();
+        levelAnalyser = levelCtx.createAnalyser();
+        levelAnalyser.fftSize = 512;
+        levelGain = levelCtx.createGain();
+        levelGain.connect(levelCtx.destination);
+      }
+      var src = levelCtx.createMediaElementSource(el);
+      src.connect(levelAnalyser);
+      src.connect(levelGain);          // NOT optional: this is the only path
+      el.muted = false;                // the gain node owns silence now
+      levelSrcEl = el;
+      applyAudioSilence();
+    } catch (e) { /* already attached, or the element is not analysable */ }
+  }
+
+  function levelSample() {
+    var v = 0;
+    if (levelAnalyser && levelCtx && levelCtx.state === 'running') {
+      var buf = new Uint8Array(levelAnalyser.frequencyBinCount);
+      levelAnalyser.getByteTimeDomainData(buf);
+      var peak = 0;
+      for (var i = 0; i < buf.length; i++) {
+        var d = Math.abs(buf[i] - 128);
+        if (d > peak) peak = d;
+      }
+      v = Math.min(1, peak / 128);
+    }
+    // Honest zero: a stopped room reads flat, the way the FPS trace reads
+    // flat when no frames arrive.
+    if (audioMode !== 'play') v = 0;
+    levelHist.push(v); levelHist.shift();
+  }
+
+  function levelDraw() {
+    var c = document.getElementById('levelGraph');
+    if (!c || !c.getContext) return;
+    var g = c.getContext('2d');
+    var w = c.width, h = c.height;
+    g.clearRect(0, 0, w, h);
+    // Log scale, because hearing is. Speech at conversational level sits
+    // around -30 dBFS, which on a linear scale is 3% of full height and
+    // indistinguishable from silence -- the trace read flat while the room
+    // was plainly audible. Mapping -60..0 dBFS across the height puts
+    // ordinary speech in the middle where it can be seen.
+    //
+    // The baseline is lifted clear of the LEVEL and 60s legends; bars were
+    // otherwise drawn straight through them.
+    var base = h - 12, top = 4, span = base - top;
+    var step = w / levelHist.length;
+    g.fillStyle = 'rgba(48,209,88,.55)';
+    for (var i = 0; i < levelHist.length; i++) {
+      var v = levelHist[i];
+      var db = v > 0 ? 20 * Math.log(v) / Math.LN10 : -100;
+      var f = Math.max(0, Math.min(1, (db + 60) / 60));
+      var bh = f > 0 ? Math.max(1, f * span) : 0;
+      if (bh) g.fillRect(i * step, base - bh, Math.max(1, step - 1), bh);
+    }
+    g.fillStyle = 'rgba(48,209,88,.18)';
+    g.fillRect(0, base, w, 1);
+  }
+
+  setInterval(function () { levelSample(); levelDraw(); }, 500);
+
+  // A gesture is what lets an AudioContext run at all on iOS, and every key
+  // on this panel is a gesture.
+  document.addEventListener('click', function () {
+    if (levelCtx && levelCtx.state === 'suspended') levelCtx.resume();
+    levelAttach(roomAudio);
+  });
+
+  paintAudioModes();
+  paintMute();
+
 
   // ── BROADCAST ──
   var currentMsg = '';
