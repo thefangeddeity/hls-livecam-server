@@ -4074,14 +4074,44 @@
     // WHEP owns the meter when it is carrying the room: the element has
     // no captureStream to give, and asking would only mark it 'na'.
     if (roomTx === 'whep') return;
-    // TEST: never capture the element while listening over Icecast.
-    // captureStream()/mozCaptureStream() does not observe an element from the
-    // outside -- it reroutes its output -- and on Firefox that is a known
-    // source of glitching playback. This is the one component present on
-    // EVERY transport tried today, because it attaches to the element rather
-    // than to the stream, which would explain a staccato that survived HLS,
-    // WHEP, progressive MP3 and Icecast alike.
-    if (roomTx === 'mp3') { levelState = 'na'; paintLevelLabel(); return; }
+
+    /* ICECAST/MP3: meter through the audio graph, not captureStream().
+
+       captureStream() does not observe an element, it REROUTES it, and asking
+       an element for a stream while it is playing is a poor way to watch it.
+       createMediaElementSource is the honest instrument here: it takes the
+       element's output, and as long as the graph is connected onward to
+       destination, the sound still reaches the speakers.
+
+       It is a ONE-WAY door -- the element can never go back to playing
+       directly, for the life of the page -- which is exactly why it is done
+       once, guarded, and always wired through to destination in the same
+       breath. Forgetting that connect() is how this becomes silence. */
+    if (roomTx === 'mp3') {
+      if (levelTap || !audio) return;
+      var ACm = window.AudioContext || window.webkitAudioContext;
+      if (!ACm) { levelState = 'na'; paintLevelLabel(); return; }
+      try {
+        if (!levelCtx) {
+          levelCtx = new ACm();
+          levelAnalyser = levelCtx.createAnalyser();
+          levelAnalyser.fftSize = 512;
+        }
+        levelTap = levelCtx.createMediaElementSource(audio);
+        levelTap.connect(levelAnalyser);
+        // The path back to the speakers. Without this the meter works and
+        // the room goes silent.
+        levelAnalyser.connect(levelCtx.destination);
+        levelState = 'ok';
+        levelResume();
+      } catch (e) {
+        // Already intercepted, or refused: fall back to no meter rather than
+        // risk the audio. Sound outranks instrumentation.
+        levelState = 'na';
+      }
+      paintLevelLabel();
+      return;
+    }
     if (levelTap || levelState === 'na' || !audio) return;
     var grab = audio.captureStream || audio.mozCaptureStream;
     var AC   = window.AudioContext || window.webkitAudioContext;
@@ -4242,244 +4272,6 @@
 
   paintAudioModes();
 
-  /* ══════════════════════════════════════════════════════════════════════
-     TEMPORARY DIAGNOSTIC HUD  --  REMOVE WHEN THE AUDIO PATH IS SETTLED.
-
-     Everything from this banner down to the matching END banner is one
-     self-contained block, and deleting it restores the file exactly. It
-     defines no name anything else refers to, adds nothing to the document
-     source (it builds its own element), and changes no existing line -- it
-     gets its tick by wrapping levelDraw() rather than by adding a second
-     timer or editing the interval that already exists. Every wrapper below
-     calls through to the original, so the page behaves identically with the
-     block present and with it gone.
-
-     WHY IT EXISTS. Debugging this panel from a phone was costing a
-     question-and-answer round trip per fact -- "is there sound?", "did a
-     permission prompt appear?", "which capability was missing?" -- when the
-     page already knew every one of them. Burning them on screen closes that
-     loop: the user screenshots this instead of being interviewed.
-
-     This is NOT the server-side HUD cv_processor.py draws into the frames.
-     It cannot be: the state that matters here is all client-side --
-     AudioContext.state, whether the WebAudio graph has intercepted the
-     element, the getUserMedia error name -- and the server sees none of it.
-
-     Default visible, because a diagnostic that must be asked for does not
-     close the loop. Tap it to collapse to one line, tap again to restore.
-     ══════════════════════════════════════════════════════════════════════ */
-  (function () {
-    var host = document.getElementById('videoContainer');
-    if (!host) return;
-
-    var box = document.createElement('div');
-    box.id = 'dbgHud';
-    /* Inline styles, not a rule in the <style> block, so that removing this
-       block is a single deletion rather than three scattered ones. */
-    box.style.cssText = [
-      'position:absolute', 'top:8px', 'left:8px', 'z-index:40',
-      'font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',
-      'color:#e8e8ea',
-      /* Opaque enough to stay legible over the bright HUD and over the VHS
-         static in hide mode, which is the whole point of a dark backing. */
-      'background:rgba(0,0,0,.72)',
-      '-webkit-backdrop-filter:blur(4px)', 'backdrop-filter:blur(4px)',
-      'padding:6px 8px', 'border-radius:6px',
-      'border:1px solid rgba(255,255,255,.16)',
-      'white-space:pre', 'max-width:min(92%,420px)', 'overflow:hidden',
-      'cursor:pointer', '-webkit-user-select:none', 'user-select:none',
-      'text-shadow:0 1px 2px rgba(0,0,0,.9)'
-    ].join(';');
-    host.appendChild(box);
-
-    /* Suppress the panel's own note lines while this HUD is up.
-
-       #audioNote is the PERMANENT user-facing error surface -- it is what
-       tells a viewer "microphone permission refused" when no one is
-       debugging -- and #audioStatus is its stream-state counterpart. Neither
-       is being retired: they are hidden only because the HUD supersedes them
-       for now and the user asked for a clean panel, and hiding them from
-       HERE means deleting this block restores both automatically. There is
-       deliberately no second cleanup to remember.
-
-       display:none rather than emptying them, so the code that writes to
-       them is untouched and keeps working the moment the block goes. No gap
-       and no shifted buttons: both sit BELOW the key row, and .audionote
-       already collapses to display:none when empty -- which is its usual
-       state -- so this is the layout the panel normally has anyway. */
-    ['audioNote', 'audioStatus'].forEach(function (id) {
-      var n = document.getElementById(id);
-      if (n) n.style.display = 'none';
-    });
-
-    var collapsed = false;
-    box.addEventListener('click', function (ev) {
-      ev.stopPropagation();
-      collapsed = !collapsed;
-      paint();
-    });
-
-    /* Latched. The transient note line gets overwritten by the next repaint,
-       and the failure we need is usually the one that has just scrolled
-       past -- so the last error and the last stream state are held until
-       something replaces them. */
-    var lastErr = '-', lastState = '-';
-    var lastT = -1, advancing = false;
-
-    function yn(v) { return v ? 'Y' : 'N'; }
-
-    function pcState(pc) {
-      if (!pc) return '-';
-      return (pc.iceConnectionState || '?') + '/' + (pc.connectionState || '?');
-    }
-
-    function mediaErr(el) {
-      if (!el || !el.error) return '-';
-      var c = el.error.code;
-      return c + (['', 'ABORT', 'NET', 'DECODE', 'SRCUNSUP'][c] || '');
-    }
-
-    function paint() {
-      /* Wrapped whole. This reads half-initialised objects by design -- it
-         runs before hls.js has attached, before the AudioContext exists, and
-         during teardown -- and a diagnostic that throws would take the rest
-         of the page's scripts down with it, which is a far worse outcome
-         than a blank panel. */
-      try {
-        if (collapsed) { box.textContent = 'DIAG'; return; }
-
-        var el = audio;
-        var t  = el ? el.currentTime : 0;
-        /* A stalled element and a playing one are indistinguishable from
-           readyState alone, so compare position against the last sample. */
-        advancing = !!(el && !el.paused && t > lastT + 0.005);
-        lastT = t;
-
-        var ctx = levelCtx;
-        var md  = navigator.mediaDevices;
-        var sl  = document.getElementById('audioVol');
-
-        box.textContent = [
-          'DIAG  tap to collapse',
-          'dir=' + audioDir + ' paused=' + (el ? yn(el.paused) : '-') +
-            ' t=' + t.toFixed(1) + ' adv=' + yn(advancing),
-          'el rs=' + (el ? el.readyState : '-') +
-            ' ns=' + (el ? el.networkState : '-') +
-            ' err=' + mediaErr(el),
-          /* attached= is deliberately GONE rather than renamed. It meant "the
-             graph has intercepted the element", a state that can no longer
-             occur, and a field whose meaning silently changed is worse than
-             one that disappeared. tap= is the non-destructive observer and
-             meter= is what the legend shows; neither can now imply anything
-             about whether the room is audible. */
-          /* meter distinguishes "tapped" from "measuring": stalled means the
-             observer is wired up but its context is not running, which reads
-             as a flat lane and must not be confused with a quiet room. */
-          'tx=' + roomTx + (roomWhy ? '(' + roomWhy.slice(0, 16) + ')' : '') +
-            ' vaud=' + vidAudState +
-            ' ctx=' + (ctx ? ctx.state : 'none') + ' tap=' + yn(levelTap) +
-            ' meter=' + (levelState === 'na' ? 'na'
-                       : levelMeasuring()    ? 'live'
-                       : levelTap            ? 'stalled' : 'idle'),
-          /* No gain= any more: the element is the only stage, so elv is the
-             volume that is actually in force rather than one of two. */
-          'mute=' + yn(audioMuted) +
-            ' vol=' + (sl ? sl.value : '-') +
-            ' elv=' + (el ? el.volume.toFixed(2) : '-') +
-            /* volset=N means the fader cannot bite on this browser (iOS),
-               so elv will not follow vol and that is the platform, not a
-               bug in the slider. */
-            ' volset=' + (volSettable === null ? '?' : yn(volSettable)),
-          '2w on=' + yn(twoWay.on) + ' busy=' + yn(twoWay.busy) +
-            ' pub=' + pcState(twoWay.pub) + ' sub=' + pcState(twoWay.sub),
-          /* What could not be determined remotely: which term of the old
-             twoWaySupported() boolean is false in this browser. */
-          'cap sec=' + yn(window.isSecureContext) +
-            ' md=' + yn(md) +
-            ' gum=' + yn(md && md.getUserMedia) +
-            ' pc=' + yn(window.RTCPeerConnection),
-          'st: ' + lastState,
-          'er: ' + lastErr
-        ].join('\n');
-      } catch (e) {
-        try {
-          box.textContent = 'DIAG paint failed:\n' + ((e && e.message) || e);
-        } catch (e2) { /* nothing left to try */ }
-      }
-    }
-
-    /* The tick, borrowed from the level trace's existing 500ms interval so
-       this adds no timer of its own. levelDraw is looked up at call time by
-       that interval, so reassigning it here is enough. */
-    var _draw = levelDraw;
-    levelDraw = function () {
-      try { _draw(); } finally { paint(); }
-    };
-
-    /* stopTwoWay carries the composed failure text for every non-getUserMedia
-       path (a refused WHIP/WHEP, an unreachable signalling URL, the session
-       timeout). Wrapping it latches those without touching the catch site. */
-    /* A teardown REASON is not an error, and latching it as one made the
-       instrument lie: of the six stopTwoWay call sites exactly one is
-       error-derived (the catch in startTwoWay). The other five are ordinary
-       lifecycle -- the session timeout, beforeunload, a mode switch, Reset,
-       and pressing the lit key to hang up. That last one produced the
-       observed "er: stopped" on a call that had SUCCEEDED and was closed
-       normally: a fault reported where nothing failed.
-
-       So reasons land on the state line, and er: is left to the two wrappers
-       below, which hold real Error objects. Same standard as rejecting
-       paused=N for a missing element -- a misleading diagnostic is worse
-       than none. */
-    var _stop = stopTwoWay;
-    stopTwoWay = function (reason, next) {
-      if (reason) lastState = String(reason);
-      return _stop(reason, next);
-    };
-
-    var _state = setAudioState;
-    setAudioState = function (text) {
-      if (text) lastState = String(text);
-      return _state(text);
-    };
-
-    /* getUserMedia is wrapped rather than read from the existing catch,
-       because the catch maps the error to a sentence and the NAME is the
-       diagnostic -- NotAllowedError (user refused) and NotFoundError (no
-       device) are the same sentence to a viewer and completely different
-       bugs to us. Rethrows, so the real handler still runs. */
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      var md0  = navigator.mediaDevices;
-      var _gum = md0.getUserMedia.bind(md0);
-      md0.getUserMedia = function (c) {
-        return _gum(c).catch(function (e) {
-          lastErr = ((e && e.name) || 'Error') + ': ' + ((e && e.message) || '');
-          throw e;
-        });
-      };
-    }
-
-    /* The other genuine-failure path. startTwoWay's catch turns these into a
-       sentence for the viewer, so without this the precise fault -- an
-       unreachable signalling URL (TypeError) versus mediamtx refusing the
-       offer ("publish refused: HTTP 404") -- never reached the HUD. Rethrows,
-       so the real handler still runs.
-
-       Between this and the getUserMedia wrapper, er: carries only things
-       that were actually thrown. A failure from neither path (a constructor
-       throwing, say) shows on st: and leaves er: at '-', which is the honest
-       reading: no error object was observed. */
-    var _ww = whipWhep;
-    whipWhep = function (url, pc, dir) {
-      return _ww(url, pc, dir).catch(function (e) {
-        lastErr = ((e && e.name) || 'Error') + ': ' + ((e && e.message) || e);
-        throw e;
-      });
-    };
-
-    paint();
-  })();
-  /* ═══════════════════ END TEMPORARY DIAGNOSTIC HUD ═══════════════════ */
 
 })();
 </script>
