@@ -13,7 +13,7 @@ macOS differences from the Linux original:
     files (broadcast.txt, buzz.txt, dark.png, cams.json) — replacing
     nginx. Everything is on WEB_PORT; no root, no port-80 conflict.
 """
-import os, subprocess, time, sys, threading, io, signal, socket, re, shutil, select, queue
+import json, os, subprocess, time, sys, threading, io, signal, socket, re, shutil, select, queue
 import numpy as np
 from PIL import Image
 from flask import Flask, request, abort, send_from_directory, Response
@@ -1129,6 +1129,58 @@ _mic_hub = _MicHub()
 
 
 
+def _notch_args():
+    """Bandreject filters, from state/notches.json.
+
+    JSON rather than a config.env string because each notch needs a REASON
+    recorded beside it. A bare list of frequencies in an env var becomes
+    undeletable within a month: nobody can remember which ones are still
+    needed, so they all stay forever, quietly carving holes in the audio long
+    after whatever caused them was fixed.
+
+    Format:
+
+      {"notches": [
+         {"range": [3050, 3100], "note": "why", "added": "2026-09-04"},
+         {"center": 8000, "width": 30, "note": "why"}
+       ]}
+
+    A range is the honest form when the artifact wanders -- a resonance is
+    never one frequency for long, and chasing it with single notches means
+    adding one every time it moves.
+
+    Anything malformed is skipped with a warning rather than taking the
+    capture down: a bad filter list must not cost the room its audio.
+    """
+    path = os.path.join(ROOT, 'state', 'notches.json')
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        print(f'broadcast-api: notches.json unreadable ({exc}); no notches',
+              file=sys.stderr, flush=True)
+        return []
+
+    args = []
+    for item in doc.get('notches', []):
+        try:
+            if 'range' in item:
+                lo, hi = [float(v) for v in item['range']]
+                if hi <= lo:
+                    raise ValueError('range is not ascending')
+                centre, width = (lo + hi) / 2.0, hi - lo
+            else:
+                centre = float(item['center'])
+                width = float(item.get('width', 20))
+            args += ['bandreject', '%.1f' % centre, '%.1fh' % width]
+        except Exception as exc:
+            print(f'broadcast-api: skipping notch {item!r}: {exc}',
+                  file=sys.stderr, flush=True)
+    return args
+
+
 def _mic_capture_cmd(mode):
     """Capture ONLY, with SoX. Raw PCM on stdout. No encoders, no sockets.
 
@@ -1199,13 +1251,7 @@ def _mic_capture_cmd(mode):
     # AUDIO_NOTCH_HZ: comma-separated centre frequencies, e.g. "3243" or
     # "3243,8000". Width is deliberately narrow (20 Hz) so a voice crossing
     # the same pitch loses almost nothing.
-    notches = str(_cfg.get('AUDIO_NOTCH_HZ', '')).strip()
-    for tone in [t.strip() for t in notches.split(',') if t.strip()]:
-        try:
-            float(tone)
-        except ValueError:
-            continue
-        cmd += ['bandreject', tone, '20h']
+    cmd += _notch_args()
     # Gain, with headroom. SoX 'gain' is a raw multiplier and will clip --
     # measured at 51k clipped samples in 20s with a bare 'gain 12', because
     # CoreAudio hands over a healthier level than ffmpeg's avfoundation did

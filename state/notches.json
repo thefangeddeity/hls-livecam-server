@@ -1,0 +1,9 @@
+{
+  "notches": [
+    {
+      "range": [3050, 3100],
+      "note": "Resonance measured at 3082 Hz, ~35 dB above the local spectrum, in 0.18s bursts. Not in the room and not in the raw SoX capture -- it appears only while the speaker is driven, so it is acoustic feedback (speaker to mic) excited by broadband traffic noise. A range rather than a point because it wanders: 3243 Hz on the first sighting, 3082 on the second. Provisional. The real fix is AEC so the speaker can stay live without a loop; remove this once that lands.",
+      "added": "2026-09-04"
+    }
+  ]
+}
