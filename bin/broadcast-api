@@ -288,7 +288,24 @@ def _roomaudio_output(audio_map, audio_filter):
     filter -- and a rate/channel argument added for the benefit of an output
     would take the capture's input down with it. libopus takes the 48 kHz
     stereo the aformat filter already guarantees, so neither is needed.
+
+    aresample=async=1, roomaudio-only: mediamtx's own WebRTC/Opus reader
+    fanout (bluenviron/mediamtx#3878) needs precise 20ms frame timing, which
+    an avfoundation capture sharing a live x264 encode on the same process
+    does not reliably deliver. mediamtx recomputes Opus timestamps from
+    scratch since 1.15.2 and can absorb small jitter, but the untreated
+    source is still the documented trigger for the choppy/bursty read-side
+    symptom that issue describes -- upgrading the reader (mediamtx) without
+    steadying the writer (this encode) was treating the wrong end. Scoped to
+    roomaudio alone: the AAC track on 'cam' feeds HLS, which re-derives its
+    own segment timing and was never the one showing the symptom.
     """
+    filt = list(audio_filter)
+    if '-af' in filt:
+        i = filt.index('-af') + 1
+        filt[i] = filt[i] + ',aresample=async=1'
+    else:
+        filt = ['-af', 'aresample=async=1']
     return [
         '-map', audio_map, '-c:a', 'libopus', '-b:a', '64k',
         '-application', 'voip',
@@ -301,7 +318,7 @@ def _roomaudio_output(audio_map, audio_filter):
         # not a measurement -- 10% is the same default every consumer
         # video-call stack (WebRTC's own default) ships with.
         '-packet_loss', '10', '-fec', '1',
-        *audio_filter,
+        *filt,
         '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
     ]
 
