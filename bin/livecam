@@ -180,10 +180,13 @@ paths:
     # Restart on exit, because a caller who drops and redials within the same
     # session must not find the speaker dead; mediamtx stops it for real when
     # the path goes idle.
-    runOnReady: >
-      ${FFMPEG_BIN} -hide_banner -loglevel error
-      -rtsp_transport tcp -i rtsp://127.0.0.1:${RTSP_PORT}/talkback
-      -vn -map 0:a:0 -f audiotoolbox -
+    # bin/twoway-view owns the room's whole presence during a call: it plays
+    # the caller through the speakers AND puts up a window with the room on
+    # the left and the caller on the right. One process rather than two,
+    # because two separately-supervised ones eventually disagree about
+    # whether a call is in progress, and that failure mode is a room still
+    # audible to someone who has hung up.
+    runOnReady: ${BIN_DIR}/twoway-view
     runOnReadyRestart: yes
   all_others:
 EOF

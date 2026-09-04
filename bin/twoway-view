@@ -1,0 +1,73 @@
+#!/bin/bash
+# twoway-view — what the ROOM sees and hears during a two-way call.
+#
+# Started by mediamtx's runOnReady on the 'talkback' path, so it exists for
+# exactly as long as somebody is calling, and is killed when they hang up.
+#
+# It puts up ONE window, self-view on the left, caller on the right:
+#
+#     +---------------+---------------+
+#     |   this room   |    caller     |
+#     |  (cam path)   | (talkback)    |
+#     +---------------+---------------+
+#
+# WHY THE SELF-VIEW COMES FROM mediamtx AND NOT THE CAMERA. The camera is a
+# single-owner device already held by the capture process; opening it a second
+# time here would either fail or take the published stream down. The 'cam' path
+# is that same camera, already encoded and available to any number of readers,
+# so the self-view costs nothing but a decode.
+#
+# The caller's audio is played here too, by the same script, for one reason:
+# it must stop when the window stops. Two separately-supervised processes
+# eventually disagree about whether a call is in progress, and the failure mode
+# is a room that can still be heard by someone who has hung up.
+set -uo pipefail
+
+FFMPEG=${FFMPEG:-/usr/local/bin/ffmpeg}
+FFPLAY=${FFPLAY:-/usr/local/bin/ffplay}
+RTSP=${RTSP:-rtsp://127.0.0.1:8554}
+TITLE=${TITLE:-"Two-way call"}
+
+# Kill the whole group on the way out. runOnReady sends SIGINT/SIGTERM to this
+# script when the caller leaves; without this the ffmpeg and ffplay children
+# outlive it, keep the window up and keep the room audible.
+pids=()
+cleanup() {
+  for p in "${pids[@]:-}"; do
+    [[ -n "$p" ]] && kill "$p" 2>/dev/null
+  done
+  sleep 0.3
+  for p in "${pids[@]:-}"; do
+    [[ -n "$p" ]] && kill -9 "$p" 2>/dev/null
+  done
+}
+trap cleanup EXIT INT TERM
+
+# 1. THE CALLER'S VOICE, into the room's speakers.
+"$FFMPEG" -hide_banner -loglevel error \
+  -rtsp_transport tcp -i "$RTSP/talkback" \
+  -vn -map 0:a:0 -f audiotoolbox - &
+pids+=($!)
+
+# 2. THE WINDOW. Composited by ffmpeg and played by ffplay, rather than two
+#    separate windows: one window can be glanced at, two have to be arranged.
+#
+#    -an on both legs: the audio is already going to the speakers above, and a
+#    second copy through ffplay would be an echo of the caller into the mic.
+#
+#    A caller who sends no video is normal -- two-way is audio-first and the
+#    browser may not have a camera. hstack would stall waiting for a second
+#    input that never arrives, so the caller leg is padded to a fixed size and
+#    the stack is told to finish on the shortest input.
+"$FFMPEG" -hide_banner -loglevel error \
+  -rtsp_transport tcp -i "$RTSP/cam" \
+  -rtsp_transport tcp -i "$RTSP/talkback" \
+  -filter_complex "\
+     [0:v]scale=480:-2,setsar=1,drawtext=text='room':x=8:y=8:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.4[a]; \
+     [1:v]scale=480:-2,setsar=1,drawtext=text='caller':x=8:y=8:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.4[b]; \
+     [a][b]hstack=inputs=2:shortest=1[v]" \
+  -map "[v]" -an -f nut - 2>/dev/null \
+  | "$FFPLAY" -hide_banner -loglevel error -autoexit -window_title "$TITLE" -i - &
+pids+=($!)
+
+wait

@@ -3299,6 +3299,17 @@
       paintAudioModes();
 
       var self = this;
+      /* VIDEO TOO, so the room can see who is calling.
+
+         The room has a window during a call (bin/twoway-view on the node)
+         showing itself on the left and the caller on the right. That window
+         has nothing to draw unless this leg publishes a camera.
+
+         Video is REQUESTED, not required: a viewer with no camera, or one who
+         refuses it, still gets a working audio call. Asking for both in one
+         getUserMedia would fail the whole call when only the camera is
+         missing, so the camera is asked for separately and its absence is
+         survivable. */
       navigator.mediaDevices.getUserMedia({
         /* The canceller needs the room arriving through a PeerConnection to
            have a reference signal, which is exactly why the inbound leg is
@@ -3310,6 +3321,19 @@
           autoGainControl: true
         },
         video: false
+      }).then(function (stream) {
+        // Best-effort camera. Resolves to the same stream either way, so the
+        // call proceeds identically whether or not a camera was granted.
+        return navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 },
+                   frameRate: { ideal: 15 } }
+        }).then(function (vs) {
+          vs.getVideoTracks().forEach(function (t) { stream.addTrack(t); });
+          return stream;
+        }).catch(function () {
+          audioNote('no camera for two-way; audio only');
+          return stream;
+        });
       }).then(function (stream) {
         twoWay.stream = stream;
 
