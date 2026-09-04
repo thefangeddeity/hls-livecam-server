@@ -303,12 +303,31 @@ def _roomaudio_output(audio_map, audio_filter):
     filt = list(audio_filter)
     if '-af' in filt:
         i = filt.index('-af') + 1
-        filt[i] = filt[i] + ',aresample=async=1'
+        chain = filt[i]
+        # MONO, and it has to happen in the filter chain: -ac would kill the
+        # avfoundation input outright (see above). One built-in mic is a mono
+        # source in all but name, so a stereo Opus frame spent half its bits
+        # describing a duplicate channel -- at 64k that left ~32k of real
+        # signal per side. Folding to mono hands the whole budget to the one
+        # channel that carries anything.
+        chain = chain.replace('channel_layouts=stereo',
+                              'channel_layouts=mono')
+        filt[i] = chain + ',aresample=async=1'
     else:
-        filt = ['-af', 'aresample=async=1']
+        filt = ['-af', 'aformat=channel_layouts=mono,aresample=async=1']
     return [
-        '-map', audio_map, '-c:a', 'libopus', '-b:a', '64k',
-        '-application', 'voip',
+        # 96k mono, not 64k stereo -- roughly triple the bits per real
+        # channel. This also has to cover the FEC redundancy, which comes out
+        # of the same budget, so -packet_loss 10 was quietly taxing a figure
+        # that was already thin.
+        '-map', audio_map, '-c:a', 'libopus', '-b:a', '96k',
+        # 'audio', not 'voip'. voip is Opus's speech-only mode: it optimises
+        # for intelligibility of one talker and spends nothing on the rest of
+        # the band, which is why a room came through thin and synthetic. This
+        # is a room monitor -- ambience, distance, more than one voice -- so
+        # the full-band mode is the honest choice. The Talk/2-Way legs are
+        # separate encodes and keep their own settings.
+        '-application', 'audio',
         # In-band FEC: libopus tucks a reduced-bitrate copy of the PREVIOUS
         # frame inside the NEXT packet. A decoder that sees a gap in RTP
         # sequence numbers reconstructs from that redundancy instead of
@@ -460,7 +479,7 @@ def _start_cam_reader():
     fr  = int(_cfg.get('FRAMERATE', 15))
     return subprocess.Popen([
         FFMPEG, '-hide_banner', '-loglevel', 'error',
-        '-f', 'avfoundation',
+        '-f', 'avfoundation', '-thread_queue_size', '1024',
         '-framerate', str(fr),
         '-video_size', f'{FRAME_W}x{FRAME_H}',
         '-pixel_format', 'uyvy422',
@@ -687,7 +706,8 @@ def _start_cv_publisher(mode='cv'):
 
     a = subprocess.Popen([
         FFMPEG, '-hide_banner', '-loglevel', 'error',
-        '-f', 'avfoundation', '-framerate', str(fr),
+        '-f', 'avfoundation', '-thread_queue_size', '1024',
+        '-framerate', str(fr),
         '-video_size', f'{FRAME_W}x{FRAME_H}',
         '-pixel_format', 'uyvy422',
         '-use_wallclock_as_timestamps', '1',
@@ -738,7 +758,8 @@ def _start_cv_publisher(mode='cv'):
         '-s', f'{FRAME_W}x{FRAME_H}', '-framerate', str(fr),
         '-use_wallclock_as_timestamps', '1',
         '-i', 'pipe:0',
-        '-f', 'avfoundation', '-i', f':{audio_idx}',
+        '-f', 'avfoundation', '-thread_queue_size', '1024',
+        '-i', f':{audio_idx}',
         '-map', '0:v:0', '-map', '1:a:0',
         '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-vf', 'format=yuv420p', '-profile:v', 'high', '-level', '4.0',
@@ -838,6 +859,15 @@ def _start_combined_av_publisher(mode='show'):
     else:
         source = [
             '-f', 'avfoundation',
+            # Input thread queue. ffmpeg's default is 8 packets: when the
+            # muxer/encoder side stalls even briefly, avfoundation's audio
+            # packets overflow that queue and are DROPPED at the source --
+            # measured on this rig as 78% silence in the published room
+            # audio, arriving as ~300ms bursts every ~1.3s, while a dryer
+            # was running and the room was anything but silent. Video and
+            # audio share one capture here, so an x264 hiccup starves the
+            # audio side; a deeper queue absorbs that instead of losing it.
+            '-thread_queue_size', '1024',
             '-framerate', str(fr),
             '-video_size', f'{FRAME_W}x{FRAME_H}',
             '-pixel_format', 'uyvy422',
