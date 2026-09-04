@@ -4279,12 +4279,37 @@
     var s = rx.srcObject;
     var trks = (s && s.getAudioTracks) ? s.getAudioTracks() : [];
     var t = trks[0];
+    /* WebRTC's own accounting of the leg, asked once a second.
+
+       The server side is proven continuous -- 44.8s of audio per 43s of wall
+       clock off the roomaudio path -- so anything missing is lost between
+       there and here, and only the receiver can say so. packetsLost is the
+       network; concealed is what the jitter buffer INVENTED to cover a gap,
+       which is heard as the audio thinning or cutting; jitter is arrival
+       spread in seconds. A leg that sounds inconsistent while the server is
+       steady shows it in these three numbers or nowhere. */
+    if (twoWay.sub && twoWay.sub.getStats && !rxDiag._busy) {
+      rxDiag._busy = true;
+      twoWay.sub.getStats().then(function (rep) {
+        rep.forEach(function (r) {
+          if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+            rxDiag._net = ' lost=' + (r.packetsLost || 0)
+              + ' jit=' + (r.jitter !== undefined
+                           ? (r.jitter * 1000).toFixed(0) + 'ms' : '-')
+              + ' conceal=' + (r.concealedSamples || 0);
+          }
+        });
+        rxDiag._busy = false;
+      }).catch(function () { rxDiag._busy = false; });
+    }
+
     audioNote('rx: trk=' + trks.length
       + ' en=' + (t ? (t.enabled ? '1' : '0') + '/' + t.readyState
                       + (t.muted ? '/muted' : '/live') : '-')
       + ' pause=' + (rx.paused ? '1' : '0')
       + ' mute=' + (rx.muted ? '1' : '0')
-      + ' rs=' + rx.readyState);
+      + ' rs=' + rx.readyState
+      + (rxDiag._net || ''));
   }
 
   function paintTransportLeds() {
