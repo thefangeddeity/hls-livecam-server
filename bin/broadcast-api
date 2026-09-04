@@ -292,6 +292,15 @@ def _roomaudio_output(audio_map, audio_filter):
     return [
         '-map', audio_map, '-c:a', 'libopus', '-b:a', '64k',
         '-application', 'voip',
+        # In-band FEC: libopus tucks a reduced-bitrate copy of the PREVIOUS
+        # frame inside the NEXT packet. A decoder that sees a gap in RTP
+        # sequence numbers reconstructs from that redundancy instead of
+        # concealment silence -- entirely transparent to the receiver, no
+        # SDP negotiation required (unlike RED, which needs its own payload
+        # type). packet_loss is the rate the encoder BUDGETS redundancy for,
+        # not a measurement -- 10% is the same default every consumer
+        # video-call stack (WebRTC's own default) ships with.
+        '-packet_loss', '10', '-fec', '1',
         *audio_filter,
         '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
     ]
