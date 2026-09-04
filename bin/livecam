@@ -112,17 +112,12 @@ pprof: no
 playback: no
 rtmp: no
 srt: no
-# New in mediamtx 1.19: on by default, and its TLS auto-cert generation
-# writes auto.key/auto.crt into the process CWD. Under the LaunchAgent that
-# CWD is not writable, so an enabled-but-unused MoQ listener aborted startup
-# outright -- nothing here publishes or reads Media-over-QUIC.
-moq: no
 
 # The browser's only route for outgoing audio is WHIP, which mediamtx serves
 # from this listener. Off, the Talk and 2-Way keys have nowhere to publish.
 webrtc: yes
 webrtcAddress: :${WEBRTC_PORT}
-webrtcAllowOrigins: ['*']
+webrtcAllowOrigin: '*'
 # Host candidates only. The fleet lives inside a WireGuard tailnet where every
 # node is directly addressable, so STUN would be asking a public server to
 # discover an address we already know -- latency and a dependency for nothing.
@@ -136,7 +131,7 @@ rtspAddress: :${RTSP_PORT}
 
 hls: yes
 hlsAddress: :${HLS_PORT}
-hlsAllowOrigins: ['*']
+hlsAllowOrigin: '*'
 hlsAlwaysRemux: yes
 hlsVariant: fmp4
 hlsSegmentCount: 7

@@ -1513,7 +1513,8 @@
             <div class="led" id="audioMicLed"><span class="bulb"></span><span class="n eng">Mic</span></div>
             <div class="led" id="audioMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="audioRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="audioHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
+            <div class="led" id="audioHlsLed" title="Listening over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
+            <div class="led" id="audioRtcLed" title="Live WebRTC leg (Talk / 2-Way, or WHEP listening)"><span class="bulb"></span><span class="n eng">RTC</span></div>
           </div>
         </div>
 
@@ -2813,7 +2814,25 @@
   // protocol was not enough on its own: mediamtx serves :@HLS_PORT@ over plain
   // HTTP only, so an https://host:@HLS_PORT@/ URL fails at the socket rather
   // than at the mixed-content check -- a different error, the same silence.
-  var MASTER_URL = window.location.origin + '/hls/cam/index.m3u8';
+  /* The LISTEN path is HLS again, and it is its own stream now.
+
+     'cam' is video-only since the capture gave up the microphone (one
+     AVFoundation session serving both devices was delivering ~20% of the
+     audio). The mic has its own process publishing twice: Opus on
+     'roomaudio' for WebRTC, and AAC on 'roomsound' for this.
+
+     Why not WHEP for listening: WebRTC plays what arrives when it
+     arrives, with no buffer to cover a late packet, and the reported
+     symptom -- an evenly-spaced staccato that appeared with the WHEP
+     change and survived every codec, bitrate, FEC and resampler change
+     tried against it -- is what that sounds like. HLS buffers whole
+     segments and plays them gaplessly. Latency is the price and it is
+     the right one for listening; 2-Way still uses WHEP, where latency
+     is the whole point and the echo canceller needs the reference.
+
+     AAC rather than Opus because Safari and iOS will not decode Opus in
+     HLS, and iOS is the client this has to work on. */
+  var MASTER_URL = window.location.origin + '/hls/roomsound/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
@@ -2828,6 +2847,7 @@
   var mtxLed  = document.getElementById('audioMtxLed');
   var rtspLed = document.getElementById('audioRtspLed');
   var hlsLed  = document.getElementById('audioHlsLed');
+  var rtcLed  = document.getElementById('audioRtcLed');
 
   if (!muteKey || !audio) return;
 
@@ -3334,13 +3354,12 @@
      opens paused, and audioDir defaults to 'stop'. */
   function startRoomTransport() {
     roomStop();
-    roomTx = 'none';
-    roomWhy = '';
-    roomWhep(function (why) {
-      roomTx = 'hls';
-      roomWhy = why || 'whep failed';
-      resolveAudioUrl(startAudio);
-    });
+    // Straight to HLS. roomWhep() is deliberately not called here any more --
+    // it stays in the file because 2-Way still uses the same handshake for
+    // its inbound leg, where real-time delivery is the point.
+    roomTx = 'hls';
+    roomWhy = 'listen path is HLS by choice, not by failure';
+    resolveAudioUrl(startAudio);
   }
 
   startRoomTransport();
@@ -4147,10 +4166,25 @@
     g.fillText('OUT', 3, mid + 10);
   }
 
+  /* WHICH TRANSPORT IS CARRYING SOUND, RIGHT NOW.
+     Listening and talking no longer use the same leg: Play is buffered HLS,
+     while Talk and 2-Way are live WebRTC. One lamp could not say which was
+     active, and the answer changes as keys are pressed -- so each leg gets
+     its own, and both are read from live state rather than set at the moment
+     a key is pressed (a lamp lit by a keypress lies the moment the leg
+     underneath it drops). */
+  function paintTransportLeds() {
+    var rtcOn = !!(twoWay && twoWay.on) || roomTx === 'whep';
+    var hlsOn = roomTx === 'hls' && !(twoWay && twoWay.on);
+    stage(rtcLed, rtcOn ? 'ok' : '');
+    stage(hlsLed, hlsOn ? 'ok' : '');
+  }
+
   setInterval(function () {
     silenceVideoAudio();   // cheap, and must survive stream reloads
     levelSample();
     levelDraw();
+    paintTransportLeds();
   }, 500);
 
   /* A gesture is what lets an AudioContext run at all, and every key is one.
