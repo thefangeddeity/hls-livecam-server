@@ -3298,6 +3298,21 @@
       }).then(function (stream) {
         twoWay.stream = stream;
 
+        /* HONOUR THE MUTE KEY BEFORE THE FIRST PACKET LEAVES.
+
+           audioMuted is restored from localStorage at load, so a page that
+           comes back with MUTE MIC lit must come back muted. The mute used to
+           be applied only by setMuted(), which acts on tracks that do not
+           exist until here -- so after a reload the key read MUTED while the
+           microphone was live. A control that misreports an open microphone
+           in somebody's home is the one failure this panel must not have.
+
+           Applied to the track before it is added to the sender, so there is
+           no window in which audio could leave. */
+        stream.getAudioTracks().forEach(function (t) {
+          t.enabled = !audioMuted;
+        });
+
         // OUT: publish the microphone.
         twoWay.pub = new RTCPeerConnection();
         stream.getTracks().forEach(function (t) {
