@@ -311,6 +311,22 @@ cmd_start() {
 }
 
 cmd_stop() {
+  # STOPS things. It used to only ASK.
+  #
+  # The old body set the enabled flag to False, waited up to 5s for the
+  # supervisor to notice, and then cleaned up caffeinate and stray ffmpeg --
+  # but never signalled mediamtx or broadcast-api. If nothing acted on the
+  # flag they simply kept running, and `livecam stop` reported success.
+  #
+  # Observed live: a mediamtx from the previous evening survived eleven hours
+  # and every restart in between, so a config change and a version downgrade
+  # both appeared to do nothing, and several measurements were taken against a
+  # server that had already been replaced on disk. A stop that does not stop is
+  # worse than no stop, because everything downstream trusts it.
+  #
+  # The flag and the grace window stay: a supervisor that exits cleanly is
+  # still the better path, and stop_one is a no-op on a pid that is already
+  # gone. What follows is the guarantee.
   echo -e "${B}Stopping hls-livecam...${N}"
   set_flag False
   local i=0
@@ -318,8 +334,22 @@ cmd_stop() {
     pid_alive "$API_PID" || pid_alive "$MMTX_PID" || break
     sleep 0.5; i=$((i+1))
   done
+  # TERM, then KILL, same as cmd_repair has always done. broadcast-api first:
+  # it owns the capture children, and its signal handler reaps them.
+  stop_one broadcast-api "$API_PID"
+  stop_one mediamtx "$MMTX_PID"
   stop_caffeinate
   kill_stray_ffmpeg
+
+  # Last resort. A mediamtx started outside this script -- by hand during
+  # debugging, or by an earlier version that wrote no pidfile -- owns the RTSP
+  # and HLS ports and would silently defeat the next start.
+  if pgrep -f "$MEDIAMTX_BIN" >/dev/null 2>&1; then
+    echo -e "  ${Y}mediamtx still present without a pidfile; clearing${N}"
+    pkill -f "$MEDIAMTX_BIN" 2>/dev/null || true
+    sleep 1
+    pkill -9 -f "$MEDIAMTX_BIN" 2>/dev/null || true
+  fi
 }
 
 cmd_restart() { cmd_stop; sleep 1; cmd_start; }
