@@ -4168,7 +4168,7 @@
     if (outOn && (inOn || rtcIn))      txt = 'BIDIRECTIONAL';
     else if (outOn)                    txt = 'OUTBOUND';
     else if (inOn || rtcIn)            txt = 'INBOUND';
-    else                               txt = '--';
+    else                               txt = 'NONE';
     el.textContent = txt;
   }
 
