@@ -90,11 +90,19 @@ done
 PY="$ROOT/.venv/bin/python"
 FFMPEG="$(command -v ffmpeg || true)"
 [[ -n "$FFMPEG" ]] || { echo "ERROR: ffmpeg not found" >&2; exit 1; }
+# SoX is a hard dependency, not a nicety: it captures the microphone.
+# ffmpeg's avfoundation AUDIO input is broken on macOS (tickets #4437, #4513)
+# and delivers roughly a fifth of the stream with no error, so a machine
+# without SoX has no usable room audio at all. Checked here so that is found
+# at build time rather than by a listener hearing bursts and silence.
+SOX="$(command -v sox || true)"
+[[ -n "$SOX" ]] || { echo "ERROR: sox not found (brew install sox)" >&2; exit 1; }
 
 echo "[1/6] Preflight"
 "$PY" -c 'import PySide6; print("PySide6 OK")'
 "$ROOT/vendor/mediamtx" --version
 "$FFMPEG" -hide_banner -version | head -1
+"$SOX" --version | head -1
 
 echo "[2/6] Bundle"
 mkdir -p "$MACOS" "$RUNTIME"
@@ -276,9 +284,18 @@ SETUP
 That is the whole install. No separate installer, no Terminal, no checkout.
 Setup runs from inside the app on first launch and does not repeat.
 
-REQUIREMENT
-FFmpeg must be installed:  brew install ffmpeg
-The app will tell you if it is missing.
+REQUIREMENTS
+Two command-line tools must be installed:
+
+  brew install ffmpeg
+  brew install sox
+
+The app will tell you if either is missing.
+
+SoX captures the microphone. ffmpeg's own macOS audio input is broken --
+a decade-old bug (ffmpeg #4437, #4513) that delivers about a fifth of the
+sound with no error reported -- so without SoX there is no usable room
+audio, only bursts and silence.
 README
 
 # Record what this actually is, inside the bundle, so a machine under test can
