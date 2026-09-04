@@ -1353,8 +1353,8 @@
     <!-- A strip of the same tube the panels use. Version is substituted at
          render time from `git describe`; hovering gives the build stamp and
          commit, which is what distinguishes two installs of the same tag. -->
-    <span class="hdr-vfd" title="mac-v1.8.0-15-g9b68592-dirty · dev · 9b68592">
-      <span class="vlit">mac-v1.8.0-15-g9b68592-dirty</span><span class="vlit hdr-host" id="hdrHost"></span>
+    <span class="hdr-vfd" title="@BUILD_LABEL@">
+      <span class="vlit">@VERSION@</span><span class="vlit hdr-host" id="hdrHost"></span>
     </span>
   </div>
   <div class="status-bar">
@@ -1418,8 +1418,7 @@
             <div class="led" id="videoCamLed"><span class="bulb"></span><span class="n eng">Camera</span></div>
             <div class="led" id="videoMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="videoRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="videoHlsLed" title="Picture over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
-            <div class="led" id="videoRtcLed" title="Picture over WebRTC (not carried on this node)"><span class="bulb"></span><span class="n eng">RTC</span></div>
+            <div class="led" id="videoHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
           </div>
         </div>
 
@@ -1506,7 +1505,7 @@
               <span class="vval"><span class="vghost">888</span><span class="vlit" id="audioBits"></span></span>
             </div>
             <div class="vind">
-              <i id="indStereo">MONO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
           </div>
 
@@ -1514,8 +1513,7 @@
             <div class="led" id="audioMicLed"><span class="bulb"></span><span class="n eng">Mic</span></div>
             <div class="led" id="audioMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="audioRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="audioHlsLed" title="Listening over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
-            <div class="led" id="audioRtcLed" title="Live WebRTC leg (Talk / 2-Way, or WHEP listening)"><span class="bulb"></span><span class="n eng">RTC</span></div>
+            <div class="led" id="audioHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
           </div>
         </div>
 
@@ -1771,7 +1769,7 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION  = 'mac-v1.8.0-15-g9b68592-dirty';
+  var BUILD_VERSION  = '@VERSION@';
   var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
@@ -2812,28 +2810,10 @@
  */
 (function () {
   // Same-origin for the same reason as HLS_URL above. Following the page's
-  // protocol was not enough on its own: mediamtx serves :8888 over plain
-  // HTTP only, so an https://host:8888/ URL fails at the socket rather
+  // protocol was not enough on its own: mediamtx serves :@HLS_PORT@ over plain
+  // HTTP only, so an https://host:@HLS_PORT@/ URL fails at the socket rather
   // than at the mixed-content check -- a different error, the same silence.
-  /* The LISTEN path is HLS again, and it is its own stream now.
-
-     'cam' is video-only since the capture gave up the microphone (one
-     AVFoundation session serving both devices was delivering ~20% of the
-     audio). The mic has its own process publishing twice: Opus on
-     'roomaudio' for WebRTC, and AAC on 'roomsound' for this.
-
-     Why not WHEP for listening: WebRTC plays what arrives when it
-     arrives, with no buffer to cover a late packet, and the reported
-     symptom -- an evenly-spaced staccato that appeared with the WHEP
-     change and survived every codec, bitrate, FEC and resampler change
-     tried against it -- is what that sounds like. HLS buffers whole
-     segments and plays them gaplessly. Latency is the price and it is
-     the right one for listening; 2-Way still uses WHEP, where latency
-     is the whole point and the echo canceller needs the reference.
-
-     AAC rather than Opus because Safari and iOS will not decode Opus in
-     HLS, and iOS is the client this has to work on. */
-  var MASTER_URL = window.location.origin + '/hls/roomsound/index.m3u8';
+  var MASTER_URL = window.location.origin + '/hls/cam/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
@@ -2848,7 +2828,6 @@
   var mtxLed  = document.getElementById('audioMtxLed');
   var rtspLed = document.getElementById('audioRtspLed');
   var hlsLed  = document.getElementById('audioHlsLed');
-  var rtcLed  = document.getElementById('audioRtcLed');
 
   if (!muteKey || !audio) return;
 
@@ -2984,16 +2963,7 @@
        audio track, which is the one claim the manifest can settle. */
     indicator(document.getElementById('indAv'), p.audio_track);
     indicator(document.getElementById('indCv'), p.cv);
-    /* Lit when the stream really is mono, which it now always is. The label
-       is set from the reading rather than assumed, so a future stereo source
-       relabels itself instead of quietly mis-stating what you are hearing. */
-    (function () {
-      var el = document.getElementById('indStereo');
-      if (!el) return;
-      if (p.audio_channels === 1)      el.textContent = 'MONO';
-      else if (p.audio_channels === 2) el.textContent = 'STEREO';
-      indicator(el, p.audio_channels === 1 || p.audio_channels === 2);
-    })();
+    indicator(document.getElementById('indStereo'), p.audio_channels === 2);
 
     stage(ledMog2,    p.cv_mog2 === true ? 'ok' : 'pending');
     stage(ledFov,     p.cv_foveal === true ? 'ok' : 'pending');
@@ -3364,24 +3334,13 @@
      opens paused, and audioDir defaults to 'stop'. */
   function startRoomTransport() {
     roomStop();
-    /* Progressive MP3, served by broadcast-api off the same microphone
-       process. Measured against the mediamtx path on the same mic in the same
-       minute: 8% of windows below -60dB instead of 42-51%, envelope
-       periodicity 0.16 (noise) instead of 0.38-0.56, and 27dB more level with
-       NO capture gain. The old chain was largely transmitting padded silence.
-
-       Same origin, so there is no mixed-content rule to satisfy and no proxy
-       path prefix for a redirect to get lost in -- two failure modes this
-       fleet has hit before. roomWhep() stays in the file: 2-Way still needs
-       it, and that is where real-time delivery is actually the point. */
-    roomTx = 'mp3';
-    roomWhy = 'progressive MP3, same origin';
-    try { audio.srcObject = null; } catch (e) {}
-    audio.src = window.location.origin + '/audio/room.mp3';
-    audio.load();
-    stage(hlsLed, 'ok');
-    setAudioState('Room audio');
-    beginIfPlaying();
+    roomTx = 'none';
+    roomWhy = '';
+    roomWhep(function (why) {
+      roomTx = 'hls';
+      roomWhy = why || 'whep failed';
+      resolveAudioUrl(startAudio);
+    });
   }
 
   startRoomTransport();
@@ -3538,7 +3497,6 @@
       if (pc) { try { pc.close(); } catch (e) {} }
     });
     twoWay.pub = twoWay.sub = null;
-    levelOutDetach();
     if (twoWay.stream) {
       twoWay.stream.getTracks().forEach(function (t) { t.stop(); });
       twoWay.stream = null;
@@ -3589,7 +3547,6 @@
       video: false
     }).then(function (stream) {
       twoWay.stream = stream;
-      levelOutAttach(stream);
 
       twoWay.pub = new RTCPeerConnection();
       stream.getTracks().forEach(function (t) { twoWay.pub.addTrack(t, stream); });
@@ -3880,103 +3837,6 @@
   var levelTries = 0;
   var levelHist  = new Array(120).fill(0);
 
-  /* ── THE OUT LANE ────────────────────────────────────────────────
-     One lane could only ever answer "is there sound", which is the wrong
-     question the moment a microphone is open: during TALK the room is
-     deliberately silenced at this end, so a single trace goes flat and looks
-     exactly like a dead channel at the one moment you most need to know your
-     voice is leaving. Divided, the flat half IS the answer -- the room is
-     meant to be quiet, and OUT moving proves the leg is live.
-
-     Tapped straight off the local stream, with no clone. The clone the room
-     lane needs is protection against WebKit taking an ELEMENT's audio when a
-     source node is built over the track it is rendering; the microphone is
-     rendered by nothing, it goes to a PeerConnection. There is no output here
-     to lose, so there is nothing to protect. */
-
-  /* ── THE PICTURE MUST NOT HOLD THE AUDIO SESSION ──────────────────
-     The <video> above is muted, and muted is NOT the same as "not decoding
-     audio". The master manifest carries both tracks, so the picture element
-     decodes an audio track it will never render -- and on iOS a media element
-     that decodes audio can hold the audio session whether or not it is muted.
-
-     That is why "a brief burst, then silence" survived every fix aimed at the
-     audio element, and survived changing transport entirely: HLS and WHEP both
-     failed identically because neither was the problem. #roomAudioPlayer would
-     start, be audible for the instant before the picture settled, and then
-     lose the session to an element playing nothing.
-
-     WebKit implements HTMLMediaElement.audioTracks, which most engines dropped.
-     That is exactly the platform that needs this, so the one place the API
-     survives is the one place it matters. Elsewhere it is absent and this is a
-     no-op, which is correct: no other engine has the conflict.
-
-     Re-applied on a timer rather than once. Tracks appear asynchronously after
-     metadata, and a stream reload or a mode change builds new ones -- a single
-     call at load would silence the first track and miss every one after it. */
-  var vidAudState = '-';
-
-  function silenceVideoAudio() {
-    try {
-      var v = document.getElementById('video');
-      if (!v) { vidAudState = 'novid'; return; }
-      var at = v.audioTracks;
-      if (!at) { vidAudState = 'noapi'; return; }   // not WebKit; no conflict
-      var n = at.length, live = 0;
-      for (var i = 0; i < n; i++) {
-        if (at[i].enabled) { at[i].enabled = false; }
-        if (at[i].enabled) live++;                  // refused to turn off
-      }
-      vidAudState = n + (live ? ':' + live + 'on' : ':off');
-    } catch (e) {
-      vidAudState = 'err';
-    }
-  }
-
-  var levelOutTap = null, levelOutAnalyser = null;
-  var levelOutHist = new Array(120).fill(0);
-
-  function levelOutAttach(stream) {
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC || !stream) return;
-    levelOutDetach();
-    try {
-      if (!levelCtx) {
-        levelCtx = new AC();
-        levelAnalyser = levelCtx.createAnalyser();
-        levelAnalyser.fftSize = 512;
-      }
-      levelOutAnalyser = levelCtx.createAnalyser();
-      levelOutAnalyser.fftSize = 512;
-      levelOutTap = levelCtx.createMediaStreamSource(stream);
-      levelOutTap.connect(levelOutAnalyser);   // analyser only, never output
-      levelResume();
-    } catch (e) {
-      levelOutTap = null; levelOutAnalyser = null;
-    }
-  }
-
-  function levelOutDetach() {
-    if (levelOutTap) { try { levelOutTap.disconnect(); } catch (e) {} }
-    levelOutTap = null;
-    levelOutAnalyser = null;
-    // Zeroed rather than frozen: a trace left holding its last values would
-    // go on showing a voice after the key was released.
-    for (var i = 0; i < levelOutHist.length; i++) levelOutHist[i] = 0;
-  }
-
-  function levelPeak(an) {
-    if (!an) return 0;
-    var buf = new Uint8Array(an.frequencyBinCount);
-    an.getByteTimeDomainData(buf);
-    var peak = 0;
-    for (var i = 0; i < buf.length; i++) {
-      var d = Math.abs(buf[i] - 128);
-      if (d > peak) peak = d;
-    }
-    return Math.min(1, peak / 128);
-  }
-
   /* Mute and volume. The element is the only stage there is now, which is
      what makes this safe: there is no second silencer that can be left in the
      wrong position by a graph that failed to start. */
@@ -4126,15 +3986,16 @@
     // interrupted long after the tap was made and the legend has to follow.
     paintLevelLabel();
     var v = 0;
-    if (levelMeasuring() && levelAnalyser) v = levelPeak(levelAnalyser);
-    // The OUT lane is gated on the microphone being open, not on levelMeasuring
-    // -- that answers a question about the ROOM tap, and the two can differ:
-    // the room can be unobservable while your own voice is perfectly readable.
-    var o = 0;
-    if (levelOutAnalyser && levelCtx && levelCtx.state === 'running') {
-      o = levelPeak(levelOutAnalyser);
+    if (levelMeasuring() && levelAnalyser) {
+      var buf = new Uint8Array(levelAnalyser.frequencyBinCount);
+      levelAnalyser.getByteTimeDomainData(buf);
+      var peak = 0;
+      for (var i = 0; i < buf.length; i++) {
+        var d = Math.abs(buf[i] - 128);
+        if (d > peak) peak = d;
+      }
+      v = Math.min(1, peak / 128);
     }
-    levelOutHist.push(o); levelOutHist.shift();
     // Honest flat, like the FPS trace at 0. TALK joins STOP here: this lane
     // measures what THIS viewer hears, and during TALK that is nothing.
     if (audioDir === 'stop' || audioDir === 'to') v = 0;
@@ -4146,80 +4007,33 @@
     if (!c || !c.getContext) return;
     var g = c.getContext('2d'), w = c.width, h = c.height;
     g.clearRect(0, 0, w, h);
-    var base = h - 12, top = 4, step = w / levelHist.length;
-    // The line is the middle of the lane, not its floor: each direction gets
-    // half the height and grows away from it. Same 12px kept clear at the
-    // bottom so nothing is drawn through the LEVEL and 60s legends.
-    var mid = Math.round((top + base) / 2), half = mid - top;
+    var base = h - 12, top = 4, span = base - top, step = w / levelHist.length;
 
-    // Log scale, because hearing is. Speech near -30 dBFS is 3% of a linear
-    // height and reads as silence on a linear axis.
-    function bars(hist, colour, up) {
-      g.fillStyle = colour;
-      for (var i = 0; i < hist.length; i++) {
-        var val = hist[i];
-        if (!val) continue;
-        var db = 20 * Math.log(val) / Math.LN10;
-        var f = Math.max(0, Math.min(1, (db + 60) / 60));
-        if (f <= 0) continue;
-        var bh = Math.max(1, f * half);
-        g.fillRect(i * step, up ? mid - bh : mid + 1,
-                   Math.max(1, step - 1), bh);
-      }
+    /* Not measuring -- unsupported, or a context that is not running: draw
+       the baseline and stop. A row of zero-height bars is indistinguishable
+       from a silent room, and the legend beside it already reads LEVEL N/A. */
+    if (!levelMeasuring()) {
+      g.fillStyle = 'rgba(142,142,147,.22)';
+      g.fillRect(0, base, w, 1);
+      return;
     }
 
-    /* The room half can be unmeasurable while the microphone half is fine, so
-       they are drawn independently. Drawing zero-height bars for an
-       unobservable room would be indistinguishable from a silent one -- which
-       is the confusion the divided lane exists to end, not to repeat. */
-    if (levelMeasuring()) bars(levelHist, 'rgba(48,209,88,.55)', true);
-    bars(levelOutHist, 'rgba(255,159,10,.55)', false);
-
-    // Centre rule, and the two ends named. Without labels a mirrored trace is
-    // just a symmetrical squiggle: which half is you is the whole point.
-    g.fillStyle = 'rgba(142,142,147,.28)';
-    g.fillRect(0, mid, w, 1);
-    g.font = '9px ui-monospace, Menlo, monospace';
-    g.fillStyle = levelMeasuring() ? 'rgba(48,209,88,.55)'
-                                   : 'rgba(142,142,147,.35)';
-    g.fillText('IN', 3, mid - 3);
-    g.fillStyle = levelOutTap ? 'rgba(255,159,10,.65)'
-                              : 'rgba(142,142,147,.35)';
-    g.fillText('OUT', 3, mid + 10);
+    // Log scale, because hearing is. Speech near -30 dBFS is 3% of a linear
+    // height and indistinguishable from silence. Baseline lifted 12px so bars
+    // are not drawn through the LEVEL and 60s legends.
+    g.fillStyle = 'rgba(48,209,88,.55)';
+    for (var i = 0; i < levelHist.length; i++) {
+      var val = levelHist[i];
+      var db = val > 0 ? 20 * Math.log(val) / Math.LN10 : -100;
+      var f = Math.max(0, Math.min(1, (db + 60) / 60));
+      var bh = f > 0 ? Math.max(1, f * span) : 0;
+      if (bh) g.fillRect(i * step, base - bh, Math.max(1, step - 1), bh);
+    }
+    g.fillStyle = 'rgba(48,209,88,.18)';
+    g.fillRect(0, base, w, 1);
   }
 
-  /* WHICH TRANSPORT IS CARRYING SOUND, RIGHT NOW.
-     Listening and talking no longer use the same leg: Play is buffered HLS,
-     while Talk and 2-Way are live WebRTC. One lamp could not say which was
-     active, and the answer changes as keys are pressed -- so each leg gets
-     its own, and both are read from live state rather than set at the moment
-     a key is pressed (a lamp lit by a keypress lies the moment the leg
-     underneath it drops). */
-  function paintTransportLeds() {
-    // AUDIO. Listening is Icecast over HTTP (roomTx 'mp3'); Talk and 2-Way are
-    // WebRTC. They are different transports now, so one lamp cannot answer
-    // "which is carrying sound" -- hence two, both read from live state.
-    var rtcOn = !!(twoWay && twoWay.on) || roomTx === 'whep';
-    var hlsOn = (roomTx === 'hls' || roomTx === 'mp3') && !(twoWay && twoWay.on);
-    stage(rtcLed, rtcOn ? 'ok' : '');
-    stage(hlsLed, hlsOn ? 'ok' : '');
-
-    // VIDEO. The picture is HLS on this node; the RTC lamp is present so the
-    // panel can say that plainly rather than leaving it unstated, and it lights
-    // only if a WebRTC video leg ever carries the picture.
-    var vHls = document.getElementById('videoHlsLed');
-    var vRtc = document.getElementById('videoRtcLed');
-    var vRtcOn = !!(twoWay && twoWay.on && twoWay.video);
-    if (vRtc) stage(vRtc, vRtcOn ? 'ok' : '');
-    if (vHls && vRtcOn) stage(vHls, '');
-  }
-
-  setInterval(function () {
-    silenceVideoAudio();   // cheap, and must survive stream reloads
-    levelSample();
-    levelDraw();
-    paintTransportLeds();
-  }, 500);
+  setInterval(function () { levelSample(); levelDraw(); }, 500);
 
   /* A gesture is what lets an AudioContext run at all, and every key is one.
      This no longer has anything to do with whether the room is audible -- the
@@ -4370,7 +4184,6 @@
              observer is wired up but its context is not running, which reads
              as a flat lane and must not be confused with a quiet room. */
           'tx=' + roomTx + (roomWhy ? '(' + roomWhy.slice(0, 16) + ')' : '') +
-            ' vaud=' + vidAudState +
             ' ctx=' + (ctx ? ctx.state : 'none') + ' tap=' + yn(levelTap) +
             ' meter=' + (levelState === 'na' ? 'na'
                        : levelMeasuring()    ? 'live'

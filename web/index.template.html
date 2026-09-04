@@ -1418,7 +1418,8 @@
             <div class="led" id="videoCamLed"><span class="bulb"></span><span class="n eng">Camera</span></div>
             <div class="led" id="videoMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="videoRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="videoHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
+            <div class="led" id="videoHlsLed" title="Picture over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
+            <div class="led" id="videoRtcLed" title="Picture over WebRTC (not carried on this node)"><span class="bulb"></span><span class="n eng">RTC</span></div>
           </div>
         </div>
 
@@ -1505,7 +1506,7 @@
               <span class="vval"><span class="vghost">888</span><span class="vlit" id="audioBits"></span></span>
             </div>
             <div class="vind">
-              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+              <i id="indStereo">MONO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
           </div>
 
@@ -2983,7 +2984,16 @@
        audio track, which is the one claim the manifest can settle. */
     indicator(document.getElementById('indAv'), p.audio_track);
     indicator(document.getElementById('indCv'), p.cv);
-    indicator(document.getElementById('indStereo'), p.audio_channels === 2);
+    /* Lit when the stream really is mono, which it now always is. The label
+       is set from the reading rather than assumed, so a future stereo source
+       relabels itself instead of quietly mis-stating what you are hearing. */
+    (function () {
+      var el = document.getElementById('indStereo');
+      if (!el) return;
+      if (p.audio_channels === 1)      el.textContent = 'MONO';
+      else if (p.audio_channels === 2) el.textContent = 'STEREO';
+      indicator(el, p.audio_channels === 1 || p.audio_channels === 2);
+    })();
 
     stage(ledMog2,    p.cv_mog2 === true ? 'ok' : 'pending');
     stage(ledFov,     p.cv_foveal === true ? 'ok' : 'pending');
@@ -3354,12 +3364,24 @@
      opens paused, and audioDir defaults to 'stop'. */
   function startRoomTransport() {
     roomStop();
-    // Straight to HLS. roomWhep() is deliberately not called here any more --
-    // it stays in the file because 2-Way still uses the same handshake for
-    // its inbound leg, where real-time delivery is the point.
-    roomTx = 'hls';
-    roomWhy = 'listen path is HLS by choice, not by failure';
-    resolveAudioUrl(startAudio);
+    /* Progressive MP3, served by broadcast-api off the same microphone
+       process. Measured against the mediamtx path on the same mic in the same
+       minute: 8% of windows below -60dB instead of 42-51%, envelope
+       periodicity 0.16 (noise) instead of 0.38-0.56, and 27dB more level with
+       NO capture gain. The old chain was largely transmitting padded silence.
+
+       Same origin, so there is no mixed-content rule to satisfy and no proxy
+       path prefix for a redirect to get lost in -- two failure modes this
+       fleet has hit before. roomWhep() stays in the file: 2-Way still needs
+       it, and that is where real-time delivery is actually the point. */
+    roomTx = 'mp3';
+    roomWhy = 'progressive MP3, same origin';
+    try { audio.srcObject = null; } catch (e) {}
+    audio.src = window.location.origin + '/audio/room.mp3';
+    audio.load();
+    stage(hlsLed, 'ok');
+    setAudioState('Room audio');
+    beginIfPlaying();
   }
 
   startRoomTransport();
@@ -4174,10 +4196,22 @@
      a key is pressed (a lamp lit by a keypress lies the moment the leg
      underneath it drops). */
   function paintTransportLeds() {
+    // AUDIO. Listening is Icecast over HTTP (roomTx 'mp3'); Talk and 2-Way are
+    // WebRTC. They are different transports now, so one lamp cannot answer
+    // "which is carrying sound" -- hence two, both read from live state.
     var rtcOn = !!(twoWay && twoWay.on) || roomTx === 'whep';
-    var hlsOn = roomTx === 'hls' && !(twoWay && twoWay.on);
+    var hlsOn = (roomTx === 'hls' || roomTx === 'mp3') && !(twoWay && twoWay.on);
     stage(rtcLed, rtcOn ? 'ok' : '');
     stage(hlsLed, hlsOn ? 'ok' : '');
+
+    // VIDEO. The picture is HLS on this node; the RTC lamp is present so the
+    // panel can say that plainly rather than leaving it unstated, and it lights
+    // only if a WebRTC video leg ever carries the picture.
+    var vHls = document.getElementById('videoHlsLed');
+    var vRtc = document.getElementById('videoRtcLed');
+    var vRtcOn = !!(twoWay && twoWay.on && twoWay.video);
+    if (vRtc) stage(vRtc, vRtcOn ? 'ok' : '');
+    if (vHls && vRtcOn) stage(vHls, '');
   }
 
   setInterval(function () {

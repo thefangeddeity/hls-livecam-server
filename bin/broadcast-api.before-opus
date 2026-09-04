@@ -13,7 +13,7 @@ macOS differences from the Linux original:
     files (broadcast.txt, buzz.txt, dark.png, cams.json) — replacing
     nginx. Everything is on WEB_PORT; no root, no port-80 conflict.
 """
-import os, subprocess, time, sys, threading, io, signal, socket, re, shutil, select, queue
+import os, subprocess, time, sys, threading, io, signal, socket, re, shutil, select
 import numpy as np
 from PIL import Image
 from flask import Flask, request, abort, send_from_directory, Response
@@ -276,28 +276,7 @@ TALKBACK_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/talkback"
 # One extra encode off a capture that is already running; the AAC track on
 # 'cam' is untouched, and HLS viewers see no difference at all.
 ROOM_AUDIO_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/roomaudio"
-# Same microphone, AAC, for the HLS listen path (see the mic
-# publisher). Separate mediamtx path because one path carries one
-# set of tracks.
-ROOM_SOUND_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/roomsound"
 _talkback_proc = None
-
-
-def _roomaudio_filter():
-    """The room-audio filter chain, for the standalone mic publisher."""
-    filt = list(audio_filter_args())
-    if '-af' in filt:
-        i = filt.index('-af') + 1
-        chain = filt[i]
-        chain = ','.join(x for x in chain.split(',')
-                         if not x.startswith('aresample=async'))
-        chain = chain.replace('channel_layouts=stereo',
-                              'channel_layouts=mono')
-        filt[i] = chain + ',aresample=async=1:min_hard_comp=0.100:first_pts=0'
-        return filt
-    return ['-af',
-            'aformat=channel_layouts=mono,'
-            'aresample=async=1:min_hard_comp=0.100:first_pts=0']
 
 
 def _roomaudio_output(audio_map, audio_filter):
@@ -309,81 +288,11 @@ def _roomaudio_output(audio_map, audio_filter):
     filter -- and a rate/channel argument added for the benefit of an output
     would take the capture's input down with it. libopus takes the 48 kHz
     stereo the aformat filter already guarantees, so neither is needed.
-
-    aresample=async=1000, roomaudio-only: mediamtx's own WebRTC/Opus reader
-    fanout (bluenviron/mediamtx#3878) needs precise 20ms frame timing, which
-    an avfoundation capture sharing a live x264 encode on the same process
-    does not reliably deliver. mediamtx recomputes Opus timestamps from
-    scratch since 1.15.2 and can absorb small jitter, but the untreated
-    source is still the documented trigger for the choppy/bursty read-side
-    symptom that issue describes -- upgrading the reader (mediamtx) without
-    steadying the writer (this encode) was treating the wrong end. Scoped to
-    roomaudio alone: the AAC track on 'cam' feeds HLS, which re-derives its
-    own segment timing and was never the one showing the symptom.
     """
-    filt = list(audio_filter)
-    if '-af' in filt:
-        i = filt.index('-af') + 1
-        chain = filt[i]
-        # Strip the A/V resample lock. See the module note above: this output
-        # carries no video, so holding it against the video clock can only
-        # add corrections, never remove drift that matters.
-        chain = ','.join(p for p in chain.split(',')
-                         if not p.startswith('aresample=async'))
-        # Re-added after measuring: without it this output delivered only
-        # ~12.7s of audio per 65s of wall clock -- a fifth of real time. The
-        # content was clean (0%% below -60dB, no periodicity in the envelope),
-        # so the fault was never the samples, it was the PACING: the receiver
-        # starved between fragments, which is what the "polling" artifact
-        # actually is. async here is not video sync -- there is no video in
-        # this output -- it is what keeps the muxer emitting in real time.
-        # async=1 + min_hard_comp, not async=1000. async is a CEILING on
-        # samples/sec the filter may add or drop: 1000 let it continuously
-        # stretch and squeeze to chase jittery capture timestamps, and that
-        # constant micro-correction is audible. Measured here at async=1000:
-        # envelope autocorrelation 0.41 at 0.15s and 0.40 at 0.35s -- a real
-        # 3-6Hz chop, matching the reported 'pulses about four times a
-        # second'. async=1 corrects drift gently (<0.5s), while
-        # min_hard_comp=0.100 pads a genuine gap ONCE instead of smearing
-        # the correction across everything. first_pts=0 stops the stream
-        # starting at an arbitrary offset. This is the standard live-capture
-        # form; dropping aresample entirely is not an option -- without it
-        # this output delivered a fifth of real time.
-        chain = chain + ',aresample=async=1:min_hard_comp=0.100:first_pts=0'
-        # MONO, and it has to happen in the filter chain: -ac would kill the
-        # avfoundation input outright (see above). One built-in mic is a mono
-        # source in all but name, so a stereo Opus frame spent half its bits
-        # describing a duplicate channel -- at 64k that left ~32k of real
-        # signal per side. Folding to mono hands the whole budget to the one
-        # channel that carries anything.
-        chain = chain.replace('channel_layouts=stereo',
-                              'channel_layouts=mono')
-        filt[i] = chain
-    else:
-        filt = ['-af', 'aformat=channel_layouts=mono']
     return [
-        # 96k mono, not 64k stereo -- roughly triple the bits per real
-        # channel. This also has to cover the FEC redundancy, which comes out
-        # of the same budget, so -packet_loss 10 was quietly taxing a figure
-        # that was already thin.
-        '-map', audio_map, '-c:a', 'libopus', '-b:a', '96k',
-        # 'audio', not 'voip'. voip is Opus's speech-only mode: it optimises
-        # for intelligibility of one talker and spends nothing on the rest of
-        # the band, which is why a room came through thin and synthetic. This
-        # is a room monitor -- ambience, distance, more than one voice -- so
-        # the full-band mode is the honest choice. The Talk/2-Way legs are
-        # separate encodes and keep their own settings.
-        '-application', 'audio',
-        # In-band FEC: libopus tucks a reduced-bitrate copy of the PREVIOUS
-        # frame inside the NEXT packet. A decoder that sees a gap in RTP
-        # sequence numbers reconstructs from that redundancy instead of
-        # concealment silence -- entirely transparent to the receiver, no
-        # SDP negotiation required (unlike RED, which needs its own payload
-        # type). packet_loss is the rate the encoder BUDGETS redundancy for,
-        # not a measurement -- 10% is the same default every consumer
-        # video-call stack (WebRTC's own default) ships with.
-        '-packet_loss', '10', '-fec', '1',
-        *filt,
+        '-map', audio_map, '-c:a', 'libopus', '-b:a', '64k',
+        '-application', 'voip',
+        *audio_filter,
         '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
     ]
 
@@ -525,7 +434,7 @@ def _start_cam_reader():
     fr  = int(_cfg.get('FRAMERATE', 15))
     return subprocess.Popen([
         FFMPEG, '-hide_banner', '-loglevel', 'error',
-        '-f', 'avfoundation', '-thread_queue_size', '1024',
+        '-f', 'avfoundation',
         '-framerate', str(fr),
         '-video_size', f'{FRAME_W}x{FRAME_H}',
         '-pixel_format', 'uyvy422',
@@ -752,8 +661,7 @@ def _start_cv_publisher(mode='cv'):
 
     a = subprocess.Popen([
         FFMPEG, '-hide_banner', '-loglevel', 'error',
-        '-f', 'avfoundation', '-thread_queue_size', '1024',
-        '-framerate', str(fr),
+        '-f', 'avfoundation', '-framerate', str(fr),
         '-video_size', f'{FRAME_W}x{FRAME_H}',
         '-pixel_format', 'uyvy422',
         '-use_wallclock_as_timestamps', '1',
@@ -804,8 +712,7 @@ def _start_cv_publisher(mode='cv'):
         '-s', f'{FRAME_W}x{FRAME_H}', '-framerate', str(fr),
         '-use_wallclock_as_timestamps', '1',
         '-i', 'pipe:0',
-        '-f', 'avfoundation', '-thread_queue_size', '1024',
-        '-i', f':{audio_idx}',
+        '-f', 'avfoundation', '-i', f':{audio_idx}',
         '-map', '0:v:0', '-map', '1:a:0',
         '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-vf', 'format=yuv420p', '-profile:v', 'high', '-level', '4.0',
@@ -904,47 +811,14 @@ def _start_combined_av_publisher(mode='show'):
         ]
     else:
         source = [
-            # PICTURE. Wallclock-stamped, because this camera's own
-            # timestamps freeze; that is a video problem with a video fix.
             '-f', 'avfoundation',
-            # Input thread queue. ffmpeg's default is 8 packets: when the
-            # muxer/encoder side stalls even briefly, avfoundation packets
-            # overflow that queue and are DROPPED at the source -- measured
-            # on this rig as 78% silence in the published room audio,
-            # arriving as ~300ms bursts every ~1.3s, while a dryer was
-            # running and the room was anything but silent.
-            '-thread_queue_size', '1024',
             '-framerate', str(fr),
             '-video_size', f'{FRAME_W}x{FRAME_H}',
             '-pixel_format', 'uyvy422',
             '-use_wallclock_as_timestamps', '1',
-            # ONE avfoundation input carrying both, which is how this ran
-            # before and the only arrangement measured delivering real time.
-            #
-            # Splitting the microphone onto a SECOND avfoundation input --
-            # textbook advice, and what every conferencing stack does -- was
-            # measured here as a quarter of real time at the source: the
-            # unresampled 'cam' output ran at 25% while the room-audio output
-            # only reached 99% because aresample was padding the shortfall
-            # with silence (43% of its windows below -60dB, which is what the
-            # pulsing actually was). Two AVFoundation sessions in one ffmpeg
-            # process is the fragile arrangement amira's own capture notes
-            # warn about; on this rig it starves the audio session rather
-            # than freeing it.
-            # CAMERA ONLY. The microphone is captured by its own process
-            # (_mic_publisher_loop below) and published to 'roomaudio'.
-            #
-            # Measured on this rig, decoding the captured samples rather than
-            # trusting container duration: sharing ONE AVFoundation session
-            # between camera and mic delivered ~20% of the audio -- a 62s
-            # capture held 12.3s of real samples, timestamps stretched over
-            # the full minute, and aresample padded the missing 80% with
-            # silence. That padding is the 6-7Hz metallic pulse. The same mic,
-            # alone in its own process, delivered ~89%. No amount of codec,
-            # bitrate, FEC or resampler tuning could reach audio that was
-            # never captured.
-            '-i', f'{video_idx}:none',
+            '-i', f'{video_idx}:{audio_idx}',
             '-map', '0:v:0',
+            '-map', '0:a:0',
         ]
 
     audio_filter = audio_filter_args()
@@ -952,7 +826,7 @@ def _start_combined_av_publisher(mode='show'):
     cmd = [
         FFMPEG,
         '-hide_banner',
-        '-loglevel', 'warning',
+        '-loglevel', 'error',
         *source,
 
         '-c:v', 'libx264',
@@ -964,17 +838,19 @@ def _start_combined_av_publisher(mode='show'):
         '-b:v', '1500k',
         '-g', str(fr),
 
-        # No audio track on 'cam' at all: this process no longer opens the
-        # microphone. Sound lives on 'roomaudio', which is where the viewer
-        # already takes it from (WHEP for Play and 2-Way alike). The cost is
-        # that the HLS fallback path carries a silent picture on any browser
-        # that cannot do WebRTC -- a fair trade for audio that is continuous
-        # rather than 20% present.
-        '-an',
+        '-c:a', 'aac',
+        '-b:a', '96k',
+        *(audio_filter if mode != 'hide' else []),
 
         '-rtsp_transport', 'tcp',
         '-f', 'rtsp',
         rtsp_url,
+
+        # Follows whichever input the audio came from: hide draws silence from
+        # anullsrc as a second input, every other mode takes the mic off the
+        # same avfoundation device as the picture.
+        *_roomaudio_output('1:a:0' if mode == 'hide' else '0:a:0',
+                           audio_filter if mode != 'hide' else []),
     ]
 
     print(
@@ -990,178 +866,6 @@ def _start_combined_av_publisher(mode='show'):
         stdout=subprocess.DEVNULL,
         stderr=_open_ffmpeg_log(),
     )
-
-
-# ── MICROPHONE PUBLISHER: its own process, its own AVFoundation session ──
-#
-# Kept deliberately separate from the camera capture. See the note in
-# _start_combined_av_publisher: one session serving both devices loses ~80% of
-# the audio on this hardware, and every downstream fix was tuning samples that
-# had already been dropped.
-#
-# Supervised the same way the talkback player is: a patient loop, because the
-# mic can be momentarily unavailable while a previous session releases it, and
-# a one-shot spawn would leave the room silent until someone noticed.
-_mic_proc = None
-
-
-# ── ROOM AUDIO FAN-OUT ────────────────────────────────────────────────
-#
-# Listening is a progressive MP3 served straight from this process, and the
-# reason is measurement, not taste. Against the mediamtx path, same mic and
-# same minute: 8% of windows below -60dB instead of 42-51%, envelope
-# periodicity 0.16 (noise) instead of 0.38-0.56, and a mean level 27dB higher
-# WITHOUT the +12dB capture gain the old path needed. The old chain was mostly
-# transmitting padded silence, and the padding is what "staccato" was.
-#
-# What this drops, deliberately: RTSP, mediamtx, HLS segmenting, playlists,
-# hls.js, MSE, WebRTC, and the Web Audio graph -- for LISTENING. A browser has
-# had a buffered audio decoder for twenty years and it does not stutter.
-# 2-Way still runs on WebRTC, where real-time delivery is the entire point.
-#
-# The microphone is opened ONCE and feeds both: MP3 to this hub over a pipe,
-# Opus to mediamtx for the WebRTC leg. A device with two owners has none.
-_MIC_CHUNK = 4096
-_MIC_QUEUE_CHUNKS = 64
-
-
-class _MicHub:
-    """One capture, many listeners. A slow listener never stalls the others."""
-
-    def __init__(self):
-        self._subs = set()
-        self._lock = threading.Lock()
-
-    def publish(self, buf):
-        with self._lock:
-            subs = list(self._subs)
-        for q in subs:
-            try:
-                q.put_nowait(buf)
-            except queue.Full:
-                # Drop this listener's OLDEST audio rather than block the
-                # reader thread, which would back up into ffmpeg and lose
-                # samples at the capture -- the exact failure being fixed.
-                try:
-                    q.get_nowait()
-                    q.put_nowait(buf)
-                except Exception:
-                    pass
-
-    def subscribe(self):
-        q = queue.Queue(maxsize=_MIC_QUEUE_CHUNKS)
-        with self._lock:
-            self._subs.add(q)
-        return q
-
-    def unsubscribe(self, q):
-        with self._lock:
-            self._subs.discard(q)
-
-    def listeners(self):
-        with self._lock:
-            return len(self._subs)
-
-
-_mic_hub = _MicHub()
-
-
-def _mic_publisher_cmd(mode):
-    """ffmpeg argv publishing the microphone to 'roomaudio' as Opus."""
-    audio_idx = str(
-        _cfg.get('AUDIO_DEVICE', 'Built-in Microphone')
-    ).strip() or 'Built-in Microphone'
-
-    if mode == 'hide':
-        # Camera light off = mic off. Silence still has to be PUBLISHED, or
-        # the viewer's WHEP reader finds no path and reports a fault rather
-        # than a quiet room.
-        src = ['-f', 'lavfi',
-               '-i', 'anullsrc=channel_layout=mono:sample_rate=48000']
-        filt = []
-    else:
-        src = ['-f', 'avfoundation',
-               '-thread_queue_size', '1024',
-               '-i', f':{audio_idx}']
-        filt = _roomaudio_filter()
-
-    return [FFMPEG, '-hide_banner', '-loglevel', 'warning',
-            *src,
-            # Opus for WebRTC: the only codec WHEP will carry, and what
-            # 2-Way needs for its echo canceller to have a reference.
-            '-map', '0:a:0',
-            '-c:a', 'libopus', '-b:a', '96k', '-application', 'audio',
-            '-packet_loss', '10', '-fec', '1',
-            *filt,
-            '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
-            # MP3 on stdout for the listening path. Every browser plays
-            # progressive MP3 including Safari and iOS, with no container
-            # negotiation and no codec support matrix to lose on.
-            # -reservoir 0 and -flush_packets 1 keep it emitting as produced
-            # rather than batching, which is what makes it usable live.
-            # MP3 into ICECAST for the listening path. Icecast is here for
-            # one property a hand-rolled fan-out does not have: burst-on-connect.
-            # It hands a new listener several seconds of already-buffered audio
-            # so the decoder starts with runway instead of at the live edge,
-            # where every hiccup becomes an underrun and continuous underruns
-            # are heard as pulsing.
-            '-map', '0:a:0',
-            '-c:a', 'libmp3lame', '-b:a', '96k',
-            '-reservoir', '0', '-flush_packets', '1',
-            *filt,
-            '-f', 'mp3', 'icecast://source:roomaudio@127.0.0.1:8000/room.mp3']
-
-
-def _mic_publisher_loop():
-    global _mic_proc
-    last_gen = None
-    while True:
-        try:
-            with _mode_lock:
-                mode = _mode
-                gen  = _mode_generation
-            last_gen = gen
-            _mic_proc = subprocess.Popen(
-                _mic_publisher_cmd(mode),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=_open_ffmpeg_log())
-
-            # Draining stdout IS the listening path: every chunk read here is
-            # fanned out to whoever has /stream.mp3 open. It also has to keep
-            # up unconditionally -- a blocked read backs up into ffmpeg and
-            # costs samples at the capture.
-            def _drain(proc=_mic_proc):
-                try:
-                    while True:
-                        buf = proc.stdout.read(_MIC_CHUNK)
-                        if not buf:
-                            break
-                        _mic_hub.publish(buf)
-                except Exception:
-                    pass
-
-            threading.Thread(target=_drain, daemon=True).start()
-
-            # Poll rather than wait(): a mode change has to be able to tear
-            # this down, and the publisher otherwise runs until the node does.
-            while _mic_proc.poll() is None:
-                time.sleep(0.5)
-                with _mode_lock:
-                    if _mode_generation != last_gen:
-                        break
-            if _mic_proc.poll() is None:
-                _kill_hard(_mic_proc)
-                # Same CoreAudio settle the camera path needs: the next open
-                # fails with "Input/output error" if the device has not been
-                # released yet.
-                time.sleep(0.8)
-        except Exception as exc:
-            print(f'broadcast-api: mic publisher: {exc}',
-                  file=sys.stderr, flush=True)
-            time.sleep(2.0)
-        finally:
-            _mic_proc = None
 
 
 def _open_ffmpeg_log():
@@ -1593,29 +1297,6 @@ def _hls_audio_state():
         return 'fail', False
 
 
-@app.route('/stream.mp3')
-def stream_mp3():
-    """The room, as progressive MP3. Same origin, so no mixed-content rule and
-    no proxy path prefix to lose a redirect in."""
-    q = _mic_hub.subscribe()
-
-    def gen():
-        try:
-            while True:
-                yield q.get()
-        finally:
-            _mic_hub.unsubscribe(q)
-
-    resp = Response(gen(), mimetype='audio/mpeg',
-                    direct_passthrough=True)
-    # No Content-Length and no range support: this is a live stream, not a
-    # file, and advertising seekability invites range requests that cannot be
-    # satisfied.
-    resp.headers['Cache-Control'] = 'no-store, no-cache'
-    resp.headers['Connection'] = 'close'
-    return resp
-
-
 @app.route('/api/pipeline', methods=['GET'])
 def pipeline():
     """Per-stage health for the viewer's audio panel.
@@ -1665,12 +1346,10 @@ def pipeline():
         audio_rate = int(str(_cfg.get('AUDIO_RATE', '48000')).strip())
     except ValueError:
         audio_rate = None
-    # MONO, and not from config: the room microphone is a single capsule and
-    # the publisher folds it to one channel on purpose (a stereo frame spent
-    # half its bits describing a duplicate). Reporting the configured value
-    # here would have the panel claim STEREO over a mono stream, which is the
-    # sort of small lie that costs an hour later.
-    audio_ch = 1
+    try:
+        audio_ch = int(str(_cfg.get('AUDIO_CHANNELS', '2')).strip())
+    except ValueError:
+        audio_ch = None
     try:
         audio_kbps = int(str(_cfg.get('AUDIO_BITRATE_K', '96')).strip())
     except ValueError:
@@ -1719,10 +1398,6 @@ def pipeline():
         'audio_rate_hz':  audio_rate,
         'audio_channels': audio_ch,
         'audio_kbps':     audio_kbps,
-        # What the LISTEN path actually is, so the panel can say so rather
-        # than inferring it from which lamp happens to be lit.
-        'audio_codec':    None if audio_kbps is None else 'mp3',
-        'audio_listen':   None if audio_kbps is None else 'icecast',
         'mediamtx': mediamtx,
         'rtsp':     rtsp,
         'hls':      hls,
@@ -1851,19 +1526,12 @@ def _shutdown(signum, frame):
 if __name__ == '__main__':
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
-    # Media capture/publishing runs independently of the HTTP control plane,
-    # and picture and sound are now independent of EACH OTHER: one process
-    # owns the camera, another owns the microphone. They share no AVFoundation
-    # session, so neither can starve the other.
+    # Media capture/publishing runs independently of the HTTP control plane.
+    # One AVFoundation session owns camera + microphone.
     threading.Thread(
         target=_writer_loop,
         daemon=True,
-        name='camera-publisher',
-    ).start()
-    threading.Thread(
-        target=_mic_publisher_loop,
-        daemon=True,
-        name='mic-publisher',
+        name='combined-av-publisher',
     ).start()
 
     app.run(

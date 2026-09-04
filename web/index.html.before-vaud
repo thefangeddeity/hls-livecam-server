@@ -1418,8 +1418,7 @@
             <div class="led" id="videoCamLed"><span class="bulb"></span><span class="n eng">Camera</span></div>
             <div class="led" id="videoMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="videoRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="videoHlsLed" title="Picture over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
-            <div class="led" id="videoRtcLed" title="Picture over WebRTC (not carried on this node)"><span class="bulb"></span><span class="n eng">RTC</span></div>
+            <div class="led" id="videoHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
           </div>
         </div>
 
@@ -1506,7 +1505,7 @@
               <span class="vval"><span class="vghost">888</span><span class="vlit" id="audioBits"></span></span>
             </div>
             <div class="vind">
-              <i id="indStereo">MONO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
           </div>
 
@@ -1514,8 +1513,7 @@
             <div class="led" id="audioMicLed"><span class="bulb"></span><span class="n eng">Mic</span></div>
             <div class="led" id="audioMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="audioRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="audioHlsLed" title="Listening over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
-            <div class="led" id="audioRtcLed" title="Live WebRTC leg (Talk / 2-Way, or WHEP listening)"><span class="bulb"></span><span class="n eng">RTC</span></div>
+            <div class="led" id="audioHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
           </div>
         </div>
 
@@ -2815,25 +2813,7 @@
   // protocol was not enough on its own: mediamtx serves :8888 over plain
   // HTTP only, so an https://host:8888/ URL fails at the socket rather
   // than at the mixed-content check -- a different error, the same silence.
-  /* The LISTEN path is HLS again, and it is its own stream now.
-
-     'cam' is video-only since the capture gave up the microphone (one
-     AVFoundation session serving both devices was delivering ~20% of the
-     audio). The mic has its own process publishing twice: Opus on
-     'roomaudio' for WebRTC, and AAC on 'roomsound' for this.
-
-     Why not WHEP for listening: WebRTC plays what arrives when it
-     arrives, with no buffer to cover a late packet, and the reported
-     symptom -- an evenly-spaced staccato that appeared with the WHEP
-     change and survived every codec, bitrate, FEC and resampler change
-     tried against it -- is what that sounds like. HLS buffers whole
-     segments and plays them gaplessly. Latency is the price and it is
-     the right one for listening; 2-Way still uses WHEP, where latency
-     is the whole point and the echo canceller needs the reference.
-
-     AAC rather than Opus because Safari and iOS will not decode Opus in
-     HLS, and iOS is the client this has to work on. */
-  var MASTER_URL = window.location.origin + '/hls/roomsound/index.m3u8';
+  var MASTER_URL = window.location.origin + '/hls/cam/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
@@ -2848,7 +2828,6 @@
   var mtxLed  = document.getElementById('audioMtxLed');
   var rtspLed = document.getElementById('audioRtspLed');
   var hlsLed  = document.getElementById('audioHlsLed');
-  var rtcLed  = document.getElementById('audioRtcLed');
 
   if (!muteKey || !audio) return;
 
@@ -2984,16 +2963,7 @@
        audio track, which is the one claim the manifest can settle. */
     indicator(document.getElementById('indAv'), p.audio_track);
     indicator(document.getElementById('indCv'), p.cv);
-    /* Lit when the stream really is mono, which it now always is. The label
-       is set from the reading rather than assumed, so a future stereo source
-       relabels itself instead of quietly mis-stating what you are hearing. */
-    (function () {
-      var el = document.getElementById('indStereo');
-      if (!el) return;
-      if (p.audio_channels === 1)      el.textContent = 'MONO';
-      else if (p.audio_channels === 2) el.textContent = 'STEREO';
-      indicator(el, p.audio_channels === 1 || p.audio_channels === 2);
-    })();
+    indicator(document.getElementById('indStereo'), p.audio_channels === 2);
 
     stage(ledMog2,    p.cv_mog2 === true ? 'ok' : 'pending');
     stage(ledFov,     p.cv_foveal === true ? 'ok' : 'pending');
@@ -3364,24 +3334,13 @@
      opens paused, and audioDir defaults to 'stop'. */
   function startRoomTransport() {
     roomStop();
-    /* Progressive MP3, served by broadcast-api off the same microphone
-       process. Measured against the mediamtx path on the same mic in the same
-       minute: 8% of windows below -60dB instead of 42-51%, envelope
-       periodicity 0.16 (noise) instead of 0.38-0.56, and 27dB more level with
-       NO capture gain. The old chain was largely transmitting padded silence.
-
-       Same origin, so there is no mixed-content rule to satisfy and no proxy
-       path prefix for a redirect to get lost in -- two failure modes this
-       fleet has hit before. roomWhep() stays in the file: 2-Way still needs
-       it, and that is where real-time delivery is actually the point. */
-    roomTx = 'mp3';
-    roomWhy = 'progressive MP3, same origin';
-    try { audio.srcObject = null; } catch (e) {}
-    audio.src = window.location.origin + '/audio/room.mp3';
-    audio.load();
-    stage(hlsLed, 'ok');
-    setAudioState('Room audio');
-    beginIfPlaying();
+    roomTx = 'none';
+    roomWhy = '';
+    roomWhep(function (why) {
+      roomTx = 'hls';
+      roomWhy = why || 'whep failed';
+      resolveAudioUrl(startAudio);
+    });
   }
 
   startRoomTransport();
@@ -3893,46 +3852,6 @@
      source node is built over the track it is rendering; the microphone is
      rendered by nothing, it goes to a PeerConnection. There is no output here
      to lose, so there is nothing to protect. */
-
-  /* ── THE PICTURE MUST NOT HOLD THE AUDIO SESSION ──────────────────
-     The <video> above is muted, and muted is NOT the same as "not decoding
-     audio". The master manifest carries both tracks, so the picture element
-     decodes an audio track it will never render -- and on iOS a media element
-     that decodes audio can hold the audio session whether or not it is muted.
-
-     That is why "a brief burst, then silence" survived every fix aimed at the
-     audio element, and survived changing transport entirely: HLS and WHEP both
-     failed identically because neither was the problem. #roomAudioPlayer would
-     start, be audible for the instant before the picture settled, and then
-     lose the session to an element playing nothing.
-
-     WebKit implements HTMLMediaElement.audioTracks, which most engines dropped.
-     That is exactly the platform that needs this, so the one place the API
-     survives is the one place it matters. Elsewhere it is absent and this is a
-     no-op, which is correct: no other engine has the conflict.
-
-     Re-applied on a timer rather than once. Tracks appear asynchronously after
-     metadata, and a stream reload or a mode change builds new ones -- a single
-     call at load would silence the first track and miss every one after it. */
-  var vidAudState = '-';
-
-  function silenceVideoAudio() {
-    try {
-      var v = document.getElementById('video');
-      if (!v) { vidAudState = 'novid'; return; }
-      var at = v.audioTracks;
-      if (!at) { vidAudState = 'noapi'; return; }   // not WebKit; no conflict
-      var n = at.length, live = 0;
-      for (var i = 0; i < n; i++) {
-        if (at[i].enabled) { at[i].enabled = false; }
-        if (at[i].enabled) live++;                  // refused to turn off
-      }
-      vidAudState = n + (live ? ':' + live + 'on' : ':off');
-    } catch (e) {
-      vidAudState = 'err';
-    }
-  }
-
   var levelOutTap = null, levelOutAnalyser = null;
   var levelOutHist = new Array(120).fill(0);
 
@@ -4188,38 +4107,7 @@
     g.fillText('OUT', 3, mid + 10);
   }
 
-  /* WHICH TRANSPORT IS CARRYING SOUND, RIGHT NOW.
-     Listening and talking no longer use the same leg: Play is buffered HLS,
-     while Talk and 2-Way are live WebRTC. One lamp could not say which was
-     active, and the answer changes as keys are pressed -- so each leg gets
-     its own, and both are read from live state rather than set at the moment
-     a key is pressed (a lamp lit by a keypress lies the moment the leg
-     underneath it drops). */
-  function paintTransportLeds() {
-    // AUDIO. Listening is Icecast over HTTP (roomTx 'mp3'); Talk and 2-Way are
-    // WebRTC. They are different transports now, so one lamp cannot answer
-    // "which is carrying sound" -- hence two, both read from live state.
-    var rtcOn = !!(twoWay && twoWay.on) || roomTx === 'whep';
-    var hlsOn = (roomTx === 'hls' || roomTx === 'mp3') && !(twoWay && twoWay.on);
-    stage(rtcLed, rtcOn ? 'ok' : '');
-    stage(hlsLed, hlsOn ? 'ok' : '');
-
-    // VIDEO. The picture is HLS on this node; the RTC lamp is present so the
-    // panel can say that plainly rather than leaving it unstated, and it lights
-    // only if a WebRTC video leg ever carries the picture.
-    var vHls = document.getElementById('videoHlsLed');
-    var vRtc = document.getElementById('videoRtcLed');
-    var vRtcOn = !!(twoWay && twoWay.on && twoWay.video);
-    if (vRtc) stage(vRtc, vRtcOn ? 'ok' : '');
-    if (vHls && vRtcOn) stage(vHls, '');
-  }
-
-  setInterval(function () {
-    silenceVideoAudio();   // cheap, and must survive stream reloads
-    levelSample();
-    levelDraw();
-    paintTransportLeds();
-  }, 500);
+  setInterval(function () { levelSample(); levelDraw(); }, 500);
 
   /* A gesture is what lets an AudioContext run at all, and every key is one.
      This no longer has anything to do with whether the room is audible -- the
@@ -4370,7 +4258,6 @@
              observer is wired up but its context is not running, which reads
              as a flat lane and must not be confused with a quiet room. */
           'tx=' + roomTx + (roomWhy ? '(' + roomWhy.slice(0, 16) + ')' : '') +
-            ' vaud=' + vidAudState +
             ' ctx=' + (ctx ? ctx.state : 'none') + ' tap=' + yn(levelTap) +
             ' meter=' + (levelState === 'na' ? 'na'
                        : levelMeasuring()    ? 'live'

@@ -13,7 +13,7 @@ macOS differences from the Linux original:
     files (broadcast.txt, buzz.txt, dark.png, cams.json) — replacing
     nginx. Everything is on WEB_PORT; no root, no port-80 conflict.
 """
-import os, subprocess, time, sys, threading, io, signal, socket, re, shutil, select, queue
+import os, subprocess, time, sys, threading, io, signal, socket, re, shutil, select
 import numpy as np
 from PIL import Image
 from flask import Flask, request, abort, send_from_directory, Response
@@ -1005,67 +1005,6 @@ def _start_combined_av_publisher(mode='show'):
 _mic_proc = None
 
 
-# ── ROOM AUDIO FAN-OUT ────────────────────────────────────────────────
-#
-# Listening is a progressive MP3 served straight from this process, and the
-# reason is measurement, not taste. Against the mediamtx path, same mic and
-# same minute: 8% of windows below -60dB instead of 42-51%, envelope
-# periodicity 0.16 (noise) instead of 0.38-0.56, and a mean level 27dB higher
-# WITHOUT the +12dB capture gain the old path needed. The old chain was mostly
-# transmitting padded silence, and the padding is what "staccato" was.
-#
-# What this drops, deliberately: RTSP, mediamtx, HLS segmenting, playlists,
-# hls.js, MSE, WebRTC, and the Web Audio graph -- for LISTENING. A browser has
-# had a buffered audio decoder for twenty years and it does not stutter.
-# 2-Way still runs on WebRTC, where real-time delivery is the entire point.
-#
-# The microphone is opened ONCE and feeds both: MP3 to this hub over a pipe,
-# Opus to mediamtx for the WebRTC leg. A device with two owners has none.
-_MIC_CHUNK = 4096
-_MIC_QUEUE_CHUNKS = 64
-
-
-class _MicHub:
-    """One capture, many listeners. A slow listener never stalls the others."""
-
-    def __init__(self):
-        self._subs = set()
-        self._lock = threading.Lock()
-
-    def publish(self, buf):
-        with self._lock:
-            subs = list(self._subs)
-        for q in subs:
-            try:
-                q.put_nowait(buf)
-            except queue.Full:
-                # Drop this listener's OLDEST audio rather than block the
-                # reader thread, which would back up into ffmpeg and lose
-                # samples at the capture -- the exact failure being fixed.
-                try:
-                    q.get_nowait()
-                    q.put_nowait(buf)
-                except Exception:
-                    pass
-
-    def subscribe(self):
-        q = queue.Queue(maxsize=_MIC_QUEUE_CHUNKS)
-        with self._lock:
-            self._subs.add(q)
-        return q
-
-    def unsubscribe(self, q):
-        with self._lock:
-            self._subs.discard(q)
-
-    def listeners(self):
-        with self._lock:
-            return len(self._subs)
-
-
-_mic_hub = _MicHub()
-
-
 def _mic_publisher_cmd(mode):
     """ffmpeg argv publishing the microphone to 'roomaudio' as Opus."""
     audio_idx = str(
@@ -1094,22 +1033,17 @@ def _mic_publisher_cmd(mode):
             '-packet_loss', '10', '-fec', '1',
             *filt,
             '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
-            # MP3 on stdout for the listening path. Every browser plays
-            # progressive MP3 including Safari and iOS, with no container
-            # negotiation and no codec support matrix to lose on.
-            # -reservoir 0 and -flush_packets 1 keep it emitting as produced
-            # rather than batching, which is what makes it usable live.
-            # MP3 into ICECAST for the listening path. Icecast is here for
-            # one property a hand-rolled fan-out does not have: burst-on-connect.
-            # It hands a new listener several seconds of already-buffered audio
-            # so the decoder starts with runway instead of at the live edge,
-            # where every hiccup becomes an underrun and continuous underruns
-            # are heard as pulsing.
+            # AAC for HLS: the listen-only path. WebRTC delivers in real time
+            # with no buffer to hide a hiccup, which is what 'staccato'
+            # sounds like; HLS buffers whole segments and plays them
+            # gaplessly. It is also the only one of the two that Safari and
+            # iOS can decode -- Opus in HLS does not play there -- so the
+            # fallback that used to ride on cam's AAC track has somewhere to
+            # live now that cam is video-only.
             '-map', '0:a:0',
-            '-c:a', 'libmp3lame', '-b:a', '96k',
-            '-reservoir', '0', '-flush_packets', '1',
+            '-c:a', 'aac', '-b:a', '96k',
             *filt,
-            '-f', 'mp3', 'icecast://source:roomaudio@127.0.0.1:8000/room.mp3']
+            '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_SOUND_URL]
 
 
 def _mic_publisher_loop():
@@ -1126,23 +1060,6 @@ def _mic_publisher_loop():
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=_open_ffmpeg_log())
-
-            # Draining stdout IS the listening path: every chunk read here is
-            # fanned out to whoever has /stream.mp3 open. It also has to keep
-            # up unconditionally -- a blocked read backs up into ffmpeg and
-            # costs samples at the capture.
-            def _drain(proc=_mic_proc):
-                try:
-                    while True:
-                        buf = proc.stdout.read(_MIC_CHUNK)
-                        if not buf:
-                            break
-                        _mic_hub.publish(buf)
-                except Exception:
-                    pass
-
-            threading.Thread(target=_drain, daemon=True).start()
-
             # Poll rather than wait(): a mode change has to be able to tear
             # this down, and the publisher otherwise runs until the node does.
             while _mic_proc.poll() is None:
@@ -1593,29 +1510,6 @@ def _hls_audio_state():
         return 'fail', False
 
 
-@app.route('/stream.mp3')
-def stream_mp3():
-    """The room, as progressive MP3. Same origin, so no mixed-content rule and
-    no proxy path prefix to lose a redirect in."""
-    q = _mic_hub.subscribe()
-
-    def gen():
-        try:
-            while True:
-                yield q.get()
-        finally:
-            _mic_hub.unsubscribe(q)
-
-    resp = Response(gen(), mimetype='audio/mpeg',
-                    direct_passthrough=True)
-    # No Content-Length and no range support: this is a live stream, not a
-    # file, and advertising seekability invites range requests that cannot be
-    # satisfied.
-    resp.headers['Cache-Control'] = 'no-store, no-cache'
-    resp.headers['Connection'] = 'close'
-    return resp
-
-
 @app.route('/api/pipeline', methods=['GET'])
 def pipeline():
     """Per-stage health for the viewer's audio panel.
@@ -1665,12 +1559,10 @@ def pipeline():
         audio_rate = int(str(_cfg.get('AUDIO_RATE', '48000')).strip())
     except ValueError:
         audio_rate = None
-    # MONO, and not from config: the room microphone is a single capsule and
-    # the publisher folds it to one channel on purpose (a stereo frame spent
-    # half its bits describing a duplicate). Reporting the configured value
-    # here would have the panel claim STEREO over a mono stream, which is the
-    # sort of small lie that costs an hour later.
-    audio_ch = 1
+    try:
+        audio_ch = int(str(_cfg.get('AUDIO_CHANNELS', '2')).strip())
+    except ValueError:
+        audio_ch = None
     try:
         audio_kbps = int(str(_cfg.get('AUDIO_BITRATE_K', '96')).strip())
     except ValueError:
@@ -1719,10 +1611,6 @@ def pipeline():
         'audio_rate_hz':  audio_rate,
         'audio_channels': audio_ch,
         'audio_kbps':     audio_kbps,
-        # What the LISTEN path actually is, so the panel can say so rather
-        # than inferring it from which lamp happens to be lit.
-        'audio_codec':    None if audio_kbps is None else 'mp3',
-        'audio_listen':   None if audio_kbps is None else 'icecast',
         'mediamtx': mediamtx,
         'rtsp':     rtsp,
         'hls':      hls,

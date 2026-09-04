@@ -1418,8 +1418,7 @@
             <div class="led" id="videoCamLed"><span class="bulb"></span><span class="n eng">Camera</span></div>
             <div class="led" id="videoMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="videoRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="videoHlsLed" title="Picture over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
-            <div class="led" id="videoRtcLed" title="Picture over WebRTC (not carried on this node)"><span class="bulb"></span><span class="n eng">RTC</span></div>
+            <div class="led" id="videoHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
           </div>
         </div>
 
@@ -1506,7 +1505,7 @@
               <span class="vval"><span class="vghost">888</span><span class="vlit" id="audioBits"></span></span>
             </div>
             <div class="vind">
-              <i id="indStereo">MONO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
           </div>
 
@@ -1514,8 +1513,7 @@
             <div class="led" id="audioMicLed"><span class="bulb"></span><span class="n eng">Mic</span></div>
             <div class="led" id="audioMtxLed"><span class="bulb"></span><span class="n eng">MediaMTX</span></div>
             <div class="led" id="audioRtspLed"><span class="bulb"></span><span class="n eng">RTSP</span></div>
-            <div class="led" id="audioHlsLed" title="Listening over buffered HLS"><span class="bulb"></span><span class="n eng">HLS</span></div>
-            <div class="led" id="audioRtcLed" title="Live WebRTC leg (Talk / 2-Way, or WHEP listening)"><span class="bulb"></span><span class="n eng">RTC</span></div>
+            <div class="led" id="audioHlsLed"><span class="bulb"></span><span class="n eng">HLS</span></div>
           </div>
         </div>
 
@@ -2815,25 +2813,7 @@
   // protocol was not enough on its own: mediamtx serves :8888 over plain
   // HTTP only, so an https://host:8888/ URL fails at the socket rather
   // than at the mixed-content check -- a different error, the same silence.
-  /* The LISTEN path is HLS again, and it is its own stream now.
-
-     'cam' is video-only since the capture gave up the microphone (one
-     AVFoundation session serving both devices was delivering ~20% of the
-     audio). The mic has its own process publishing twice: Opus on
-     'roomaudio' for WebRTC, and AAC on 'roomsound' for this.
-
-     Why not WHEP for listening: WebRTC plays what arrives when it
-     arrives, with no buffer to cover a late packet, and the reported
-     symptom -- an evenly-spaced staccato that appeared with the WHEP
-     change and survived every codec, bitrate, FEC and resampler change
-     tried against it -- is what that sounds like. HLS buffers whole
-     segments and plays them gaplessly. Latency is the price and it is
-     the right one for listening; 2-Way still uses WHEP, where latency
-     is the whole point and the echo canceller needs the reference.
-
-     AAC rather than Opus because Safari and iOS will not decode Opus in
-     HLS, and iOS is the client this has to work on. */
-  var MASTER_URL = window.location.origin + '/hls/roomsound/index.m3u8';
+  var MASTER_URL = window.location.origin + '/hls/cam/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
@@ -2848,7 +2828,6 @@
   var mtxLed  = document.getElementById('audioMtxLed');
   var rtspLed = document.getElementById('audioRtspLed');
   var hlsLed  = document.getElementById('audioHlsLed');
-  var rtcLed  = document.getElementById('audioRtcLed');
 
   if (!muteKey || !audio) return;
 
@@ -2984,16 +2963,7 @@
        audio track, which is the one claim the manifest can settle. */
     indicator(document.getElementById('indAv'), p.audio_track);
     indicator(document.getElementById('indCv'), p.cv);
-    /* Lit when the stream really is mono, which it now always is. The label
-       is set from the reading rather than assumed, so a future stereo source
-       relabels itself instead of quietly mis-stating what you are hearing. */
-    (function () {
-      var el = document.getElementById('indStereo');
-      if (!el) return;
-      if (p.audio_channels === 1)      el.textContent = 'MONO';
-      else if (p.audio_channels === 2) el.textContent = 'STEREO';
-      indicator(el, p.audio_channels === 1 || p.audio_channels === 2);
-    })();
+    indicator(document.getElementById('indStereo'), p.audio_channels === 2);
 
     stage(ledMog2,    p.cv_mog2 === true ? 'ok' : 'pending');
     stage(ledFov,     p.cv_foveal === true ? 'ok' : 'pending');
@@ -3050,12 +3020,13 @@
      reach for next. */
   function setMuted(muted) {
     audioMuted  = muted;
-    /* applyListenState() owns the element's .muted, so this does not set it
-       directly. There used to be two possible silencers here -- the element
-       and a gain node -- and picking the wrong one was a live bug; there is
-       only the element now, but keeping the choice in one function is still
-       what stops it drifting back apart. */
-    applyListenState();
+    /* applyGainNode() owns the element's .muted now. It has to: whether
+       muting belongs on the element or on the gain node depends on whether
+       the graph has taken the element yet, and that is a question with one
+       correct answer that should not be duplicated at each call site. This
+       line used to test levelGain, which goes true too early -- see the note
+       in applyGainNode. */
+    applyGainNode();
     /* Unmuting is a user gesture, and the only moment a refused autoplay can
        be retried. This is not the old "unmute implies play" behaviour coming
        back: the transport is already in 'play' by then, the element simply
@@ -3111,12 +3082,14 @@
        to audio.volume throws. Reject it before it reaches the element. */
     if (!isFinite(v)) return;
     v = Math.max(0, Math.min(100, v));
-    /* Routed through applyListenState rather than set on the element here,
-       so that mute and volume are decided in exactly one place. It also used
-       to matter for correctness: with a gain node in the path the slider got
-       applied twice and the two stages multiplied, so 50% came out at 25%.
-       Both callers set volEl.value first, so it reads the settled position. */
-    applyListenState();
+    /* Routed through applyGainNode rather than set on the element here.
+       Once the WebAudio graph has the element, the gain node carries volume;
+       setting it on the element as well applied the slider TWICE -- the two
+       stages multiply, so 50% came out at 25% and the fader felt wrong at the
+       bottom of its travel. applyGainNode puts the value on whichever stage
+       is actually in the path. Both callers set volEl.value first, so it
+       reads the settled position. */
+    applyGainNode();
     if (persist) {
       try { localStorage.setItem('hls-livecam-volume', String(v)); } catch (e) {}
     }
@@ -3270,121 +3243,7 @@
     setAudioState('Audio unsupported');
   }
 
-  /* ── ROOM AUDIO TRANSPORT: WHEP FIRST, HLS AS THE FALLBACK ──────────
-     Three reasons, in the order of what they cost the viewer.
-
-     1. HLS produced "a brief burst of sound, then silence" on Firefox for
-        iOS, with the element healthy throughout -- readyState 4, currentTime
-        advancing, no MediaError, no AudioContext anywhere near it. The page
-        loads the room TWICE over HLS: the muted <video> already carries the
-        audio track (see MASTER_URL) and #roomAudioPlayer fetches it again.
-        iOS grants the audio session to one element at a time, and an element
-        that has lost it goes on advancing silently -- which is exactly the
-        reading we got, and why every fix aimed at the element missed.
-     2. WebKit implements no captureStream() on media elements, so the LEVEL
-        meter had no lawful way to observe an HLS element and read N/A on the
-        phone. A WebRTC MediaStream CAN be observed, with
-        createMediaStreamSource. This is what puts the graph back.
-     3. It is the transport the conferencing stack uses for exactly this.
-
-     THE STREAM IS ATTACHED TWICE, DELIBERATELY, AND NEVER AS THE SAME TRACK.
-     srcObject carries the audible path; the meter gets a CLONE. A WebKit
-     MediaStreamAudioSourceNode built over a track an element is also
-     rendering can take the audio with it -- the same interception trap that
-     createMediaElementSource set, arriving by another door. The clone keeps
-     the observer genuinely separate, and if cloning is unavailable the meter
-     is skipped rather than risked. Sound outranks instrumentation. */
-  var roomPc = null, roomLoc = null, roomTx = 'none', roomWhy = '';
-
-  function roomStop() {
-    // The session is ended server-side on the way out. mediamtx otherwise
-    // holds it until its own timeout, which is how the earlier Location bug
-    // leaked one session per call.
-    if (roomLoc) {
-      try { fetch(roomLoc, { method: 'DELETE', keepalive: true }); } catch (e) {}
-      roomLoc = null;
-    }
-    if (roomPc) { try { roomPc.close(); } catch (e) {} roomPc = null; }
-    try { if (audio.srcObject) audio.srcObject = null; } catch (e) {}
-  }
-
-  function roomWhep(onFail) {
-    if (!window.RTCPeerConnection) { onFail('no webrtc'); return; }
-    if (!window.isSecureContext)   { onFail('not secure'); return; }
-
-    var pc, settled = false, timer = null;
-    function fail(why) {
-      if (settled) return;
-      settled = true;
-      if (timer) { clearTimeout(timer); timer = null; }
-      roomStop();
-      onFail(why);
-    }
-
-    try { pc = new RTCPeerConnection({ iceServers: [] }); }
-    catch (e) { onFail('pc: ' + ((e && e.message) || '?')); return; }
-    roomPc = pc;
-    try { pc.addTransceiver('audio', { direction: 'recvonly' }); }
-    catch (e) { fail('transceiver'); return; }
-
-    /* A handshake can answer 201 and then deliver nothing -- ICE blocked,
-       path not publishing. Silence that never resolves is the failure this
-       whole exercise was about, so it is bounded and falls back instead. */
-    timer = setTimeout(function () { fail('no media in 8s'); }, 8000);
-
-    pc.ontrack = function (ev) {
-      if (settled) return;
-      settled = true;
-      if (timer) { clearTimeout(timer); timer = null; }
-      var stream = (ev.streams && ev.streams[0]) || new MediaStream([ev.track]);
-      roomTx = 'whep';
-      // src and srcObject are mutually exclusive; a stale src wins on some
-      // engines and would quietly put us back on HLS.
-      try { audio.removeAttribute('src'); } catch (e) {}
-      try { audio.srcObject = stream; } catch (e) { fail('srcObject'); return; }
-      stage(hlsLed, 'ok');
-      setAudioState('Room audio');
-      try {
-        var t = stream.getAudioTracks()[0];
-        if (t && t.clone) levelTapStream(new MediaStream([t.clone()]));
-      } catch (e) { /* meter only; never fatal */ }
-      beginIfPlaying();
-    };
-
-    whipWhep(twoWayBase() + '/roomaudio/whep', pc, 'room audio')
-      .then(function (loc) { roomLoc = loc; })
-      .catch(function (err) { fail((err && err.message) || 'whep failed'); });
-  }
-
-  /* Started at LOAD, not on the PLAY key, and the ordering is the point: the
-     handshake is asynchronous, so a transport begun inside the tap would land
-     its play() outside the gesture that authorised it, and iOS would refuse.
-     Establishing early means PLAY is a bare play() on an attached stream, in
-     the gesture, every time. Nothing is audible meanwhile -- the transport
-     opens paused, and audioDir defaults to 'stop'. */
-  function startRoomTransport() {
-    roomStop();
-    /* Progressive MP3, served by broadcast-api off the same microphone
-       process. Measured against the mediamtx path on the same mic in the same
-       minute: 8% of windows below -60dB instead of 42-51%, envelope
-       periodicity 0.16 (noise) instead of 0.38-0.56, and 27dB more level with
-       NO capture gain. The old chain was largely transmitting padded silence.
-
-       Same origin, so there is no mixed-content rule to satisfy and no proxy
-       path prefix for a redirect to get lost in -- two failure modes this
-       fleet has hit before. roomWhep() stays in the file: 2-Way still needs
-       it, and that is where real-time delivery is actually the point. */
-    roomTx = 'mp3';
-    roomWhy = 'progressive MP3, same origin';
-    try { audio.srcObject = null; } catch (e) {}
-    audio.src = window.location.origin + '/audio/room.mp3';
-    audio.load();
-    stage(hlsLed, 'ok');
-    setAudioState('Room audio');
-    beginIfPlaying();
-  }
-
-  startRoomTransport();
+  resolveAudioUrl(startAudio);
 
   // ── TALK and 2-WAY ────────────────────────────────────
   //
@@ -3538,7 +3397,6 @@
       if (pc) { try { pc.close(); } catch (e) {} }
     });
     twoWay.pub = twoWay.sub = null;
-    levelOutDetach();
     if (twoWay.stream) {
       twoWay.stream.getTracks().forEach(function (t) { t.stop(); });
       twoWay.stream = null;
@@ -3550,12 +3408,12 @@
     // Room audio returns to HLS only if that is where we are headed.
     try {
       if (audioDir === 'play' && !twoWay.wasSilent) {
-        startRoomTransport();
+        resolveAudioUrl(startAudio);
       } else if (audio) {
         try { audio.pause(); } catch (e) {}
       }
     } catch (e) {}
-    applyListenState();
+    applyGainNode();
     paintAudioModes(reason);
     paintTransport();
   }
@@ -3589,7 +3447,6 @@
       video: false
     }).then(function (stream) {
       twoWay.stream = stream;
-      levelOutAttach(stream);
 
       twoWay.pub = new RTCPeerConnection();
       stream.getTracks().forEach(function (t) { twoWay.pub.addTrack(t, stream); });
@@ -3632,7 +3489,7 @@
       twoWay.on = true;
       twoWay.busy = false;
       audioDir = mode;
-      applyListenState();
+      applyGainNode();
       twoWay.timer = setTimeout(function () {
         stopTwoWay('ended automatically after ' +
                    (TWOWAY_MAX_SECONDS / 60) + ' minutes', 'stop');
@@ -3719,9 +3576,8 @@
       }
     });
     indicator(document.getElementById('indTalk'), twoWay.on);
-    /* Through the helper: this used to hard-code 'LEVEL' and would erase
-       the N/A legend on the next repaint. */
-    paintLevelLabel();
+    var lab = document.getElementById('levelLab');
+    if (lab) lab.textContent = 'LEVEL';
     /* A note passed in is always something that just happened -- "connecting",
        a refusal, a session that timed out -- so it wins the line. With no note
        the line reports the standing limitation if there is one, and is
@@ -3762,7 +3618,7 @@
       else { audio.pause(); }
     } catch (e) {}
     paintAudioModes();
-    applyListenState();
+    applyGainNode();
   }
 
   (function () {
@@ -3801,20 +3657,19 @@
       audio.load();              // drops the old buffer; the graph survives
     } catch (e) {}
 
-    /* Nudges the meter, and that is now ALL it does. This used to be the
-       recovery for a suspended AudioContext taking the room down with it;
-       the element no longer passes through the graph, so that failure mode
-       is gone and Reset is back to being about the stream.
-       The old note here said the element must never be re-created because
-       its MediaElementSource could be neither detached nor made twice. That
-       constraint died with the interception -- there is no source node on
-       this element any more -- so re-creating it is available if a future
-       failure ever needs it. */
+    /* The usual reason someone reaches for this key is that the room went
+       silent, and on iOS the usual reason for THAT is a suspended
+       AudioContext. This runs inside a click, which is the only context
+       allowed to resume one -- so Reset genuinely recovers the
+       spike-then-silence state rather than rebuilding into it.
+       The element itself is deliberately NOT re-created: its
+       MediaElementSource cannot be detached or made a second time, so a
+       fresh element would leave the graph feeding a corpse. */
     levelResume();
 
     stage(hlsLed, 'pending');
     audioNote('restarting room audio...');
-    startRoomTransport();          // WHEP first, HLS fallback
+    resolveAudioUrl(startAudio);   // startAudio() calls beginIfPlaying()
     paintTransport();
   }
 
@@ -3828,313 +3683,149 @@
   // Drawn from the audio itself, not from a bitrate: bytes moving says the
   // pipe is up, not that anything is audible.
   //
-  // THE ROOM AUDIO NO LONGER PASSES THROUGH WEBAUDIO AT ALL. That is the
-  // whole design, so it goes first.
+  // The tap sits BEFORE the volume stage, and that is the point.
+  // createMediaElementSource is gated by the element's own .muted, and this
+  // viewer starts muted -- tapping after it would measure the listener rather
+  // than the room, and the trace would read flat while the room was plainly
+  // audible. The FPS trace does not stop when you look away; neither does this.
   //
-  // createMediaElementSource does not tap an element, it INTERCEPTS it: once
-  // called, the graph becomes the element's ONLY route to the speakers, and
-  // there is no API to undo it -- no detach, no reconnect to the hardware.
-  // That put the product (sound) permanently downstream of a nice-to-have
-  // (this meter), and iOS won the bet. Observed on the device, mid-playback:
+  //   source -> analyser              (tap: always sees the room)
+  //   source -> gain -> destination   (what you actually hear)
   //
-  //     dir=play paused=N t=6.8 adv=Y     <- element genuinely playing
-  //     el rs=4 ns=2 err=-                <- HAVE_ENOUGH_DATA, data flowing
-  //     ctx=suspended attached=Y          <- into a graph that is not running
-  //
-  // Silence, with every element-level indicator healthy and nothing on screen
-  // to say why. Resuming from the click gesture was not enough, and could not
-  // be: WebKit suspends a context that is producing nothing -- STOP holds the
-  // gain at 0, so at rest the graph was silent BY CONSTRUCTION and therefore
-  // a suspension candidate -- and it interrupts contexts for phone calls,
-  // backgrounding and audio-route changes. Any one of those, once, was
-  // permanent silence until reload. A watchdog cannot fix that; it can only
-  // notice it, because the interception is one-way.
-  //
-  // So the element goes straight to the speakers, unconditionally, and mute
-  // and volume are the element's own again -- the arrangement this file had
-  // before the meter existed. The meter observes NON-DESTRUCTIVELY through
-  // captureStream(), which hands out a MediaStream without touching the
-  // element's output path:
-  //
-  //   element -> speakers                    (always, whatever else happens)
-  //   element.captureStream() -> analyser    (observer, no destination)
-  //
-  // A suspended, interrupted or entirely absent AudioContext now costs the
-  // meter and nothing else. The trade the old code made is reversed: sound is
-  // the product, the meter is instrumentation, and instrumentation must never
-  // be able to take the product down.
-  //
-  // WebKit does not implement captureStream() on media elements, so on iOS
-  // there is no meter. It SAYS so -- the legend reads LEVEL N/A and the lane
-  // is left empty -- rather than drawing a flat trace, because a flat trace
-  // reads as "the room is silent" and that is the same misleading-diagnostic
-  // failure the title attribute already cost us a debugging round on.
-  //
-  // One semantic did change and it is a real loss, recorded rather than
-  // hidden: the old tap sat BEFORE the volume stage, so the trace showed the
-  // room even while the viewer was muted. captureStream() reflects the
-  // element, so muting now flattens it. Measuring "what this viewer hears" is
-  // defensible on its own, and the HUD carries ground truth while debugging.
-  var levelCtx = null, levelAnalyser = null, levelTap = null;
-  var levelState = 'idle';        // 'idle' | 'ok' | 'na'
-  var levelTries = 0;
-  var levelHist  = new Array(120).fill(0);
+  // Mute and volume therefore act on the GAIN node and the element is left
+  // unmuted. createMediaElementSource INTERCEPTS rather than taps: whatever it
+  // takes must be connected onward to destination or the room goes silent with
+  // nothing to say why.
+  var levelCtx = null, levelAnalyser = null, levelGain = null, levelSrcEl = null;
+  var levelHist = new Array(120).fill(0);
 
-  /* ── THE OUT LANE ────────────────────────────────────────────────
-     One lane could only ever answer "is there sound", which is the wrong
-     question the moment a microphone is open: during TALK the room is
-     deliberately silenced at this end, so a single trace goes flat and looks
-     exactly like a dead channel at the one moment you most need to know your
-     voice is leaving. Divided, the flat half IS the answer -- the room is
-     meant to be quiet, and OUT moving proves the leg is live.
-
-     Tapped straight off the local stream, with no clone. The clone the room
-     lane needs is protection against WebKit taking an ELEMENT's audio when a
-     source node is built over the track it is rendering; the microphone is
-     rendered by nothing, it goes to a PeerConnection. There is no output here
-     to lose, so there is nothing to protect. */
-
-  /* ── THE PICTURE MUST NOT HOLD THE AUDIO SESSION ──────────────────
-     The <video> above is muted, and muted is NOT the same as "not decoding
-     audio". The master manifest carries both tracks, so the picture element
-     decodes an audio track it will never render -- and on iOS a media element
-     that decodes audio can hold the audio session whether or not it is muted.
-
-     That is why "a brief burst, then silence" survived every fix aimed at the
-     audio element, and survived changing transport entirely: HLS and WHEP both
-     failed identically because neither was the problem. #roomAudioPlayer would
-     start, be audible for the instant before the picture settled, and then
-     lose the session to an element playing nothing.
-
-     WebKit implements HTMLMediaElement.audioTracks, which most engines dropped.
-     That is exactly the platform that needs this, so the one place the API
-     survives is the one place it matters. Elsewhere it is absent and this is a
-     no-op, which is correct: no other engine has the conflict.
-
-     Re-applied on a timer rather than once. Tracks appear asynchronously after
-     metadata, and a stream reload or a mode change builds new ones -- a single
-     call at load would silence the first track and miss every one after it. */
-  var vidAudState = '-';
-
-  function silenceVideoAudio() {
-    try {
-      var v = document.getElementById('video');
-      if (!v) { vidAudState = 'novid'; return; }
-      var at = v.audioTracks;
-      if (!at) { vidAudState = 'noapi'; return; }   // not WebKit; no conflict
-      var n = at.length, live = 0;
-      for (var i = 0; i < n; i++) {
-        if (at[i].enabled) { at[i].enabled = false; }
-        if (at[i].enabled) live++;                  // refused to turn off
-      }
-      vidAudState = n + (live ? ':' + live + 'on' : ':off');
-    } catch (e) {
-      vidAudState = 'err';
-    }
-  }
-
-  var levelOutTap = null, levelOutAnalyser = null;
-  var levelOutHist = new Array(120).fill(0);
-
-  function levelOutAttach(stream) {
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC || !stream) return;
-    levelOutDetach();
-    try {
-      if (!levelCtx) {
-        levelCtx = new AC();
-        levelAnalyser = levelCtx.createAnalyser();
-        levelAnalyser.fftSize = 512;
-      }
-      levelOutAnalyser = levelCtx.createAnalyser();
-      levelOutAnalyser.fftSize = 512;
-      levelOutTap = levelCtx.createMediaStreamSource(stream);
-      levelOutTap.connect(levelOutAnalyser);   // analyser only, never output
-      levelResume();
-    } catch (e) {
-      levelOutTap = null; levelOutAnalyser = null;
-    }
-  }
-
-  function levelOutDetach() {
-    if (levelOutTap) { try { levelOutTap.disconnect(); } catch (e) {} }
-    levelOutTap = null;
-    levelOutAnalyser = null;
-    // Zeroed rather than frozen: a trace left holding its last values would
-    // go on showing a voice after the key was released.
-    for (var i = 0; i < levelOutHist.length; i++) levelOutHist[i] = 0;
-  }
-
-  function levelPeak(an) {
-    if (!an) return 0;
-    var buf = new Uint8Array(an.frequencyBinCount);
-    an.getByteTimeDomainData(buf);
-    var peak = 0;
-    for (var i = 0; i < buf.length; i++) {
-      var d = Math.abs(buf[i] - 128);
-      if (d > peak) peak = d;
-    }
-    return Math.min(1, peak / 128);
-  }
-
-  /* Mute and volume. The element is the only stage there is now, which is
-     what makes this safe: there is no second silencer that can be left in the
-     wrong position by a graph that failed to start. */
-  function applyListenState() {
-    if (!audio) return;
+  function applyGainNode() {
     var v = 1, sl = document.getElementById('audioVol');
     if (sl) v = Math.max(0, Math.min(1, (parseFloat(sl.value) || 0) / 100));
     // TALK is one-way OUT, so the room is as silent here as it is under
     // STOP -- for a different reason: not "nothing is open" but "what is open
     // points the other way", and leaving it audible is the echo path.
-    audio.muted  = (audioMuted || audioDir === 'stop' || audioDir === 'to');
-    audio.volume = v;
-  }
+    var silent = (audioMuted || audioDir === 'stop' || audioDir === 'to');
 
-  /* Is the lane actually measuring RIGHT NOW? Not the same question as
-     whether the tap exists: a context that has been suspended or interrupted
-     still has a live tap and reports nothing but zeros. Treating those as a
-     reading is how a flat trace comes to mean "the room is silent" when it
-     really means "no one is listening to it". */
-  function levelMeasuring() {
-    return levelState === 'ok' && !!levelCtx && levelCtx.state === 'running';
-  }
+    /* TWO silencers, and exactly one of them is live at any moment. Which one
+       depends on whether the graph has actually TAKEN the element, and the
+       test for that is levelSrcEl -- the source node -- not levelGain.
 
-  /* iOS refuses scripted playback volume: HTMLMediaElement.volume is
-     read-only there, the assignment is silently ignored, and the fader
-     becomes a knob that does nothing -- the exact class of dead control this
-     panel has spent three commits removing. It only became reachable now:
-     the gain node used to carry volume on iOS, and taking the graph out of
-     the audible path handed the job back to the element.
-
-     Feature-detected, not UA-sniffed: write a value, read it back, restore.
-     The probe step is 0.01 -- inaudible -- and it runs once. The slider is
-     left ENABLED and merely dimmed with an explanation, for the same reason
-     the microphone keys were: a control that cannot act must still be able
-     to say why, and disabling it takes away the tap that asks. */
-  var volSettable = null;
-  function probeVolume() {
-    if (volSettable !== null || !audio) return volSettable;
-    try {
-      var was   = audio.volume;
-      var probe = (was > 0.5) ? was - 0.01 : was + 0.01;
-      audio.volume = probe;
-      volSettable  = Math.abs(audio.volume - probe) < 0.0005;
-      audio.volume = was;
-    } catch (e) { volSettable = false; }
-    if (volSettable === false) {
-      var sl = document.getElementById('audioVol');
-      if (sl) {
-        sl.style.opacity = '0.45';
-        sl.title = 'This browser fixes playback volume to the device -- ' +
-                   'use the hardware volume buttons. MUTE still works.';
-      }
+       levelGain now exists from the moment the AudioContext is constructed,
+       which can be well before the source is attached (see levelAttach: on
+       WebKit the attach waits for the context to be running). During that
+       window the gain node is connected to destination but nothing feeds it,
+       so setting gain to 0 silences nothing and the element -- still routed
+       straight to the speakers -- would keep playing through a lit MUTE key.
+       Keying off the source node closes that window. */
+    if (levelSrcEl && levelGain) {
+      audio.muted  = false;         // the gain node owns silence now
+      /* ...and it owns volume too, so the element is pinned back to unity.
+         WebKit scales a MediaElementSource's output by the element's own
+         volume, so leaving the slider value on the element here would apply
+         it twice -- and it WOULD be left over: the branch below sets it while
+         the graph is still detaching-or-waiting, which is the normal state
+         for the first moment of playback on iOS. */
+      audio.volume = 1;
+      levelGain.gain.value = silent ? 0 : v;
+    } else {
+      audio.muted  = silent;        // no graph in the path: the element owns it
+      audio.volume = v;
     }
-    return volSettable;
   }
 
-  function paintLevelLabel() {
-    var lab = document.getElementById('levelLab');
-    if (!lab) return;
-    // 'idle' is before the first tap attempt has resolved -- not yet a
-    // failure, so it keeps the plain legend rather than flashing N/A.
-    var t = (levelState === 'na' || (levelState === 'ok' && !levelMeasuring()))
-      ? 'LEVEL N/A' : 'LEVEL';
-    if (lab.textContent !== t) lab.textContent = t;   // no needless writes
-  }
-
-  /* Best effort, and every failure path is deliberately quiet: by
-     construction nothing in here can change what the viewer hears, so a
-     meter that cannot start is a cosmetic loss and is reported as one. */
-
-  /* Observes a MediaStream we were handed, rather than one taken off an
-     element. This is the WHEP path's meter, and the reason iOS has a graph
-     again: WebKit has no captureStream() on media elements but does implement
-     createMediaStreamSource. Connected to the analyser and to NOTHING else --
-     the audible path does not come through here and must not be able to. */
-  function levelTapStream(stream) {
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC || !stream) return;
-    if (levelTap) { try { levelTap.disconnect(); } catch (e) {} levelTap = null; }
-    try {
-      if (!levelCtx) {
-        levelCtx = new AC();
-        levelAnalyser = levelCtx.createAnalyser();
-        levelAnalyser.fftSize = 512;
-      }
-      levelTap = levelCtx.createMediaStreamSource(stream);
-      levelTap.connect(levelAnalyser);
-      levelState = 'ok';
-      levelResume();
-    } catch (e) {
-      levelState = 'na';
-    }
-    paintLevelLabel();
-  }
-
-  function levelTapTry() {
-    // WHEP owns the meter when it is carrying the room: the element has
-    // no captureStream to give, and asking would only mark it 'na'.
-    if (roomTx === 'whep') return;
-    if (levelTap || levelState === 'na' || !audio) return;
-    var grab = audio.captureStream || audio.mozCaptureStream;
-    var AC   = window.AudioContext || window.webkitAudioContext;
-    if (!grab || !AC) { levelState = 'na'; paintLevelLabel(); return; }
-    try {
-      var stream = grab.call(audio);
-      /* Before the element has decoded anything the stream can exist with no
-         audio track yet. That is "not ready", not "unsupported", so retry --
-         but bounded, or a browser that never populates it retries forever and
-         the legend never settles on an honest answer. ~30s at 500ms. */
-      if (!stream || !stream.getAudioTracks || !stream.getAudioTracks().length) {
-        if (++levelTries > 60) { levelState = 'na'; paintLevelLabel(); }
-        return;
-      }
-      if (!levelCtx) {
-        levelCtx = new AC();
-        levelAnalyser = levelCtx.createAnalyser();
-        levelAnalyser.fftSize = 512;
-      }
-      // Connected to the analyser and to NOTHING else. Not to destination:
-      // this is an observer, and the audible path does not come through here.
-      levelTap = levelCtx.createMediaStreamSource(stream);
-      levelTap.connect(levelAnalyser);
-      levelState = 'ok';
-    } catch (e) {
-      levelState = 'na';
-    }
-    paintLevelLabel();
-  }
-
-  /* Still worth doing -- a suspended context reads flat -- but it is now only
-     the meter that is at stake, which is why nothing calls this on a timer. */
-  function levelResume() {
-    if (!levelCtx) return null;
-    if (levelCtx.state === 'suspended') {
+  /* Build the context and its permanent nodes, but attach nothing to it. */
+  function levelEnsureCtx() {
+    if (!levelCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
       try {
-        var p = levelCtx.resume();
-        if (p && p.catch) p.catch(function () {});
-      } catch (e) { /* older WebKit resume() is callback-style */ }
+        levelCtx = new AC();
+        levelAnalyser = levelCtx.createAnalyser();
+        levelAnalyser.fftSize = 512;
+        levelGain = levelCtx.createGain();
+        levelGain.connect(levelCtx.destination);
+      } catch (e) { levelCtx = null; return null; }
+      /* The attach is deferred until the context runs, and resume() resolves
+         asynchronously -- so this is what actually performs the attach in the
+         normal iOS case. Without it the graph would wait for a SECOND tap. */
+      levelCtx.onstatechange = function () {
+        if (levelCtx && levelCtx.state === 'running') levelAttach(audio);
+      };
     }
     return levelCtx;
   }
 
-  function levelSample() {
-    levelTapTry();
-    probeVolume();          // self-guards after the first call
-    // Re-checked every tick, not just on state changes: a context can be
-    // interrupted long after the tap was made and the legend has to follow.
-    paintLevelLabel();
-    var v = 0;
-    if (levelMeasuring() && levelAnalyser) v = levelPeak(levelAnalyser);
-    // The OUT lane is gated on the microphone being open, not on levelMeasuring
-    // -- that answers a question about the ROOM tap, and the two can differ:
-    // the room can be unobservable while your own voice is perfectly readable.
-    var o = 0;
-    if (levelOutAnalyser && levelCtx && levelCtx.state === 'running') {
-      o = levelPeak(levelOutAnalyser);
+  /* Only ever called from inside a click handler -- that is the whole point.
+     iOS WebKit will not start an AudioContext outside a user gesture. */
+  function levelResume() {
+    var ctx = levelEnsureCtx();
+    if (!ctx) return null;
+    if (ctx.state === 'suspended') {
+      try {
+        var p = ctx.resume();
+        if (p && p.catch) p.catch(function () {});
+      } catch (e) { /* older WebKit resume() is callback-style */ }
     }
-    levelOutHist.push(o); levelOutHist.shift();
+    return ctx;
+  }
+
+  function levelAttach(el) {
+    if (!el || levelSrcEl === el) return;
+    var ctx = levelEnsureCtx();
+    if (!ctx) return;
+
+    /* THE "SPIKE, THEN SILENCE" BUG, AND WHY THIS WAITS.
+       createMediaElementSource does not tap an element, it INTERCEPTS it:
+       from the moment it is called, the element's only route to the speakers
+       is through this graph. On iOS WebKit a newly constructed AudioContext
+       is ALWAYS 'suspended' -- constructing it inside a user gesture is not
+       enough, only resume() clears it -- so attaching while suspended hands
+       the room to a graph that is not running, and the sound stops dead.
+
+       That is precisely what shipped. The old document click handler read:
+
+           if (levelCtx && levelCtx.state === 'suspended') levelCtx.resume();
+           levelAttach(audio);
+
+       On the FIRST click levelCtx was still null, so the resume() line was
+       skipped -- and levelAttach then CREATED the context (suspended) and
+       immediately attached to it. Meanwhile the button's own listener had
+       already run play(), because a listener on the target fires before one
+       bubbling to document. So the element started, was briefly audible
+       straight to the speakers, and was then taken away by a dead graph:
+       a quick spike, then silence. It never reproduced on desktop, where a
+       context created in a gesture starts 'running'.
+
+       The fix is to refuse to intercept until the context is genuinely
+       running. Interception cannot be undone -- there is no API to give an
+       element its direct output back -- so the only safe order is to be sure
+       first. While we wait, the element plays normally on its own. */
+    if (ctx.state !== 'running') { levelResume(); return; }
+
+    try {
+      var src = ctx.createMediaElementSource(el);
+      src.connect(levelAnalyser);
+      src.connect(levelGain);      // NOT optional -- the only path to output
+      levelSrcEl = el;
+    } catch (e) {
+      return;                      // already attached, or not analysable
+    }
+    applyGainNode();               // hands silence to the gain node
+  }
+
+  function levelSample() {
+    var v = 0;
+    if (levelAnalyser && levelCtx && levelCtx.state === 'running') {
+      var buf = new Uint8Array(levelAnalyser.frequencyBinCount);
+      levelAnalyser.getByteTimeDomainData(buf);
+      var peak = 0;
+      for (var i = 0; i < buf.length; i++) {
+        var d = Math.abs(buf[i] - 128);
+        if (d > peak) peak = d;
+      }
+      v = Math.min(1, peak / 128);
+    }
     // Honest flat, like the FPS trace at 0. TALK joins STOP here: this lane
     // measures what THIS viewer hears, and during TALK that is nothing.
     if (audioDir === 'stop' || audioDir === 'to') v = 0;
@@ -4146,334 +3837,43 @@
     if (!c || !c.getContext) return;
     var g = c.getContext('2d'), w = c.width, h = c.height;
     g.clearRect(0, 0, w, h);
-    var base = h - 12, top = 4, step = w / levelHist.length;
-    // The line is the middle of the lane, not its floor: each direction gets
-    // half the height and grows away from it. Same 12px kept clear at the
-    // bottom so nothing is drawn through the LEVEL and 60s legends.
-    var mid = Math.round((top + base) / 2), half = mid - top;
-
     // Log scale, because hearing is. Speech near -30 dBFS is 3% of a linear
-    // height and reads as silence on a linear axis.
-    function bars(hist, colour, up) {
-      g.fillStyle = colour;
-      for (var i = 0; i < hist.length; i++) {
-        var val = hist[i];
-        if (!val) continue;
-        var db = 20 * Math.log(val) / Math.LN10;
-        var f = Math.max(0, Math.min(1, (db + 60) / 60));
-        if (f <= 0) continue;
-        var bh = Math.max(1, f * half);
-        g.fillRect(i * step, up ? mid - bh : mid + 1,
-                   Math.max(1, step - 1), bh);
-      }
+    // height and indistinguishable from silence. Baseline lifted 12px so bars
+    // are not drawn through the LEVEL and 60s legends.
+    var base = h - 12, top = 4, span = base - top, step = w / levelHist.length;
+    g.fillStyle = 'rgba(48,209,88,.55)';
+    for (var i = 0; i < levelHist.length; i++) {
+      var val = levelHist[i];
+      var db = val > 0 ? 20 * Math.log(val) / Math.LN10 : -100;
+      var f = Math.max(0, Math.min(1, (db + 60) / 60));
+      var bh = f > 0 ? Math.max(1, f * span) : 0;
+      if (bh) g.fillRect(i * step, base - bh, Math.max(1, step - 1), bh);
     }
-
-    /* The room half can be unmeasurable while the microphone half is fine, so
-       they are drawn independently. Drawing zero-height bars for an
-       unobservable room would be indistinguishable from a silent one -- which
-       is the confusion the divided lane exists to end, not to repeat. */
-    if (levelMeasuring()) bars(levelHist, 'rgba(48,209,88,.55)', true);
-    bars(levelOutHist, 'rgba(255,159,10,.55)', false);
-
-    // Centre rule, and the two ends named. Without labels a mirrored trace is
-    // just a symmetrical squiggle: which half is you is the whole point.
-    g.fillStyle = 'rgba(142,142,147,.28)';
-    g.fillRect(0, mid, w, 1);
-    g.font = '9px ui-monospace, Menlo, monospace';
-    g.fillStyle = levelMeasuring() ? 'rgba(48,209,88,.55)'
-                                   : 'rgba(142,142,147,.35)';
-    g.fillText('IN', 3, mid - 3);
-    g.fillStyle = levelOutTap ? 'rgba(255,159,10,.65)'
-                              : 'rgba(142,142,147,.35)';
-    g.fillText('OUT', 3, mid + 10);
+    g.fillStyle = 'rgba(48,209,88,.18)';
+    g.fillRect(0, base, w, 1);
   }
 
-  /* WHICH TRANSPORT IS CARRYING SOUND, RIGHT NOW.
-     Listening and talking no longer use the same leg: Play is buffered HLS,
-     while Talk and 2-Way are live WebRTC. One lamp could not say which was
-     active, and the answer changes as keys are pressed -- so each leg gets
-     its own, and both are read from live state rather than set at the moment
-     a key is pressed (a lamp lit by a keypress lies the moment the leg
-     underneath it drops). */
-  function paintTransportLeds() {
-    // AUDIO. Listening is Icecast over HTTP (roomTx 'mp3'); Talk and 2-Way are
-    // WebRTC. They are different transports now, so one lamp cannot answer
-    // "which is carrying sound" -- hence two, both read from live state.
-    var rtcOn = !!(twoWay && twoWay.on) || roomTx === 'whep';
-    var hlsOn = (roomTx === 'hls' || roomTx === 'mp3') && !(twoWay && twoWay.on);
-    stage(rtcLed, rtcOn ? 'ok' : '');
-    stage(hlsLed, hlsOn ? 'ok' : '');
+  setInterval(function () { levelSample(); levelDraw(); }, 500);
 
-    // VIDEO. The picture is HLS on this node; the RTC lamp is present so the
-    // panel can say that plainly rather than leaving it unstated, and it lights
-    // only if a WebRTC video leg ever carries the picture.
-    var vHls = document.getElementById('videoHlsLed');
-    var vRtc = document.getElementById('videoRtcLed');
-    var vRtcOn = !!(twoWay && twoWay.on && twoWay.video);
-    if (vRtc) stage(vRtc, vRtcOn ? 'ok' : '');
-    if (vHls && vRtcOn) stage(vHls, '');
-  }
+  /* A gesture is what lets an AudioContext run at all; every key is one.
 
-  setInterval(function () {
-    silenceVideoAudio();   // cheap, and must survive stream reloads
-    levelSample();
-    levelDraw();
-    paintTransportLeds();
-  }, 500);
-
-  /* A gesture is what lets an AudioContext run at all, and every key is one.
-     This no longer has anything to do with whether the room is audible -- the
-     element reaches the speakers on its own -- so it is now purely the meter
-     taking its chance to start and to un-suspend. */
+     CAPTURE phase, deliberately. In the bubble phase this ran AFTER the
+     transport key's own listener had already called play(), which is half of
+     what made the old bug audible as a spike. Capturing on document puts the
+     resume() ahead of every button handler on the page, so by the time PLAY
+     starts the element the context is already on its way up -- and the attach
+     either happens before playback or, more usually, lands via onstatechange
+     a moment later without interrupting it. */
   document.addEventListener('click', function () {
-    levelTapTry();
     levelResume();
+    levelAttach(audio);
   }, true);
   (function () {
     var sl = document.getElementById('audioVol');
-    if (sl) sl.addEventListener('input', applyListenState);
+    if (sl) sl.addEventListener('input', applyGainNode);
   })();
 
   paintAudioModes();
-
-  /* ══════════════════════════════════════════════════════════════════════
-     TEMPORARY DIAGNOSTIC HUD  --  REMOVE WHEN THE AUDIO PATH IS SETTLED.
-
-     Everything from this banner down to the matching END banner is one
-     self-contained block, and deleting it restores the file exactly. It
-     defines no name anything else refers to, adds nothing to the document
-     source (it builds its own element), and changes no existing line -- it
-     gets its tick by wrapping levelDraw() rather than by adding a second
-     timer or editing the interval that already exists. Every wrapper below
-     calls through to the original, so the page behaves identically with the
-     block present and with it gone.
-
-     WHY IT EXISTS. Debugging this panel from a phone was costing a
-     question-and-answer round trip per fact -- "is there sound?", "did a
-     permission prompt appear?", "which capability was missing?" -- when the
-     page already knew every one of them. Burning them on screen closes that
-     loop: the user screenshots this instead of being interviewed.
-
-     This is NOT the server-side HUD cv_processor.py draws into the frames.
-     It cannot be: the state that matters here is all client-side --
-     AudioContext.state, whether the WebAudio graph has intercepted the
-     element, the getUserMedia error name -- and the server sees none of it.
-
-     Default visible, because a diagnostic that must be asked for does not
-     close the loop. Tap it to collapse to one line, tap again to restore.
-     ══════════════════════════════════════════════════════════════════════ */
-  (function () {
-    var host = document.getElementById('videoContainer');
-    if (!host) return;
-
-    var box = document.createElement('div');
-    box.id = 'dbgHud';
-    /* Inline styles, not a rule in the <style> block, so that removing this
-       block is a single deletion rather than three scattered ones. */
-    box.style.cssText = [
-      'position:absolute', 'top:8px', 'left:8px', 'z-index:40',
-      'font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',
-      'color:#e8e8ea',
-      /* Opaque enough to stay legible over the bright HUD and over the VHS
-         static in hide mode, which is the whole point of a dark backing. */
-      'background:rgba(0,0,0,.72)',
-      '-webkit-backdrop-filter:blur(4px)', 'backdrop-filter:blur(4px)',
-      'padding:6px 8px', 'border-radius:6px',
-      'border:1px solid rgba(255,255,255,.16)',
-      'white-space:pre', 'max-width:min(92%,420px)', 'overflow:hidden',
-      'cursor:pointer', '-webkit-user-select:none', 'user-select:none',
-      'text-shadow:0 1px 2px rgba(0,0,0,.9)'
-    ].join(';');
-    host.appendChild(box);
-
-    /* Suppress the panel's own note lines while this HUD is up.
-
-       #audioNote is the PERMANENT user-facing error surface -- it is what
-       tells a viewer "microphone permission refused" when no one is
-       debugging -- and #audioStatus is its stream-state counterpart. Neither
-       is being retired: they are hidden only because the HUD supersedes them
-       for now and the user asked for a clean panel, and hiding them from
-       HERE means deleting this block restores both automatically. There is
-       deliberately no second cleanup to remember.
-
-       display:none rather than emptying them, so the code that writes to
-       them is untouched and keeps working the moment the block goes. No gap
-       and no shifted buttons: both sit BELOW the key row, and .audionote
-       already collapses to display:none when empty -- which is its usual
-       state -- so this is the layout the panel normally has anyway. */
-    ['audioNote', 'audioStatus'].forEach(function (id) {
-      var n = document.getElementById(id);
-      if (n) n.style.display = 'none';
-    });
-
-    var collapsed = false;
-    box.addEventListener('click', function (ev) {
-      ev.stopPropagation();
-      collapsed = !collapsed;
-      paint();
-    });
-
-    /* Latched. The transient note line gets overwritten by the next repaint,
-       and the failure we need is usually the one that has just scrolled
-       past -- so the last error and the last stream state are held until
-       something replaces them. */
-    var lastErr = '-', lastState = '-';
-    var lastT = -1, advancing = false;
-
-    function yn(v) { return v ? 'Y' : 'N'; }
-
-    function pcState(pc) {
-      if (!pc) return '-';
-      return (pc.iceConnectionState || '?') + '/' + (pc.connectionState || '?');
-    }
-
-    function mediaErr(el) {
-      if (!el || !el.error) return '-';
-      var c = el.error.code;
-      return c + (['', 'ABORT', 'NET', 'DECODE', 'SRCUNSUP'][c] || '');
-    }
-
-    function paint() {
-      /* Wrapped whole. This reads half-initialised objects by design -- it
-         runs before hls.js has attached, before the AudioContext exists, and
-         during teardown -- and a diagnostic that throws would take the rest
-         of the page's scripts down with it, which is a far worse outcome
-         than a blank panel. */
-      try {
-        if (collapsed) { box.textContent = 'DIAG'; return; }
-
-        var el = audio;
-        var t  = el ? el.currentTime : 0;
-        /* A stalled element and a playing one are indistinguishable from
-           readyState alone, so compare position against the last sample. */
-        advancing = !!(el && !el.paused && t > lastT + 0.005);
-        lastT = t;
-
-        var ctx = levelCtx;
-        var md  = navigator.mediaDevices;
-        var sl  = document.getElementById('audioVol');
-
-        box.textContent = [
-          'DIAG  tap to collapse',
-          'dir=' + audioDir + ' paused=' + (el ? yn(el.paused) : '-') +
-            ' t=' + t.toFixed(1) + ' adv=' + yn(advancing),
-          'el rs=' + (el ? el.readyState : '-') +
-            ' ns=' + (el ? el.networkState : '-') +
-            ' err=' + mediaErr(el),
-          /* attached= is deliberately GONE rather than renamed. It meant "the
-             graph has intercepted the element", a state that can no longer
-             occur, and a field whose meaning silently changed is worse than
-             one that disappeared. tap= is the non-destructive observer and
-             meter= is what the legend shows; neither can now imply anything
-             about whether the room is audible. */
-          /* meter distinguishes "tapped" from "measuring": stalled means the
-             observer is wired up but its context is not running, which reads
-             as a flat lane and must not be confused with a quiet room. */
-          'tx=' + roomTx + (roomWhy ? '(' + roomWhy.slice(0, 16) + ')' : '') +
-            ' vaud=' + vidAudState +
-            ' ctx=' + (ctx ? ctx.state : 'none') + ' tap=' + yn(levelTap) +
-            ' meter=' + (levelState === 'na' ? 'na'
-                       : levelMeasuring()    ? 'live'
-                       : levelTap            ? 'stalled' : 'idle'),
-          /* No gain= any more: the element is the only stage, so elv is the
-             volume that is actually in force rather than one of two. */
-          'mute=' + yn(audioMuted) +
-            ' vol=' + (sl ? sl.value : '-') +
-            ' elv=' + (el ? el.volume.toFixed(2) : '-') +
-            /* volset=N means the fader cannot bite on this browser (iOS),
-               so elv will not follow vol and that is the platform, not a
-               bug in the slider. */
-            ' volset=' + (volSettable === null ? '?' : yn(volSettable)),
-          '2w on=' + yn(twoWay.on) + ' busy=' + yn(twoWay.busy) +
-            ' pub=' + pcState(twoWay.pub) + ' sub=' + pcState(twoWay.sub),
-          /* What could not be determined remotely: which term of the old
-             twoWaySupported() boolean is false in this browser. */
-          'cap sec=' + yn(window.isSecureContext) +
-            ' md=' + yn(md) +
-            ' gum=' + yn(md && md.getUserMedia) +
-            ' pc=' + yn(window.RTCPeerConnection),
-          'st: ' + lastState,
-          'er: ' + lastErr
-        ].join('\n');
-      } catch (e) {
-        try {
-          box.textContent = 'DIAG paint failed:\n' + ((e && e.message) || e);
-        } catch (e2) { /* nothing left to try */ }
-      }
-    }
-
-    /* The tick, borrowed from the level trace's existing 500ms interval so
-       this adds no timer of its own. levelDraw is looked up at call time by
-       that interval, so reassigning it here is enough. */
-    var _draw = levelDraw;
-    levelDraw = function () {
-      try { _draw(); } finally { paint(); }
-    };
-
-    /* stopTwoWay carries the composed failure text for every non-getUserMedia
-       path (a refused WHIP/WHEP, an unreachable signalling URL, the session
-       timeout). Wrapping it latches those without touching the catch site. */
-    /* A teardown REASON is not an error, and latching it as one made the
-       instrument lie: of the six stopTwoWay call sites exactly one is
-       error-derived (the catch in startTwoWay). The other five are ordinary
-       lifecycle -- the session timeout, beforeunload, a mode switch, Reset,
-       and pressing the lit key to hang up. That last one produced the
-       observed "er: stopped" on a call that had SUCCEEDED and was closed
-       normally: a fault reported where nothing failed.
-
-       So reasons land on the state line, and er: is left to the two wrappers
-       below, which hold real Error objects. Same standard as rejecting
-       paused=N for a missing element -- a misleading diagnostic is worse
-       than none. */
-    var _stop = stopTwoWay;
-    stopTwoWay = function (reason, next) {
-      if (reason) lastState = String(reason);
-      return _stop(reason, next);
-    };
-
-    var _state = setAudioState;
-    setAudioState = function (text) {
-      if (text) lastState = String(text);
-      return _state(text);
-    };
-
-    /* getUserMedia is wrapped rather than read from the existing catch,
-       because the catch maps the error to a sentence and the NAME is the
-       diagnostic -- NotAllowedError (user refused) and NotFoundError (no
-       device) are the same sentence to a viewer and completely different
-       bugs to us. Rethrows, so the real handler still runs. */
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      var md0  = navigator.mediaDevices;
-      var _gum = md0.getUserMedia.bind(md0);
-      md0.getUserMedia = function (c) {
-        return _gum(c).catch(function (e) {
-          lastErr = ((e && e.name) || 'Error') + ': ' + ((e && e.message) || '');
-          throw e;
-        });
-      };
-    }
-
-    /* The other genuine-failure path. startTwoWay's catch turns these into a
-       sentence for the viewer, so without this the precise fault -- an
-       unreachable signalling URL (TypeError) versus mediamtx refusing the
-       offer ("publish refused: HTTP 404") -- never reached the HUD. Rethrows,
-       so the real handler still runs.
-
-       Between this and the getUserMedia wrapper, er: carries only things
-       that were actually thrown. A failure from neither path (a constructor
-       throwing, say) shows on st: and leaves er: at '-', which is the honest
-       reading: no error object was observed. */
-    var _ww = whipWhep;
-    whipWhep = function (url, pc, dir) {
-      return _ww(url, pc, dir).catch(function (e) {
-        lastErr = ((e && e.name) || 'Error') + ': ' + ((e && e.message) || e);
-        throw e;
-      });
-    };
-
-    paint();
-  })();
-  /* ═══════════════════ END TEMPORARY DIAGNOSTIC HUD ═══════════════════ */
 
 })();
 </script>
