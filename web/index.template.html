@@ -1505,6 +1505,14 @@
               <span class="vlab">Bits</span>
               <span class="vval"><span class="vghost">888</span><span class="vlit" id="audioBits"></span></span>
             </div>
+            <!-- Which way sound is moving, in words rather than by inference
+                 from which key looks pressed. It also gives this display the
+                 third row it needs to stand as tall as the five-lamp strip
+                 beside it, which gained RTC. -->
+            <div class="vrow">
+              <span class="vlab">Dir</span>
+              <span class="vval"><span class="vghost">8888</span><span class="vlit" id="audioDirVal"></span></span>
+            </div>
             <div class="vind">
               <i id="indStereo">MONO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
@@ -3461,13 +3469,52 @@
     try { return new URL(loc, url).href; } catch (e) { return null; }
   }
 
+  /* Wait for ICE gathering before sending the offer.
+
+     WHIP/WHEP as mediamtx implements it is NON-TRICKLE: the offer posted is
+     the only chance to tell the server how to reach this browser. Posting
+     straight after setLocalDescription sends an SDP with no candidates in it.
+
+     A PUBLISHING leg survives that anyway -- it starts sending, and the server
+     discovers the address from the arriving packets as a peer-reflexive
+     candidate. A RECEIVING leg sends nothing, so there is nothing to discover:
+     the server negotiates happily, reports "is reading from path", and then
+     has nowhere to send the media. Observed exactly that -- the publish leg
+     logged "peer connection established, remote candidate: prflx/..." and the
+     receive leg logged no established line at all, which is 2-Way with working
+     outbound audio and silent inbound.
+
+     So: hold the offer until gathering completes, then send
+     pc.localDescription (which now carries the candidates), not the original
+     offer object. Bounded, because a browser that never reaches 'complete'
+     must not hang the call -- a partial candidate list still beats none. */
+  function whepGathered(pc) {
+    if (pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish() {
+        if (done) return;
+        done = true;
+        pc.removeEventListener('icegatheringstatechange', check);
+        resolve();
+      }
+      function check() {
+        if (pc.iceGatheringState === 'complete') finish();
+      }
+      pc.addEventListener('icegatheringstatechange', check);
+      setTimeout(finish, 2000);
+    });
+  }
+
   function whipWhep(url, pc, dir) {
     return pc.createOffer().then(function (offer) {
       return pc.setLocalDescription(offer).then(function () {
+        return whepGathered(pc);
+      }).then(function () {
         return fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/sdp' },
-          body: offer.sdp
+          body: (pc.localDescription && pc.localDescription.sdp) || offer.sdp
         });
       });
     }).then(function (res) {
@@ -4244,6 +4291,28 @@
      its own, and both are read from live state rather than set at the moment
      a key is pressed (a lamp lit by a keypress lies the moment the leg
      underneath it drops). */
+  /* The direction readout.
+
+     Deliberately says what is HAPPENING, not what was requested: a key can be
+     pressed while its transport is still opening, or after it has dropped, and
+     a panel that reports the request rather than the state is how a dead leg
+     goes unnoticed. IN is only claimed when something is actually playing. */
+  function paintAudioDir() {
+    var el = document.getElementById('audioDirVal');
+    if (!el) return;
+    var inOn  = !!(audio && !audio.paused && !audio.muted && audioDir === 'play');
+    var rx    = document.getElementById('twoWayRx');
+    var rtcIn = !!(rx && rx.srcObject && !rx.paused && !rx.muted);
+    var outOn = !!(twoWay && twoWay.on);
+
+    var txt;
+    if (outOn && (inOn || rtcIn))      txt = 'BOTH';
+    else if (outOn)                    txt = 'OUT';
+    else if (inOn || rtcIn)            txt = 'IN';
+    else                               txt = '--';
+    el.textContent = txt;
+  }
+
   function paintTransportLeds() {
     // AUDIO. Listening is Icecast over HTTP (roomTx 'mp3'); Talk and 2-Way are
     // WebRTC. They are different transports now, so one lamp cannot answer
@@ -4306,6 +4375,7 @@
     levelSample();
     levelDraw();
     paintTransportLeds();
+    paintAudioDir();
     keepAtLiveEdge();
   }, 500);
 
