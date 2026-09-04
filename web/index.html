@@ -1549,11 +1549,11 @@
              off a secure context, because getUserMedia does. -->
         <div class="btnrow">
           <button type="button" class="btn" id="audioPlayBtn"
-                  title="Listen to the room">MONITOR</button>
+                  title="Listen to the room">Monitor</button>
           <button type="button" class="btn guarded" id="audioStopBtn"
-                  title="Neither direction open">SILENCE</button>
+                  title="Neither direction open">Silence</button>
           <button type="button" class="btn" id="talkButton"
-                  title="Two-way audio with the room">TWO-WAY</button>
+                  title="Two-way audio with the room">Two-way</button>
         </div>
 
         <!-- Where the audio bank says what just happened. On a phone this is
@@ -1582,7 +1582,7 @@
           <button type="button" class="modem mute-key" id="muteAudio"
                   aria-pressed="true" aria-label="Mute microphone"
                   title="Mute your microphone; the call stays up and the room keeps arriving">
-            <span class="bulb"></span><span class="cap2">MUTE MIC</span>
+            <span class="bulb"></span><span class="cap2">Mute mic</span>
           </button>
 
           <input type="range" id="audioVol" class="vol"
@@ -3960,10 +3960,16 @@
     if (!audio) return;
     var v = 1, sl = document.getElementById('audioVol');
     if (sl) v = Math.max(0, Math.min(1, (parseFloat(sl.value) || 0) / 100));
-    // TALK is one-way OUT, so the room is as silent here as it is under
-    // STOP -- for a different reason: not "nothing is open" but "what is open
-    // points the other way", and leaving it audible is the echo path.
-    audio.muted  = (audioMuted || audioDir === 'stop' || audioDir === 'to');
+    /* audioMuted is NOT consulted here. That flag is the MUTE MIC key, and it
+       belongs to the microphone alone; folding it in here meant pressing MUTE
+       MIC while listening silenced the room instead — the key doing the one
+       thing its label promises it will not do.
+
+       What silences this element is the mode: nothing is open under SILENCE,
+       and under TWO-WAY the room arrives on the call leg's own element
+       instead, so leaving this one audible would play the room twice, the
+       second copy seconds late — which is also the echo path. */
+    audio.muted  = (audioDir !== 'play');
     audio.volume = v;
   }
 
