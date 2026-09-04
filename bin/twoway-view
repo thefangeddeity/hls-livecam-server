@@ -52,6 +52,10 @@ pids+=($!)
 # 2. THE WINDOW. Composited by ffmpeg and played by ffplay, rather than two
 #    separate windows: one window can be glanced at, two have to be arranged.
 #
+#    No drawtext labels: this ffmpeg build has no drawtext filter compiled in,
+#    and the whole composite fails as one if a filter is missing. Left is the
+#    room, right is the caller; the layout says it.
+#
 #    -an on both legs: the audio is already going to the speakers above, and a
 #    second copy through ffplay would be an echo of the caller into the mic.
 #
@@ -63,8 +67,8 @@ pids+=($!)
   -rtsp_transport tcp -i "$RTSP/cam" \
   -rtsp_transport tcp -i "$RTSP/talkback" \
   -filter_complex "\
-     [0:v]scale=480:-2,setsar=1,drawtext=text='room':x=8:y=8:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.4[a]; \
-     [1:v]scale=480:-2,setsar=1,drawtext=text='caller':x=8:y=8:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.4[b]; \
+     [0:v]scale=480:-2,setsar=1[a]; \
+     [1:v]scale=480:-2,setsar=1[b]; \
      [a][b]hstack=inputs=2:shortest=1[v]" \
   -map "[v]" -an -f nut - 2>/dev/null \
   | "$FFPLAY" -hide_banner -loglevel error -autoexit -window_title "$TITLE" -i - &
