@@ -1162,6 +1162,19 @@
   .mute-key {
     width: auto; min-width: 62px; padding: 0 14px; white-space: nowrap;
   }
+  /* Type comes from the KEYS, not from the modem row. The modem legend is
+     mono, small and letter-spaced -- right for BLUR and FOVEAL, which are
+     terse switch labels, and wrong here: this key sits with Monitor, Silence
+     and Two-way and does the same kind of job, so it should read like them.
+     Only the type is borrowed; the face still comes from .modem. */
+  .mute-key .cap2 {
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: normal;
+    color: #d6d6da;
+  }
+  html[data-theme="light"] .mute-key .cap2 { color: #2c2c30; }
   /* Pressed in while muting, like the feed keys -- the lamp says which way. */
   .mute-key[aria-pressed="true"] {
     background: linear-gradient(180deg, #191a1c, #212124);
