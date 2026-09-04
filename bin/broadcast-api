@@ -283,7 +283,7 @@ ROOM_SOUND_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/roomsound"
 _talkback_proc = None
 
 
-def _roomaudio_filter():
+def _roomaudio_filter(for_rtc=False):
     """The microphone filter chain, built in ONE place.
 
     It used to derive from audio_filter_args(), which is the capture chain the
@@ -292,7 +292,7 @@ def _roomaudio_filter():
     a second branch here meant to add microphone-only elements never ran, and
     the elements were silently absent from the command.
     """
-    chain = list(_mic_chain())
+    chain = list(_mic_chain(for_rtc=for_rtc))
 
     # Optional fixed capture gain, kept last so it acts on the cleaned signal.
     # A room mic is quiet by nature. alimiter is a ceiling, not a compressor:
@@ -311,11 +311,22 @@ def _roomaudio_filter():
     return ['-af', ','.join(chain)]
 
 
-def _mic_chain():
+def _mic_chain(for_rtc=False):
     """The microphone filter chain, in order.
 
-    Deliberately short. Every element here is one more thing that can put a
-    rhythm into the sound, which is exactly how the last fault hid.
+    TWO JOBS, TWO CHAINS, off ONE capture.
+
+    The MONITOR wants fidelity. This is a suburban room: voices outside, car
+    horns, birds, doors slamming, pots and pans, a dog. Those events ARE the
+    signal -- the reason to listen at all -- so nothing here may decide which
+    sounds matter.
+
+    TWO-WAY wants intelligibility: one person's voice pulled out of exactly
+    that racket, at the far end of a call. Opposite requirement, so it gets
+    the speech denoiser and the monitor does not.
+
+    Deliberately short either way. Every element is one more thing that can
+    put a rhythm into the sound, which is exactly how the last fault hid.
     """
     chain = ['aformat=sample_rates=48000:channel_layouts=mono']
 
@@ -333,11 +344,12 @@ def _mic_chain():
     # hiss, fan and crackle while leaving voice intact, which fixed-band
     # filtering cannot do. Model files live in models/*.rnnn.
     #
-    # OFF by default and named by config on purpose: it is a speech model, so
-    # it will also thin out non-speech room ambience, and that is a judgement
-    # about what this room is for rather than a technical default. Set
-    # AUDIO_DENOISE to a model name (sh, bd, cb) to enable.
-    dn = str(_cfg.get('AUDIO_DENOISE', '')).strip()
+    # APPLIED TO THE TWO-WAY LEG ONLY. It is a speech model: it keeps voice
+    # and suppresses everything else, which is right for a call and wrong for
+    # a monitor, where the birds and the slamming door are the point. Set
+    # AUDIO_DENOISE to a model name (sh, bd, cb); it never touches the
+    # monitor chain.
+    dn = str(_cfg.get('AUDIO_DENOISE', '')).strip() if for_rtc else ''
     if dn:
         model = os.path.join(ROOT, 'models', f'{dn}.rnnn')
         if os.path.exists(model):
@@ -1129,20 +1141,24 @@ def _mic_publisher_cmd(mode):
         src = ['-f', 'lavfi',
                '-i', 'anullsrc=channel_layout=mono:sample_rate=48000']
         filt = []
+        filt_rtc = []
     else:
         src = ['-f', 'avfoundation',
                '-thread_queue_size', '1024',
                '-i', f':{audio_idx}']
-        filt = _roomaudio_filter()
+        filt = _roomaudio_filter(for_rtc=False)   # monitor: untouched room
+        filt_rtc = _roomaudio_filter(for_rtc=True)   # 2-way: voice out of it
 
     return [FFMPEG, '-hide_banner', '-loglevel', 'warning',
             *src,
             # Opus for WebRTC: the only codec WHEP will carry, and what
-            # 2-Way needs for its echo canceller to have a reference.
+            # 2-Way needs for its echo canceller to have a reference. -af is
+            # a per-OUTPUT option, so this leg can be denoised while the
+            # monitor leg below stays exactly as the room sounded.
             '-map', '0:a:0',
             '-c:a', 'libopus', '-b:a', '96k', '-application', 'audio',
             '-packet_loss', '10', '-fec', '1',
-            *filt,
+            *filt_rtc,
             '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
             # MP3 on stdout for the listening path. Every browser plays
             # progressive MP3 including Safari and iOS, with no container
