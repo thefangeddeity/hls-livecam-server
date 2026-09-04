@@ -284,22 +284,68 @@ _talkback_proc = None
 
 
 def _roomaudio_filter():
-    """The room-audio filter chain, for the standalone mic publisher."""
-    filt = list(audio_filter_args())
-    if '-af' in filt:
-        i = filt.index('-af') + 1
-        chain = filt[i]
-        chain = ','.join(x for x in chain.split(',')
-                         if not x.startswith('aresample=async'))
-        chain = chain.replace('channel_layouts=stereo',
-                              'channel_layouts=mono')
-        filt[i] = chain  # TEST: no aresample -- it hard-compensates periodically
-        return filt
-    # TEST: no aresample. Its hard compensation fires on a cadence when the
-    # capture clock drifts, and each firing inserts or drops samples -- a
-    # periodic discontinuity generator, which is what 2-4 bursts per second
-    # sounds like.
-    return ['-af', 'aformat=sample_rates=48000:channel_layouts=mono']
+    """The microphone filter chain, built in ONE place.
+
+    It used to derive from audio_filter_args(), which is the capture chain the
+    camera publisher uses. That coupling was a trap: audio_filter_args() always
+    returns an -af (it appends the rate/layout guarantee even with no gain), so
+    a second branch here meant to add microphone-only elements never ran, and
+    the elements were silently absent from the command.
+    """
+    chain = list(_mic_chain())
+
+    # Optional fixed capture gain, kept last so it acts on the cleaned signal.
+    # A room mic is quiet by nature. alimiter is a ceiling, not a compressor:
+    # a limiter that is CONSTANTLY engaged pumps, and pumping is a rhythm --
+    # the exact class of fault that cost a day here.
+    gain = str(_cfg.get('AUDIO_GAIN_DB', '')).strip()
+    if gain:
+        try:
+            float(gain)
+        except ValueError:
+            gain = ''
+    if gain:
+        chain.append(f'volume={gain}dB')
+        chain.append('alimiter=limit=0.97')
+
+    return ['-af', ','.join(chain)]
+
+
+def _mic_chain():
+    """The microphone filter chain, in order.
+
+    Deliberately short. Every element here is one more thing that can put a
+    rhythm into the sound, which is exactly how the last fault hid.
+    """
+    chain = ['aformat=sample_rates=48000:channel_layouts=mono']
+
+    # Rumble cut. A room mic picks up desk knocks, HVAC and handling noise
+    # below the voice band; nothing wanted lives under ~80 Hz, and removing it
+    # before any denoiser means the denoiser is not spending its budget on
+    # energy we were going to discard anyway.
+    hp = str(_cfg.get('AUDIO_HIGHPASS_HZ', '')).strip()
+    if hp:
+        chain.append(f'highpass=f={hp}')
+
+    # NEURAL DENOISE (RNNoise, via ffmpeg's arnndn).
+    #
+    # A recurrent network trained on speech-vs-noise; it suppresses broadband
+    # hiss, fan and crackle while leaving voice intact, which fixed-band
+    # filtering cannot do. Model files live in models/*.rnnn.
+    #
+    # OFF by default and named by config on purpose: it is a speech model, so
+    # it will also thin out non-speech room ambience, and that is a judgement
+    # about what this room is for rather than a technical default. Set
+    # AUDIO_DENOISE to a model name (sh, bd, cb) to enable.
+    dn = str(_cfg.get('AUDIO_DENOISE', '')).strip()
+    if dn:
+        model = os.path.join(ROOT, 'models', f'{dn}.rnnn')
+        if os.path.exists(model):
+            chain.append(f'arnndn=m={model}')
+        else:
+            print(f'broadcast-api: AUDIO_DENOISE={dn} but {model} is missing; '
+                  f'continuing without denoise', file=sys.stderr, flush=True)
+    return chain
 
 
 def _roomaudio_output(audio_map, audio_filter):
@@ -1845,7 +1891,12 @@ def _shutdown(signum, frame):
     # process stop rather than only on an error path. Escalates like
     # _kill_hard rather than a bare terminate(), because a capture wedged in
     # avformat_open_input ignores SIGTERM outright.
-    for p in (_pub_proc, _cam_proc):
+    # _mic_proc belongs here too. Without it the microphone publisher is
+    # orphaned to ppid 1 on every stop, survives the restart, and keeps the
+    # Icecast mount -- so the NEW publisher is refused with 403, exits, is
+    # respawned, and is refused again. Heard as audio that stops, starts and
+    # stops. Same leak class the video publisher had, one process later.
+    for p in (_pub_proc, _cam_proc, _mic_proc):
         if p:
             _kill_hard(p)
     _stop_cv_publisher()

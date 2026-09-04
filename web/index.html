@@ -3679,6 +3679,19 @@
      listening preferences, this is a channel. */
   var audioDir = 'stop';   // 'play' | 'stop' | 'to' | 'two-way'
 
+  /* Has the operator chosen an audio state on THIS page load?
+
+     A reload cannot resume listening -- browsers require a gesture before
+     audio plays -- so the page always comes back stopped. Painting SILENCE as
+     pressed for that was the panel claiming a decision nobody made, and it
+     read inconsistently beside the video keys, where the lit one reflects a
+     mode the server actually holds.
+
+     So: no audio key is pressed until one is pressed. audioDir still starts
+     at 'stop' because that is genuinely the state; this only governs whether
+     the panel shows it as chosen. */
+  var audioChosen = false;
+
   function paintAudioModes(note) {
     var blocker = micBlocker();
     var micOk = !blocker;
@@ -3690,7 +3703,7 @@
       // Stop quietly loses its red on the first state change.
       b.className = 'btn'
         + (e[1] === 'stop' ? ' guarded' : '')
-        + (audioDir === e[1] ? ' pressed' : '');
+        + (audioChosen && audioDir === e[1] ? ' pressed' : '');
       /* The two microphone keys are the only ones that can be genuinely
          unavailable, and they are NOT disabled for it any more.
 
@@ -3738,6 +3751,7 @@
      every time rather than trusting the variable. Both branches are
      idempotent, so re-applying the current mode costs nothing. */
   function setAudioMode(mode) {
+    audioChosen = true;
     if (twoWay.busy) return;
     // Pressing the lit microphone key releases it -- to STOP, not to Play.
     // These keys open a microphone in somebody's home; letting one go should
