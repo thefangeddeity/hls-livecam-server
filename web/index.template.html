@@ -1511,7 +1511,7 @@
                  beside it, which gained RTC. -->
             <div class="vrow">
               <span class="vlab">Dir</span>
-              <span class="vval"><span class="vghost">8888</span><span class="vlit" id="audioDirVal"></span></span>
+              <span class="vval"><span class="vghost">8888888888888</span><span class="vlit" id="audioDirVal"></span></span>
             </div>
             <div class="vind">
               <i id="indStereo">MONO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
@@ -2179,7 +2179,6 @@
   }
 
 
-
   pollDark();
   setInterval(pollDark, 5000);
 
@@ -2839,7 +2838,6 @@
 
      AAC rather than Opus because Safari and iOS will not decode Opus in
      HLS, and iOS is the client this has to work on. */
-  var MASTER_URL = window.location.origin + '/hls/roomsound/index.m3u8';
 
   var muteKey  = document.getElementById('muteAudio');
   var listenEl = document.getElementById('roomAudio');
@@ -2858,7 +2856,6 @@
 
   if (!muteKey || !audio) return;
 
-  var hlsAudio = null;
 
   /* Drives one lamp. The label beside it is engraved and never changes, so
      the bulb carries the whole state: dark for unknown, green for ok, red
@@ -3201,18 +3198,195 @@
     setAudioState('Audio unavailable');
   });
 
-  function resolveAudioUrl(cb) {
-    if (typeof fetch !== 'function') { cb(MASTER_URL); return; }
-    fetch(MASTER_URL, { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.text() : ''; })
-      .then(function (text) {
-        var m = /#EXT-X-MEDIA:[^\r\n]*TYPE=AUDIO[^\r\n]*URI="([^"]+)"/.exec(text || '');
-        if (!m) { cb(MASTER_URL); return; }
-        try { cb(new URL(m[1], MASTER_URL).href); }
-        catch (e) { cb(MASTER_URL); }
-      })
-      .catch(function () { cb(MASTER_URL); });
+  /* ══════════════════════════════════════════════════════════════════════
+     AUDIO PIPELINES
+
+     Two of them. They share the panel and nothing else: separate elements,
+     separate transports, separate lifecycles, and neither one reaches into
+     the other's state. A controller decides which is live.
+
+       MONITOR   listen only.  Icecast progressive MP3 -> #roomAudioPlayer
+       TWO-WAY   duplex.       WHIP mic out + WHEP room in -> #twoWayRx
+
+     This replaces a single shared <audio> that both paths mutated -- src vs
+     srcObject, one pausing the other, a teardown that had to guess what to
+     restore and a `wasSilent` flag to remember it. That shape produced a
+     steady supply of faults where one leg silently disabled the other, and
+     no amount of care in any single function could fix it, because the bug
+     was the sharing.
+
+     Each pipeline exposes start() / stop() / live and owns everything it
+     touches. Switching is: stop the other, start this one.
+     ══════════════════════════════════════════════════════════════════════ */
+
+  var Monitor = {
+    live: false,
+
+    /* Attach the source without playing. Browsers require a gesture before
+       audio starts, so load-time work is limited to pointing the element at
+       the stream; the first MONITOR press does the rest. */
+    prepare: function () {
+      if (!audio) return;
+      try {
+        audio.srcObject = null;
+        audio.src = window.location.origin + '/audio/room.mp3';
+        audio.load();
+      } catch (e) {}
+    },
+
+    start: function () {
+      if (!audio) return;
+      if (!audio.src) this.prepare();
+      audio.muted = audioMuted;
+      var pr = audio.play();
+      if (pr && pr.catch) pr.catch(function () {
+        setAudioState('Tap to enable');
+      });
+      this.live = true;
+      roomTx = 'mp3';
+      stage(hlsLed, 'ok');
+      setAudioState('Room audio');
+    },
+
+    stop: function () {
+      this.live = false;
+      if (!audio) return;
+      try { audio.pause(); } catch (e) {}
+      stage(hlsLed, '');
+    }
+  };
+
+  var TwoWay = {
+    live: false,
+
+    start: function () {
+      var why = micBlocker();
+      if (why) { paintAudioModes(why); return; }
+      if (twoWay.busy) return;
+      twoWay.busy = true;
+      paintAudioModes();
+
+      var self = this;
+      navigator.mediaDevices.getUserMedia({
+        /* The canceller needs the room arriving through a PeerConnection to
+           have a reference signal, which is exactly why the inbound leg is
+           WebRTC and not the Icecast stream: a seconds-late copy of the room
+           is not a reference, it is an echo. */
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      }).then(function (stream) {
+        twoWay.stream = stream;
+
+        // OUT: publish the microphone.
+        twoWay.pub = new RTCPeerConnection();
+        stream.getTracks().forEach(function (t) {
+          twoWay.pub.addTrack(t, stream);
+        });
+        try { levelOutAttach(stream); } catch (e) {}
+
+        // IN: subscribe to the room, onto this pipeline's OWN element.
+        twoWay.sub = new RTCPeerConnection();
+        twoWay.sub.addTransceiver('audio', { direction: 'recvonly' });
+        twoWay.sub.ontrack = function (ev) {
+          var rx = document.getElementById('twoWayRx');
+          if (!rx) return;
+          rx.srcObject = ev.streams[0];
+          rx.muted = audioMuted;
+          rx.play().catch(function () {});
+          stage(rtcLed, 'ok');
+          try {
+            var t = ev.streams[0].getAudioTracks()[0];
+            if (t && t.clone) levelTapStream(new MediaStream([t.clone()]));
+          } catch (e) { /* meter only; never fatal */ }
+        };
+
+        return Promise.all([
+          whipWhep(twoWayBase() + '/talkback/whip', twoWay.pub, 'publish'),
+          whipWhep(twoWayBase() + '/roomaudio/whep', twoWay.sub, 'receive')
+        ]);
+      }).then(function (locs) {
+        twoWay.pubRes = locs[0] || null;
+        twoWay.subRes = locs[1] || null;
+        twoWay.on = true;
+        self.live = true;
+        twoWay.busy = false;
+        twoWay.dir = 'two-way';
+        setAudioState('Two-way');
+        /* Bounded by design. A page that crashes with the microphone open
+           would otherwise leave this room live until somebody noticed, and
+           nobody would be looking at the panel to see the lamp. */
+        twoWay.timer = setTimeout(function () {
+          setAudioMode('stop');
+        }, TWOWAY_MAX_SECONDS * 1000);
+        paintAudioModes();
+      }).catch(function (err) {
+        twoWay.busy = false;
+        self.stop();
+        paintAudioModes((err && err.message) || 'two-way failed');
+      });
+    },
+
+    stop: function () {
+      if (twoWay.timer) { clearTimeout(twoWay.timer); twoWay.timer = null; }
+      // Best-effort server-side release; the local teardown below is what
+      // actually matters if the node has gone away.
+      [twoWay.pubRes, twoWay.subRes].forEach(function (r) {
+        if (r) { fetch(r, { method: 'DELETE' }).catch(function () {}); }
+      });
+      twoWay.pubRes = twoWay.subRes = null;
+      [twoWay.pub, twoWay.sub].forEach(function (pc) {
+        if (pc) { try { pc.close(); } catch (e) {} }
+      });
+      twoWay.pub = twoWay.sub = null;
+      if (twoWay.stream) {
+        twoWay.stream.getTracks().forEach(function (t) { t.stop(); });
+        twoWay.stream = null;
+      }
+      var rx = document.getElementById('twoWayRx');
+      if (rx) { try { rx.pause(); } catch (e) {} rx.srcObject = null; }
+      try { levelOutDetach(); } catch (e) {}
+      twoWay.on = false;
+      twoWay.busy = false;
+      this.live = false;
+      stage(rtcLed, '');
+    }
+  };
+
+  /* The controller. The ONLY place that knows both pipelines exist, and the
+     only place allowed to decide which is live. Every key lands here. */
+  function setAudioMode(mode) {
+    audioChosen = true;
+    if (twoWay.busy) return;
+
+    // Pressing the lit microphone key releases it -- to silence, not to
+    // listening. These keys open a microphone in somebody's home; letting one
+    // go should close the channel, not swap it for a different open one.
+    if (TwoWay.live && mode === 'two-way') { setAudioMode('stop'); return; }
+
+    audioDir = mode;
+
+    if (mode === 'two-way') {
+      Monitor.stop();
+      TwoWay.start();
+    } else if (mode === 'play') {
+      TwoWay.stop();
+      Monitor.start();
+    } else {
+      TwoWay.stop();
+      Monitor.stop();
+      setAudioState('Stopped');
+    }
+
+    paintAudioModes();
+    applyListenState();
   }
+
+  Monitor.prepare();
+
 
   /* The transport starts itself once the stream is ready. The panel opens
      muted (gain 0), and a silent start is exactly what autoplay policy
@@ -3222,175 +3396,12 @@
      If the browser refuses anyway, the next unmute is a user gesture and
      retries it. Only 'play' auto-starts, so a viewer who chose STOP keeps
      that choice across a reconnect. */
-  function beginIfPlaying() {
-    if (audioDir !== 'play') return;
-    var pr = audio.play();
-    if (pr && pr.catch) pr.catch(function () { setAudioState('Tap to enable'); });
-    paintTransport();
-  }
 
-  function startAudio(url) {
-    // Native first, same reasoning as the picture above.
-    if (audio.canPlayType('application/vnd.apple.mpegurl')) {
-      audio.src = url;
-      /* The element is preload="none", so on iOS nothing is fetched until
-         something calls play() -- which means hanging the start off
-         'loadedmetadata' deadlocks: no load without a play, no play without
-         the load. Start first, and leave the listener to light the lamp when
-         the metadata does arrive. hls.js has no such problem, because
-         attachMedia() begins fetching on its own. */
-      audio.addEventListener('loadedmetadata', function () {
-        stage(hlsLed, 'ok');
-        setAudioState('Room audio');
-      }, { once: true });
-      beginIfPlaying();
-      return;
-    }
 
-    if (window.Hls && Hls.isSupported()) {
-      hlsAudio = new Hls({ lowLatencyMode: true, enableWorker: true });
-      hlsAudio.loadSource(url);
-      hlsAudio.attachMedia(audio);
+  // Which transport is carrying the room, for the lamps and the
+  // Dir readout. 'mp3' (Icecast) | 'whep' | 'none'.
+  var roomTx = 'none', roomWhy = '';
 
-      /* Ready, not started. Playback begins when the transport says so.
-         Starting here because the key happened to be unmuted would make the
-         mute state decide autoplay, which is the same conflation the tube
-         was just corrected for -- and it would have the room audible on
-         page load without anyone asking for it. */
-      hlsAudio.on(Hls.Events.MANIFEST_PARSED, function () {
-        stage(hlsLed, 'ok');
-        setAudioState('Room audio');
-        beginIfPlaying();
-      });
-
-      hlsAudio.on(Hls.Events.ERROR, function (_e, data) {
-        if (data && data.fatal) {
-          stage(hlsLed, 'fail');
-          setAudioState('Audio unavailable');
-        }
-      });
-      return;
-    }
-
-    stage(hlsLed, 'fail');
-    setAudioState('Audio unsupported');
-  }
-
-  /* ── ROOM AUDIO TRANSPORT: WHEP FIRST, HLS AS THE FALLBACK ──────────
-     Three reasons, in the order of what they cost the viewer.
-
-     1. HLS produced "a brief burst of sound, then silence" on Firefox for
-        iOS, with the element healthy throughout -- readyState 4, currentTime
-        advancing, no MediaError, no AudioContext anywhere near it. The page
-        loads the room TWICE over HLS: the muted <video> already carries the
-        audio track (see MASTER_URL) and #roomAudioPlayer fetches it again.
-        iOS grants the audio session to one element at a time, and an element
-        that has lost it goes on advancing silently -- which is exactly the
-        reading we got, and why every fix aimed at the element missed.
-     2. WebKit implements no captureStream() on media elements, so the LEVEL
-        meter had no lawful way to observe an HLS element and read N/A on the
-        phone. A WebRTC MediaStream CAN be observed, with
-        createMediaStreamSource. This is what puts the graph back.
-     3. It is the transport the conferencing stack uses for exactly this.
-
-     THE STREAM IS ATTACHED TWICE, DELIBERATELY, AND NEVER AS THE SAME TRACK.
-     srcObject carries the audible path; the meter gets a CLONE. A WebKit
-     MediaStreamAudioSourceNode built over a track an element is also
-     rendering can take the audio with it -- the same interception trap that
-     createMediaElementSource set, arriving by another door. The clone keeps
-     the observer genuinely separate, and if cloning is unavailable the meter
-     is skipped rather than risked. Sound outranks instrumentation. */
-  var roomPc = null, roomLoc = null, roomTx = 'none', roomWhy = '';
-
-  function roomStop() {
-    // The session is ended server-side on the way out. mediamtx otherwise
-    // holds it until its own timeout, which is how the earlier Location bug
-    // leaked one session per call.
-    if (roomLoc) {
-      try { fetch(roomLoc, { method: 'DELETE', keepalive: true }); } catch (e) {}
-      roomLoc = null;
-    }
-    if (roomPc) { try { roomPc.close(); } catch (e) {} roomPc = null; }
-    try { if (audio.srcObject) audio.srcObject = null; } catch (e) {}
-  }
-
-  function roomWhep(onFail) {
-    if (!window.RTCPeerConnection) { onFail('no webrtc'); return; }
-    if (!window.isSecureContext)   { onFail('not secure'); return; }
-
-    var pc, settled = false, timer = null;
-    function fail(why) {
-      if (settled) return;
-      settled = true;
-      if (timer) { clearTimeout(timer); timer = null; }
-      roomStop();
-      onFail(why);
-    }
-
-    try { pc = new RTCPeerConnection({ iceServers: [] }); }
-    catch (e) { onFail('pc: ' + ((e && e.message) || '?')); return; }
-    roomPc = pc;
-    try { pc.addTransceiver('audio', { direction: 'recvonly' }); }
-    catch (e) { fail('transceiver'); return; }
-
-    /* A handshake can answer 201 and then deliver nothing -- ICE blocked,
-       path not publishing. Silence that never resolves is the failure this
-       whole exercise was about, so it is bounded and falls back instead. */
-    timer = setTimeout(function () { fail('no media in 8s'); }, 8000);
-
-    pc.ontrack = function (ev) {
-      if (settled) return;
-      settled = true;
-      if (timer) { clearTimeout(timer); timer = null; }
-      var stream = (ev.streams && ev.streams[0]) || new MediaStream([ev.track]);
-      roomTx = 'whep';
-      // src and srcObject are mutually exclusive; a stale src wins on some
-      // engines and would quietly put us back on HLS.
-      try { audio.removeAttribute('src'); } catch (e) {}
-      try { audio.srcObject = stream; } catch (e) { fail('srcObject'); return; }
-      stage(hlsLed, 'ok');
-      setAudioState('Room audio');
-      try {
-        var t = stream.getAudioTracks()[0];
-        if (t && t.clone) levelTapStream(new MediaStream([t.clone()]));
-      } catch (e) { /* meter only; never fatal */ }
-      beginIfPlaying();
-    };
-
-    whipWhep(twoWayBase() + '/roomaudio/whep', pc, 'room audio')
-      .then(function (loc) { roomLoc = loc; })
-      .catch(function (err) { fail((err && err.message) || 'whep failed'); });
-  }
-
-  /* Started at LOAD, not on the PLAY key, and the ordering is the point: the
-     handshake is asynchronous, so a transport begun inside the tap would land
-     its play() outside the gesture that authorised it, and iOS would refuse.
-     Establishing early means PLAY is a bare play() on an attached stream, in
-     the gesture, every time. Nothing is audible meanwhile -- the transport
-     opens paused, and audioDir defaults to 'stop'. */
-  function startRoomTransport() {
-    roomStop();
-    /* Progressive MP3, served by broadcast-api off the same microphone
-       process. Measured against the mediamtx path on the same mic in the same
-       minute: 8% of windows below -60dB instead of 42-51%, envelope
-       periodicity 0.16 (noise) instead of 0.38-0.56, and 27dB more level with
-       NO capture gain. The old chain was largely transmitting padded silence.
-
-       Same origin, so there is no mixed-content rule to satisfy and no proxy
-       path prefix for a redirect to get lost in -- two failure modes this
-       fleet has hit before. roomWhep() stays in the file: 2-Way still needs
-       it, and that is where real-time delivery is actually the point. */
-    roomTx = 'mp3';
-    roomWhy = 'progressive MP3, same origin';
-    try { audio.srcObject = null; } catch (e) {}
-    audio.src = window.location.origin + '/audio/room.mp3';
-    audio.load();
-    stage(hlsLed, 'ok');
-    setAudioState('Room audio');
-    beginIfPlaying();
-  }
-
-  startRoomTransport();
 
   // ── TALK and 2-WAY ────────────────────────────────────
   //
@@ -3431,7 +3442,7 @@
          curl https://ariana.humboldt-polaris.ts.net:8889/roomaudio/whep
          -> 000 (no TLS listener)
 
-       Exactly the failure MASTER_URL already documents for :8888, and the
+       Exactly the failure the HLS port :8888 had for the same reason, and
        fix is the same one: go through the origin. Serve strips the mount
        prefix, so /webrtc/talkback/whip arrives at mediamtx as
        /talkback/whip -- verified the same way /hls/cam/index.m3u8 arrives as
@@ -3439,7 +3450,7 @@
 
        Only over https. Reached directly on http://<host>:8080 there is no
        proxy in front of anything and :8889 is the correct, reachable
-       address -- the same split MASTER_URL would need if it were ever
+       address -- the same split any direct media URL would need if it were
        served without Serve. */
     if (window.location.protocol === 'https:') {
       return window.location.origin + '/webrtc';
@@ -3571,141 +3582,13 @@
   // about to open. Defaults to 'stop', not 'play': a dropped or expired
   // microphone session should leave you silent rather than start playing the
   // room at you unasked.
-  function stopTwoWay(reason, nextMode) {
-    if (twoWay.timer) { clearTimeout(twoWay.timer); twoWay.timer = null; }
-    // Best-effort release. If the node already went away there is nothing to
-    // free and the local teardown below is what actually matters.
-    [twoWay.pubRes, twoWay.subRes].forEach(function (r) {
-      if (r) { fetch(r, { method: 'DELETE' }).catch(function () {}); }
-    });
-    twoWay.pubRes = twoWay.subRes = null;
-    [twoWay.pub, twoWay.sub].forEach(function (pc) {
-      if (pc) { try { pc.close(); } catch (e) {} }
-    });
-    twoWay.pub = twoWay.sub = null;
-    levelOutDetach();
-    if (twoWay.stream) {
-      twoWay.stream.getTracks().forEach(function (t) { t.stop(); });
-      twoWay.stream = null;
-    }
-    var rx = document.getElementById('twoWayRx');
-    if (rx) { rx.srcObject = null; }
-    twoWay.on = false;
-    audioDir = nextMode || 'stop';
-    // Room audio returns to HLS only if that is where we are headed.
-    try {
-      if (audioDir === 'play' && !twoWay.wasSilent) {
-        startRoomTransport();
-      } else if (audio) {
-        try { audio.pause(); } catch (e) {}
-      }
-    } catch (e) {}
-    applyListenState();
-    paintAudioModes(reason);
-    paintTransport();
-  }
 
-  function startTwoWay(mode) {
-    /* Was a bare `return` after a repaint: the key had already been made
-       unpressable by the same condition, so on the one browser where it
-       still got here the press produced nothing at all. Say it instead --
-       this is the path a viewer reaches by tapping a dimmed key, and the
-       answer to "why won't this work" has to land on the screen. */
-    var blocked = micBlocker();
-    if (blocked) {
-      paintAudioModes((mode === 'to' ? 'Talk' : '2-Way') +
-                      ' unavailable: ' + blocked);
-      return;
-    }
-    twoWay.busy = true;
-    paintAudioModes('connecting...');
-
-    navigator.mediaDevices.getUserMedia({
-      // This is the whole echo-cancellation story. Not our algorithm -- the
-      // browser's, and it is the same one the videocall apps use.
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      },
-      // No camera in either mode on this node: TALK reverses the audio
-      // direction and nothing else, and 2-WAY is audio here too until the
-      // picture leg is ported.
-      video: false
-    }).then(function (stream) {
-      twoWay.stream = stream;
-      levelOutAttach(stream);
-
-      twoWay.pub = new RTCPeerConnection();
-      stream.getTracks().forEach(function (t) { twoWay.pub.addTrack(t, stream); });
-
-      // The HLS room audio is held in BOTH modes, for different reasons. In a
-      // call it would be a second, seconds-late copy of a room already
-      // arriving over WebRTC. In TALK it is the echo path itself: local
-      // speakers playing the room with the microphone open sends the room its
-      // own voice back, and nothing is arriving through a PeerConnection for
-      // the canceller to reference.
-      twoWay.wasSilent = !!(audio && audio.paused);
-      try {
-        if (audio) { audio.pause(); }
-        if (hlsAudio) { hlsAudio.destroy(); hlsAudio = null; }
-      } catch (e) {}
-
-      var legs = [whipWhep(twoWayBase() + '/talkback/whip', twoWay.pub,
-                           'publish')];
-
-      if (mode === 'two-way') {
-        twoWay.sub = new RTCPeerConnection();
-        twoWay.sub.addTransceiver('audio', { direction: 'recvonly' });
-        twoWay.sub.ontrack = function (ev) {
-          var rx = document.getElementById('twoWayRx');
-          if (rx) {
-            rx.srcObject = ev.streams[0];
-            rx.muted = audioMuted;   // honour the mute key already set
-            rx.play().catch(function () {});
-          }
-        };
-        // 'roomaudio', not 'cam': cam's audio track is AAC and WebRTC drops it.
-        legs.push(whipWhep(twoWayBase() + '/roomaudio/whep', twoWay.sub,
-                           'receive'));
-      }
-
-      return Promise.all(legs);
-    }).then(function (locs) {
-      twoWay.pubRes = locs[0];
-      twoWay.subRes = locs[1] || null;   // absent in TALK
-      twoWay.on = true;
-      twoWay.busy = false;
-      audioDir = mode;
-      applyListenState();
-      twoWay.timer = setTimeout(function () {
-        stopTwoWay('ended automatically after ' +
-                   (TWOWAY_MAX_SECONDS / 60) + ' minutes', 'stop');
-      }, TWOWAY_MAX_SECONDS * 1000);
-      paintAudioModes();
-      paintTransport();
-    }).catch(function (err) {
-      twoWay.busy = false;
-      /* Name the cause. A bare err.message here is usually WebKit's "Load
-         failed" for a fetch that never reached anyone, which sends the
-         reader looking for a microphone problem when the signalling URL was
-         simply unreachable -- the exact confusion the :8889 bug produced. */
-      var name = (err && err.name) || '';
-      var msg;
-      if (name === 'NotAllowedError')      msg = 'microphone permission refused';
-      else if (name === 'NotFoundError')   msg = 'no microphone on this device';
-      else if (name === 'NotReadableError') msg = 'the microphone is in use by another app';
-      else if (name === 'TypeError')       msg = 'could not reach the audio service at ' + twoWayBase();
-      else msg = (err && err.message) || 'could not connect';
-      stopTwoWay(msg, 'stop');
-    });
-  }
 
   // Deliberately NOT restored from localStorage, unlike mute and volume.
   // Reopening a page must never silently reopen a live microphone in
   // somebody's home; the convenience is not worth the failure mode.
   window.addEventListener('beforeunload', function () {
-    if (twoWay.on) stopTwoWay();
+    if (TwoWay.live) TwoWay.stop();
   });
 
   // ── The audio mode bank ───────────────────────────────────────────────
@@ -3797,32 +3680,6 @@
      Same bug the feed row had, same fix: reconcile the element to the mode
      every time rather than trusting the variable. Both branches are
      idempotent, so re-applying the current mode costs nothing. */
-  function setAudioMode(mode) {
-    audioChosen = true;
-    if (twoWay.busy) return;
-    // Pressing the lit microphone key releases it -- to STOP, not to Play.
-    // These keys open a microphone in somebody's home; letting one go should
-    // close the channel, not swap it for a different open one.
-    if (twoWay.on && mode === audioDir) { stopTwoWay('stopped', 'stop'); return; }
-    if (twoWay.on) {
-      // Never two publishers on one microphone: close the open direction
-      // before opening another, and hand the incoming mode to the teardown so
-      // it neither paints Play nor restarts HLS underneath the new session.
-      stopTwoWay(null, mode);
-      if (mode === 'to' || mode === 'two-way') {
-        setTimeout(function () { startTwoWay(mode); }, 150);
-        return;
-      }
-    }
-    if (mode === 'to' || mode === 'two-way') { startTwoWay(mode); return; }
-    audioDir = mode;
-    try {
-      if (mode === 'play') { audio.play().catch(function () {}); }
-      else { audio.pause(); }
-    } catch (e) {}
-    paintAudioModes();
-    applyListenState();
-  }
 
   (function () {
     var map = { audioPlayBtn: 'play', audioStopBtn: 'stop',
@@ -3849,11 +3706,12 @@
      pushed HLS aside), then tear down hls.js, then rebuild from a clean
      element. */
   function resetAudio() {
-    if (twoWay.on || twoWay.busy) {
-      twoWay.busy = false;
-      stopTwoWay('reset', 'stop');
-    }
-    try { if (hlsAudio) { hlsAudio.destroy(); hlsAudio = null; } } catch (e) {}
+    // Both pipelines down, unconditionally, before anything is rebuilt.
+    // Reset exists for the case where state is not trusted, so it must not
+    // depend on that state being accurate.
+    twoWay.busy = false;
+    TwoWay.stop();
+    Monitor.stop();
     try {
       audio.pause();
       audio.removeAttribute('src');
@@ -3873,7 +3731,8 @@
 
     stage(hlsLed, 'pending');
     audioNote('restarting room audio...');
-    startRoomTransport();          // WHEP first, HLS fallback
+    Monitor.prepare();
+    if (audioDir === 'play') Monitor.start();
     paintTransport();
   }
 
@@ -4306,9 +4165,9 @@
     var outOn = !!(twoWay && twoWay.on);
 
     var txt;
-    if (outOn && (inOn || rtcIn))      txt = 'BOTH';
-    else if (outOn)                    txt = 'OUT';
-    else if (inOn || rtcIn)            txt = 'IN';
+    if (outOn && (inOn || rtcIn))      txt = 'BIDIRECTIONAL';
+    else if (outOn)                    txt = 'OUTBOUND';
+    else if (inOn || rtcIn)            txt = 'INBOUND';
     else                               txt = '--';
     el.textContent = txt;
   }
