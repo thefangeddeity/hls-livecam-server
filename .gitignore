@@ -51,3 +51,10 @@ state/feed_mode
 # from the node simply having been started.
 state/*.pid.start
 state/*.pid
+
+# Working backups. git history is the backup; these were being committed.
+*.before-*
+*.bak
+# mediamtx MoQ auto-cert (1.19+); we run 1.15.2 and MoQ is off.
+auto.crt
+auto.key
