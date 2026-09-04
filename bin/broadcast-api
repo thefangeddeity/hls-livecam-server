@@ -1226,7 +1226,7 @@ def _opus_encoder_cmd():
     return [FFMPEG, '-hide_banner', '-loglevel', 'warning', *_PCM_IN,
             '-c:a', 'libopus', '-b:a', '96k', '-application', 'audio',
             *filt,
-            '-rtsp_transport', 'udp', '-f', 'rtsp', ROOM_AUDIO_URL]
+            '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL]
 
 
 def _mic_publisher_loop():
