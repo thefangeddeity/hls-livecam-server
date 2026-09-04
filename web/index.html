@@ -4096,6 +4096,26 @@
           levelAnalyser = levelCtx.createAnalyser();
           levelAnalyser.fftSize = 512;
         }
+        /* DO NOT INTERCEPT A LIVE ELEMENT INTO A DEAD GRAPH.
+
+           createMediaElementSource is a one-way door: from the call onward the
+           element's ONLY route to the speakers is this graph, for the life of
+           the page. A context that is suspended -- which is what every iOS
+           AudioContext is until a gesture resumes it -- therefore does not
+           merely fail to meter, it SILENCES the room, while the page still
+           believes it is playing.
+
+           That is exactly what happened: sound and meter both gone, Dir still
+           reading INBOUND. So the door is only opened once the context is
+           actually running. Until then, ask for a resume and try again on the
+           next tick; the element keeps playing normally in the meantime.
+
+           Sound outranks instrumentation. A missing meter is a degraded
+           panel; a silent room is a broken product. */
+        if (levelCtx.state !== 'running') {
+          levelResume();
+          return;
+        }
         levelTap = levelCtx.createMediaElementSource(audio);
         levelTap.connect(levelAnalyser);
         // The path back to the speakers. Without this the meter works and
@@ -4252,66 +4272,6 @@
     el.textContent = txt;
   }
 
-  /* INBOUND DIAGNOSTIC -- remove once two-way inbound is settled.
-
-     Server side is proven: mediamtx logs "peer connection established" and
-     "is reading from path roomaudio, 1 track (Opus)" for the receive leg, on
-     a direct LAN candidate pair. So the audio is arriving and the fault is in
-     this page, where nothing was visible after the temporary HUD was removed.
-
-     This prints the receiving element's ACTUAL state, because every remaining
-     suspect looks identical from outside and they are told apart only by
-     these fields:
-
-       trk   how many audio tracks the element was handed. 0 means ontrack
-             never fired or the stream was empty -- a transport problem after
-             all, despite the server log.
-       en    whether that track is enabled and unmuted AT THE TRACK level.
-             live/muted here means WebRTC has the track but is receiving no
-             media through it.
-       pause whether the element is playing. true means autoplay was refused.
-       mute  the element's own mute, which follows the MUTE key.
-       rs    readyState: 0 means it never got data to render.
-  */
-  function rxDiag() {
-    if (!TwoWay.live) return;
-    var rx = document.getElementById('twoWayRx');
-    if (!rx) { audioNote('rx: element missing'); return; }
-    var s = rx.srcObject;
-    var trks = (s && s.getAudioTracks) ? s.getAudioTracks() : [];
-    var t = trks[0];
-    /* WebRTC's own accounting of the leg, asked once a second.
-
-       The server side is proven continuous -- 44.8s of audio per 43s of wall
-       clock off the roomaudio path -- so anything missing is lost between
-       there and here, and only the receiver can say so. packetsLost is the
-       network; concealed is what the jitter buffer INVENTED to cover a gap,
-       which is heard as the audio thinning or cutting; jitter is arrival
-       spread in seconds. A leg that sounds inconsistent while the server is
-       steady shows it in these three numbers or nowhere. */
-    if (twoWay.sub && twoWay.sub.getStats && !rxDiag._busy) {
-      rxDiag._busy = true;
-      twoWay.sub.getStats().then(function (rep) {
-        rep.forEach(function (r) {
-          if (r.type === 'inbound-rtp' && r.kind === 'audio') {
-            rxDiag._net = ' lost=' + (r.packetsLost || 0)
-              + ' jit=' + (r.jitter !== undefined
-                           ? (r.jitter * 1000).toFixed(0) + 'ms' : '-')
-              + ' conceal=' + (r.concealedSamples || 0);
-          }
-        });
-        rxDiag._busy = false;
-      }).catch(function () { rxDiag._busy = false; });
-    }
-
-    audioNote('rx: trk=' + trks.length
-      + ' en=' + (t ? (t.enabled ? '1' : '0') + '/' + t.readyState
-                      + (t.muted ? '/muted' : '/live') : '-')
-      + ' pause=' + (rx.paused ? '1' : '0')
-      + ' mute=' + (rx.muted ? '1' : '0')
-      + ' rs=' + rx.readyState
-      + (rxDiag._net || ''));
-  }
 
   function paintTransportLeds() {
     // AUDIO. Listening is Icecast over HTTP (roomTx 'mp3'); Talk and 2-Way are
@@ -4377,7 +4337,6 @@
     paintTransportLeds();
     paintAudioDir();
     keepAtLiveEdge();
-    rxDiag();
   }, 500);
 
   /* A gesture is what lets an AudioContext run at all, and every key is one.
