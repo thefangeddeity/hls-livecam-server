@@ -1180,6 +1180,32 @@ def _mic_capture_cmd(mode):
     hp = str(_cfg.get('AUDIO_HIGHPASS_HZ', '')).strip()
     if hp:
         cmd += ['highpass', hp]
+
+    # NOTCHES, for narrowband tones that are not in the room.
+    #
+    # A tinnitus-style tone -- one stable frequency, no bandwidth -- is the one
+    # case where the dumb tool beats the clever one. A notch removes a few Hz
+    # and touches nothing else; a neural denoiser decides what a sound MEANS,
+    # and every speech model tried here also deleted the birds, horns and
+    # slamming doors that are the point of a room monitor.
+    #
+    # Measured here: 3243.1 Hz, 35.6 dB above the surrounding spectrum, in
+    # 0.18s bursts about every 0.68s, with an odd-harmonic signature (weak 3rd
+    # at 9738 Hz, nothing at 2nd or 4th). Intermittent -- absent from both the
+    # raw capture and the stream when looked for again minutes later -- which
+    # is why this is configuration rather than a hardcoded filter, and why it
+    # cannot be verified until the tone returns.
+    #
+    # AUDIO_NOTCH_HZ: comma-separated centre frequencies, e.g. "3243" or
+    # "3243,8000". Width is deliberately narrow (20 Hz) so a voice crossing
+    # the same pitch loses almost nothing.
+    notches = str(_cfg.get('AUDIO_NOTCH_HZ', '')).strip()
+    for tone in [t.strip() for t in notches.split(',') if t.strip()]:
+        try:
+            float(tone)
+        except ValueError:
+            continue
+        cmd += ['bandreject', tone, '20h']
     # Gain, with headroom. SoX 'gain' is a raw multiplier and will clip --
     # measured at 51k clipped samples in 20s with a bare 'gain 12', because
     # CoreAudio hands over a healthier level than ffmpeg's avfoundation did
