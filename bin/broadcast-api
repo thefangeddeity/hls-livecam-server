@@ -349,6 +349,27 @@ def _mic_chain(for_rtc=False):
     # a monitor, where the birds and the slamming door are the point. Set
     # AUDIO_DENOISE to a model name (sh, bd, cb); it never touches the
     # monitor chain.
+    # STATIONARY NOISE REMOVAL, for the monitor.
+    #
+    # The distinction that matters here is not frequency, it is PERSISTENCE.
+    # Processing hiss, codec grit, mains hum and the fan floor are stationary:
+    # the same spectrum second after second. A dog, a horn, a slamming door is
+    # transient. afftdn keeps a running estimate of what is ALWAYS there and
+    # subtracts only that, so a bark never enters the estimate and comes
+    # through whole.
+    #
+    # Measured on this room: the strongest steady energy is a broad 59-123 Hz
+    # band at roughly equal level -- a rumble floor, not a 60 Hz mains spike --
+    # which a highpass can only clip the bottom of without also thinning door
+    # thumps.
+    #
+    # nr is in dB of reduction. Gentle on purpose: spectral subtraction that
+    # reaches too far leaves musical-noise artifacts, and this system has
+    # already lost a day to a filter that put a rhythm in the sound.
+    nr = str(_cfg.get('AUDIO_NR_DB', '')).strip() if not for_rtc else ''
+    if nr:
+        chain.append(f'afftdn=nr={nr}:nf=-40:tn=1')
+
     dn = str(_cfg.get('AUDIO_DENOISE', '')).strip() if for_rtc else ''
     if dn:
         model = os.path.join(ROOT, 'models', f'{dn}.rnnn')
