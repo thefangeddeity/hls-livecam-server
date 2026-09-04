@@ -293,11 +293,13 @@ def _roomaudio_filter():
                          if not x.startswith('aresample=async'))
         chain = chain.replace('channel_layouts=stereo',
                               'channel_layouts=mono')
-        filt[i] = chain + ',aresample=async=1:min_hard_comp=0.100:first_pts=0'
+        filt[i] = chain  # TEST: no aresample -- it hard-compensates periodically
         return filt
-    return ['-af',
-            'aformat=channel_layouts=mono,'
-            'aresample=async=1:min_hard_comp=0.100:first_pts=0']
+    # TEST: no aresample. Its hard compensation fires on a cadence when the
+    # capture clock drifts, and each firing inserts or drops samples -- a
+    # periodic discontinuity generator, which is what 2-4 bursts per second
+    # sounds like.
+    return ['-af', 'aformat=sample_rates=48000:channel_layouts=mono']
 
 
 def _roomaudio_output(audio_map, audio_filter):
@@ -421,7 +423,9 @@ def _talkback_loop():
         time.sleep(idle_wait)
 
 
-threading.Thread(target=_talkback_loop, daemon=True).start()
+# TEST: talkback player disabled -- it reopened an AudioToolbox output
+# device every 4s forever, and coreaudiod was measured at 77% CPU.
+# threading.Thread(target=_talkback_loop, daemon=True).start()
 print('broadcast-api: talkback player waiting on ' + TALKBACK_URL, flush=True)
 
 

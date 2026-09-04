@@ -1538,13 +1538,11 @@
              off a secure context, because getUserMedia does. -->
         <div class="btnrow">
           <button type="button" class="btn" id="audioPlayBtn"
-                  title="Room audio in">Play</button>
+                  title="Listen to the room">MONITOR</button>
           <button type="button" class="btn guarded" id="audioStopBtn"
-                  title="Neither direction open">Stop</button>
-          <button type="button" class="btn" id="toRoomButton"
-                  title="Talk to the room -- your voice out, room audio held">Talk</button>
+                  title="Neither direction open">SILENCE</button>
           <button type="button" class="btn" id="talkButton"
-                  title="Two-way audio with the room">2-Way</button>
+                  title="Two-way audio with the room">TWO-WAY</button>
         </div>
 
         <!-- Where the audio bank says what just happened. On a phone this is
@@ -3685,7 +3683,7 @@
     var blocker = micBlocker();
     var micOk = !blocker;
     [['audioPlayBtn', 'play'], ['audioStopBtn', 'stop'],
-     ['toRoomButton', 'to'],   ['talkButton', 'two-way']].forEach(function (e) {
+     ['talkButton', 'two-way']].forEach(function (e) {
       var b = document.getElementById(e[0]);
       if (!b) return;
       // Rebuilt from scratch each time, so 'guarded' has to be re-applied or
@@ -3767,7 +3765,7 @@
 
   (function () {
     var map = { audioPlayBtn: 'play', audioStopBtn: 'stop',
-                toRoomButton: 'to',   talkButton: 'two-way' };
+                talkButton: 'two-way' };
     Object.keys(map).forEach(function (id) {
       var b = document.getElementById(id);
       if (b) b.addEventListener('click', function () { setAudioMode(map[id]); });
