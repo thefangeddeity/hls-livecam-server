@@ -1,9 +1,27 @@
 {
+  "_comment": [
+    "Bandreject filters applied to the microphone capture, in SoX, before any",
+    "encoder sees the audio.",
+    "",
+    "ALL OF THESE ARE PROVISIONAL. They suppress an acoustic feedback loop:",
+    "Ariana's speaker into Ariana's own microphone, set ringing by broadband",
+    "traffic noise from the street. None of it is in the room and none of it is",
+    "in the raw SoX capture -- it appears only while the speaker is driven.",
+    "",
+    "The real fix is echo cancellation (bin/mic-aec, VoiceProcessingIO), which",
+    "lets the speaker stay live without a loop. When that lands, DELETE THIS",
+    "FILE rather than keeping the notches as insurance: every one of them is a",
+    "hole carved in the room's sound, and a room monitor exists to hear things.",
+    "",
+    "Brackets are +/-10 Hz. Ordered by frequency."
+  ],
   "notches": [
-    {
-      "range": [3050, 3100],
-      "note": "Resonance measured at 3082 Hz, ~35 dB above the local spectrum, in 0.18s bursts. Not in the room and not in the raw SoX capture -- it appears only while the speaker is driven, so it is acoustic feedback (speaker to mic) excited by broadband traffic noise. A range rather than a point because it wanders: 3243 Hz on the first sighting, 3082 on the second. Provisional. The real fix is AEC so the speaker can stay live without a loop; remove this once that lands.",
-      "added": "2026-09-04"
-    }
+    { "range": [2181, 2201], "note": "feedback resonance, 2191 Hz", "added": "2026-09-04" },
+    { "range": [2667, 2687], "note": "feedback resonance, 2677 Hz", "added": "2026-09-04" },
+    { "range": [3025, 3045], "note": "feedback resonance, 3035 Hz", "added": "2026-09-04" },
+    { "range": [3066, 3086], "note": "feedback resonance, 3076 Hz", "added": "2026-09-04" },
+    { "range": [3072, 3092], "note": "feedback resonance, 3082 Hz -- strongest sighting, 39.6 dB above the local spectrum", "added": "2026-09-04" },
+    { "range": [3359, 3379], "note": "feedback resonance, 3369 Hz", "added": "2026-09-04" },
+    { "range": [3452, 3472], "note": "feedback resonance, 3462 Hz", "added": "2026-09-04" }
   ]
 }

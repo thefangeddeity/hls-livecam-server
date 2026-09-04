@@ -97,12 +97,20 @@ FFMPEG="$(command -v ffmpeg || true)"
 # at build time rather than by a listener hearing bursts and silence.
 SOX="$(command -v sox || true)"
 [[ -n "$SOX" ]] || { echo "ERROR: sox not found (brew install sox)" >&2; exit 1; }
+# Icecast serves the listening path. The viewer's Monitor key plays a
+# progressive MP3 from it; without Icecast there is a picture and no way to
+# hear the room. Two-way would still work, which is exactly why this is worth
+# failing the build over -- a half-working install is harder to diagnose than
+# one that refuses to build.
+ICECAST="$(command -v icecast || true)"
+[[ -n "$ICECAST" ]] || { echo "ERROR: icecast not found (brew install icecast)" >&2; exit 1; }
 
 echo "[1/6] Preflight"
 "$PY" -c 'import PySide6; print("PySide6 OK")'
 "$ROOT/vendor/mediamtx" --version
 "$FFMPEG" -hide_banner -version | head -1
 "$SOX" --version | head -1
+"$ICECAST" -v 2>&1 | head -1
 
 echo "[2/6] Bundle"
 mkdir -p "$MACOS" "$RUNTIME"
@@ -285,17 +293,26 @@ That is the whole install. No separate installer, no Terminal, no checkout.
 Setup runs from inside the app on first launch and does not repeat.
 
 REQUIREMENTS
-Two command-line tools must be installed:
+Three command-line tools must be installed:
 
   brew install ffmpeg
   brew install sox
+  brew install icecast
 
-The app will tell you if either is missing.
+The app will tell you if any is missing.
 
-SoX captures the microphone. ffmpeg's own macOS audio input is broken --
-a decade-old bug (ffmpeg #4437, #4513) that delivers about a fifth of the
-sound with no error reported -- so without SoX there is no usable room
-audio, only bursts and silence.
+WHY EACH ONE
+
+ffmpeg   encodes the picture and the two-way audio leg.
+
+sox      captures the microphone. ffmpeg's own macOS audio input is broken
+         -- a decade-old bug (ffmpeg #4437, #4513) that delivers about a
+         fifth of the sound with no error reported -- so without SoX there
+         is no usable room audio, only bursts and silence.
+
+icecast  serves the listening path. The Monitor key plays a progressive
+         MP3 from it. Without Icecast there is a picture and no way to
+         hear the room.
 README
 
 # Record what this actually is, inside the bundle, so a machine under test can
