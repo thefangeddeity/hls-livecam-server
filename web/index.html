@@ -1160,7 +1160,11 @@
      this row, so the extra width comes out of the slider and nothing else
      moves. */
   .mute-key {
-    width: auto; min-width: 62px; padding: 0 14px; white-space: nowrap;
+    /* Just wide enough for its label. No min-width: the modem row's fixed
+       62px is for switches that share a size with each other, and this key
+       is not one of them -- it sits beside a slider, so any width it does
+       not need is width the slider loses. */
+    width: auto; padding: 0 10px; white-space: nowrap;
   }
   /* Type comes from the KEYS, not from the modem row. The modem legend is
      mono, small and letter-spaced -- right for BLUR and FOVEAL, which are
