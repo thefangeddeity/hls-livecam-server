@@ -88,6 +88,15 @@ LSOF = shutil.which('lsof') or '/usr/sbin/lsof'
 app = Flask(__name__)
 
 
+# SoX, for microphone capture. See _mic_capture_cmd for why the capture is
+# not ffmpeg: its avfoundation audio input drops most of the stream on macOS.
+SOX = (
+    shutil.which('sox')
+    or next((q for q in ('/usr/local/bin/sox', '/opt/homebrew/bin/sox')
+             if os.path.exists(q)), 'sox')
+)
+
+
 def _read_config():
     env = {}
     try:
@@ -1116,106 +1125,203 @@ class _MicHub:
 _mic_hub = _MicHub()
 
 
-def _mic_publisher_cmd(mode):
-    """ffmpeg argv publishing the microphone to 'roomaudio' as Opus."""
-    audio_idx = str(
-        _cfg.get('AUDIO_DEVICE', 'Built-in Microphone')
-    ).strip() or 'Built-in Microphone'
 
+
+
+
+def _mic_capture_cmd(mode):
+    """Capture ONLY, with SoX. Raw PCM on stdout. No encoders, no sockets.
+
+    SOX RATHER THAN FFMPEG, AND THIS IS NOT A PREFERENCE.
+
+    ffmpeg's avfoundation AUDIO input is broken on macOS and has been for a
+    decade: tickets #4437 and #4513, periodic dropouts with no error printed,
+    worse while other audio is active, caused by allocating and destroying
+    buffers instead of reusing a ring buffer with a QUEUE_SIZE hardcoded at 4.
+
+    Measured here rather than taken on faith. ffmpeg reading this microphone
+    delivered 5-6 seconds of audio per 30 seconds of wall clock -- about 20% --
+    with no silence padding and no error, which is exactly what "ugly loud
+    bursts staggered with silence" sounds like. It stayed at 20% through every
+    structural fix tried against it: splitting the mic off the camera, giving
+    each encoder its own process, non-blocking fan-out, TCP to UDP. None of
+    them mattered, because none of them was the input.
+
+    SoX capturing the SAME device through CoreAudio: 20.000 seconds of audio in
+    20 seconds. 100%.
+
+    The filter chain moves here with it -- highpass and gain are SoX effects
+    now -- so the encoders downstream do nothing but encode.
+    """
     if mode == 'hide':
-        # Camera light off = mic off. Silence still has to be PUBLISHED, or
-        # the viewer's WHEP reader finds no path and reports a fault rather
-        # than a quiet room.
-        src = ['-f', 'lavfi',
-               '-i', 'anullsrc=channel_layout=mono:sample_rate=48000']
-        filt = []
-        filt_rtc = []
-    else:
-        src = ['-f', 'avfoundation',
-               '-thread_queue_size', '1024',
-               '-i', f':{audio_idx}']
-        filt = _roomaudio_filter(for_rtc=False)   # monitor: untouched room
-        filt_rtc = _roomaudio_filter(for_rtc=True)   # 2-way: voice out of it
+        # Camera light off = mic off. No capture device is opened at all;
+        # silence is generated, and it still has to be PRODUCED or the
+        # encoders see EOF and the viewer gets a fault instead of a quiet room.
+        return [FFMPEG, '-hide_banner', '-loglevel', 'warning',
+                '-f', 'lavfi',
+                '-i', 'anullsrc=channel_layout=mono:sample_rate=48000',
+                '-f', 's16le', '-ar', '48000', '-ac', '1', 'pipe:1']
 
-    return [FFMPEG, '-hide_banner', '-loglevel', 'warning',
-            *src,
-            # Opus for WebRTC: the only codec WHEP will carry, and what
-            # 2-Way needs for its echo canceller to have a reference. -af is
-            # a per-OUTPUT option, so this leg can be denoised while the
-            # monitor leg below stays exactly as the room sounded.
-            '-map', '0:a:0',
-            '-c:a', 'libopus', '-b:a', '96k', '-application', 'audio',
-            '-packet_loss', '10', '-fec', '1',
-            *filt_rtc,
-            '-rtsp_transport', 'tcp', '-f', 'rtsp', ROOM_AUDIO_URL,
-            # MP3 on stdout for the listening path. Every browser plays
-            # progressive MP3 including Safari and iOS, with no container
-            # negotiation and no codec support matrix to lose on.
-            # -reservoir 0 and -flush_packets 1 keep it emitting as produced
-            # rather than batching, which is what makes it usable live.
-            # MP3 into ICECAST for the listening path. Icecast is here for
-            # one property a hand-rolled fan-out does not have: burst-on-connect.
-            # It hands a new listener several seconds of already-buffered audio
-            # so the decoder starts with runway instead of at the live edge,
-            # where every hiccup becomes an underrun and continuous underruns
-            # are heard as pulsing.
-            '-map', '0:a:0',
+    dev = str(_cfg.get('AUDIO_DEVICE_NAME',
+                       _cfg.get('AUDIO_DEVICE', 'Built-in Microphone'))).strip()
+    if not dev or dev.isdigit():
+        # avfoundation used an index; CoreAudio wants the name.
+        dev = 'Built-in Microphone'
+
+    # -q: SoX writes a progress meter to stderr forever otherwise, which
+    # fills the capture log with megabytes of bar graphs and buries real
+    # errors. -V1 keeps failures visible.
+    cmd = [SOX, '-q', '-V1', '-t', 'coreaudio', dev,
+           '-t', 'raw', '-b', '16', '-e', 'signed-integer',
+           '-r', '48000', '-c', '1', '-']
+
+    # Effects, in order, and deliberately few. Every element here is one more
+    # thing that can put a rhythm into the sound.
+    hp = str(_cfg.get('AUDIO_HIGHPASS_HZ', '')).strip()
+    if hp:
+        cmd += ['highpass', hp]
+    # Gain, with headroom. SoX 'gain' is a raw multiplier and will clip --
+    # measured at 51k clipped samples in 20s with a bare 'gain 12', because
+    # CoreAudio hands over a healthier level than ffmpeg's avfoundation did
+    # and the old 12 dB was compensating for that weakness. -h reserves
+    # headroom first so peaks survive instead of flattening.
+    gain = str(_cfg.get('AUDIO_GAIN_DB', '')).strip()
+    if gain:
+        try:
+            float(gain)
+            cmd += ['gain', '-h', gain]
+        except ValueError:
+            pass
+    return cmd
+
+
+# Raw PCM the encoders consume: 48 kHz, mono, signed 16-bit little-endian.
+_PCM_IN = ['-f', 's16le', '-ar', '48000', '-ac', '1', '-i', 'pipe:0']
+
+
+def _mp3_encoder_cmd():
+    """LISTEN leg: PCM -> MP3 -> Icecast."""
+    return [FFMPEG, '-hide_banner', '-loglevel', 'warning', *_PCM_IN,
             '-c:a', 'libmp3lame', '-b:a', '96k',
+            # No bit reservoir and flush as produced: batching is latency, and
+            # this is the leg someone is listening to live.
             '-reservoir', '0', '-flush_packets', '1',
+            '-f', 'mp3',
+            'icecast://source:roomaudio@127.0.0.1:8000/room.mp3']
+
+
+def _opus_encoder_cmd():
+    """TWO-WAY leg: PCM -> Opus -> mediamtx, for WebRTC.
+
+    The speech denoiser, if enabled, belongs HERE rather than in the capture:
+    it is wanted for a call and not for the monitor, and putting it on the
+    shared capture would impose one leg's judgement on the other.
+    """
+    dn = str(_cfg.get('AUDIO_DENOISE', '')).strip()
+    filt = []
+    if dn:
+        model = os.path.join(ROOT, 'models', f'{dn}.rnnn')
+        if os.path.exists(model):
+            filt = ['-af', f'arnndn=m={model}']
+    return [FFMPEG, '-hide_banner', '-loglevel', 'warning', *_PCM_IN,
+            '-c:a', 'libopus', '-b:a', '96k', '-application', 'audio',
             *filt,
-            '-f', 'mp3', 'icecast://source:roomaudio@127.0.0.1:8000/room.mp3']
+            '-rtsp_transport', 'udp', '-f', 'rtsp', ROOM_AUDIO_URL]
 
 
 def _mic_publisher_loop():
+    """One capture, two encoder processes, fanned out over pipes.
+
+    Each encoder is restarted on its own if it dies; neither can take the
+    capture -- or the other -- down with it.
+    """
     global _mic_proc
-    last_gen = None
     while True:
+        procs = {}
         try:
             with _mode_lock:
                 mode = _mode
-                gen  = _mode_generation
-            last_gen = gen
+                gen = _mode_generation
+
             _mic_proc = subprocess.Popen(
-                _mic_publisher_cmd(mode),
+                _mic_capture_cmd(mode),
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=_open_ffmpeg_log())
 
-            # Draining stdout IS the listening path: every chunk read here is
-            # fanned out to whoever has /stream.mp3 open. It also has to keep
-            # up unconditionally -- a blocked read backs up into ffmpeg and
-            # costs samples at the capture.
-            def _drain(proc=_mic_proc):
-                try:
-                    while True:
-                        buf = proc.stdout.read(_MIC_CHUNK)
-                        if not buf:
-                            break
-                        _mic_hub.publish(buf)
-                except Exception:
-                    pass
+            for name, cmd in (('mp3', _mp3_encoder_cmd()),
+                              ('opus', _opus_encoder_cmd())):
+                pr = subprocess.Popen(
+                    cmd, stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=_open_ffmpeg_log())
+                # NON-BLOCKING, and this is the whole point of the fan-out.
+                #
+                # A blocking write to an encoder that is busy talking to the
+                # network stalls this loop, which stops draining the capture,
+                # which backpressures into the microphone and starves it. That
+                # is the same coupling this split was meant to remove, just
+                # moved one process along: measured at 2.7s of Opus and 5.5s
+                # of MP3 per 30s while the writes were blocking.
+                #
+                # An encoder that cannot keep up loses audio instead. Sound
+                # from a device that only exists in real time is worth less
+                # the later it arrives, and the capture must never pay for a
+                # consumer's slowness.
+                os.set_blocking(pr.stdin.fileno(), False)
+                procs[name] = pr
 
-            threading.Thread(target=_drain, daemon=True).start()
-
-            # Poll rather than wait(): a mode change has to be able to tear
-            # this down, and the publisher otherwise runs until the node does.
-            while _mic_proc.poll() is None:
-                time.sleep(0.5)
+            while True:
+                buf = _mic_proc.stdout.read(_MIC_CHUNK)
+                if not buf:
+                    break
+                for name in list(procs):
+                    pr = procs[name]
+                    try:
+                        pr.stdin.write(buf)
+                    except BlockingIOError:
+                        # Its pipe is full: this encoder is behind. Drop the
+                        # chunk for it alone and keep going -- the capture and
+                        # the other leg must not wait.
+                        continue
+                    except Exception:
+                        # That encoder died. Restart it alone; the capture and
+                        # the other leg carry on untouched.
+                        try:
+                            _kill_hard(pr)
+                        except Exception:
+                            pass
+                        cmd = (_mp3_encoder_cmd() if name == 'mp3'
+                               else _opus_encoder_cmd())
+                        try:
+                            procs[name] = subprocess.Popen(
+                                cmd, stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL,
+                                stderr=_open_ffmpeg_log())
+                        except Exception:
+                            procs.pop(name, None)
                 with _mode_lock:
-                    if _mode_generation != last_gen:
+                    if _mode_generation != gen:
                         break
-            if _mic_proc.poll() is None:
-                _kill_hard(_mic_proc)
-                # Same CoreAudio settle the camera path needs: the next open
-                # fails with "Input/output error" if the device has not been
-                # released yet.
-                time.sleep(0.8)
+
         except Exception as exc:
             print(f'broadcast-api: mic publisher: {exc}',
                   file=sys.stderr, flush=True)
-            time.sleep(2.0)
         finally:
+            for pr in procs.values():
+                try:
+                    _kill_hard(pr)
+                except Exception:
+                    pass
+            if _mic_proc:
+                try:
+                    _kill_hard(_mic_proc)
+                except Exception:
+                    pass
             _mic_proc = None
+            # CoreAudio does not release the device instantly; reopening too
+            # fast fails with an input I/O error.
+            time.sleep(0.8)
 
 
 def _open_ffmpeg_log():

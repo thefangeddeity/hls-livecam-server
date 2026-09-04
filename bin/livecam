@@ -129,7 +129,13 @@ webrtcIPsFromInterfaces: yes
 webrtcICEServers2: []
 
 rtsp: yes
-rtspTransports: [tcp]
+# udp first, tcp as the fallback. The room-audio publisher needs UDP: over
+# TCP its output was measured delivering 5.4s of audio per 30s of wall clock
+# (~18%), while the MP3 leg of the SAME ffmpeg process ran at 100%. A TCP
+# muxer that blocks backpressures into the encoder and starves that output;
+# UDP cannot block, and for live audio a lost datagram is preferable to a
+# stalled stream -- which is why RTP was designed on UDP in the first place.
+rtspTransports: [udp, tcp]
 rtspAddress: :${RTSP_PORT}
 
 hls: yes
