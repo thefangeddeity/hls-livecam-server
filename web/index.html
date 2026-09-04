@@ -4264,11 +4264,50 @@
     if (vHls && vRtcOn) stage(vHls, '');
   }
 
+  /* KEEP LISTENING AT THE LIVE EDGE.
+
+     A progressive stream in an <audio> element is treated like a FILE: the
+     element plays from wherever its playhead is, and the playhead only ever
+     falls further behind. Every stall, every underrun, every moment the tab
+     is backgrounded adds to the gap and nothing ever gives it back. Left
+     alone for an hour it will happily play you a conversation from ten
+     minutes ago -- observed exactly that.
+
+     HLS and WebRTC each solve this themselves (a sliding playlist, a
+     real-time contract). Progressive HTTP has no such mechanism, which is the
+     one real cost of choosing it, so the page has to do it: watch the gap to
+     the newest buffered audio and jump forward when it grows.
+
+     LIVE_SLACK is how far behind we tolerate before jumping. Too small and it
+     fights normal jitter, skipping constantly; too large and the room is
+     stale. LIVE_LAND leaves a little runway after the jump so the decoder is
+     not immediately starved at the very edge of the buffer. */
+  var LIVE_SLACK = 3.0;
+  var LIVE_LAND  = 0.5;
+
+  function keepAtLiveEdge() {
+    if (roomTx !== 'mp3' || !audio || audio.paused) return;
+    try {
+      var b = audio.buffered;
+      if (!b || !b.length) return;
+      var edge = b.end(b.length - 1);
+      var behind = edge - audio.currentTime;
+      if (behind > LIVE_SLACK) {
+        audio.currentTime = Math.max(0, edge - LIVE_LAND);
+      }
+    } catch (e) {
+      /* Seeking can throw while the element is still opening. Nothing to do
+         but try again on the next tick; being late is survivable, an
+         exception here would stop the meter and the lamps with it. */
+    }
+  }
+
   setInterval(function () {
     silenceVideoAudio();   // cheap, and must survive stream reloads
     levelSample();
     levelDraw();
     paintTransportLeds();
+    keepAtLiveEdge();
   }, 500);
 
   /* A gesture is what lets an AudioContext run at all, and every key is one.
