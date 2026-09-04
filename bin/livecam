@@ -99,6 +99,9 @@ pid_alive() { # pid_alive FILE
 # recreating HLS muxers each pass. Comparing before writing removes the storm at
 # the source instead of relying on nothing upstream ever retrying.
 gen_mediamtx_yml() {
+  # Absolute, because mediamtx spawns runOnReady without our PATH.
+  local FFMPEG_BIN
+  FFMPEG_BIN="$(command -v ffmpeg || echo /usr/local/bin/ffmpeg)"
   load_ports
   local tmp="$MEDIAMTX_YML.tmp.$$"
   cat > "$tmp" <<EOF
@@ -150,6 +153,32 @@ paths:
   # ran as command substitutions, printed "talkback: command not found" on
   # every start, and wrote the comment out with the words missing.
   talkback:
+    # THE ROOM'S HALF OF TWO-WAY, and it belongs to the two-way pipeline
+    # rather than to the node's background.
+    #
+    # A browser publishing its microphone over WHIP gets the audio as far as
+    # this path and no further; something here has to render it to the
+    # speakers, or the caller is talking into storage. AudioToolbox is the
+    # only audio OUTPUT ffmpeg exposes on macOS -- avfoundation is input-only
+    # here -- which is why the obvious symmetric choice is not available.
+    #
+    # runOnReady is the trigger, and the reason this is worth doing properly:
+    # mediamtx starts this the moment a publisher appears and kills it when
+    # they leave. What it replaces was a supervised loop in broadcast-api that
+    # retried every 4 seconds FOREVER, opening an AudioToolbox device each
+    # time whether or not anyone was talking. coreaudiod was measured at 77%
+    # CPU with it running and 27% with it stopped -- a permanent cost for a
+    # feature used in bursts, and a plausible contributor to audio glitching
+    # on a machine whose audio daemon was already saturated.
+    #
+    # Restart on exit, because a caller who drops and redials within the same
+    # session must not find the speaker dead; mediamtx stops it for real when
+    # the path goes idle.
+    runOnReady: >
+      ${FFMPEG_BIN} -hide_banner -loglevel error
+      -rtsp_transport tcp -i rtsp://127.0.0.1:${RTSP_PORT}/talkback
+      -vn -map 0:a:0 -f audiotoolbox -
+    runOnReadyRestart: yes
   all_others:
 EOF
   if [ -f "$MEDIAMTX_YML" ] && cmp -s "$tmp" "$MEDIAMTX_YML"; then

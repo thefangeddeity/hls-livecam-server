@@ -262,7 +262,6 @@ def _apply_svhs_warp(arr):
 # player started the instant a viewer says "talking" can find the path empty,
 # exit, and leave the room silent for a microphone that is in fact about to
 # work. A patient retry loop has no such race -- it is always already waiting.
-TALKBACK_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/talkback"
 
 # The room, again, as Opus on its own path -- the inbound half of 2-WAY.
 #
@@ -280,7 +279,6 @@ ROOM_AUDIO_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/roomaudio"
 # publisher). Separate mediamtx path because one path carries one
 # set of tracks.
 ROOM_SOUND_URL = f"rtsp://127.0.0.1:{RTSP_PORT}/roomsound"
-_talkback_proc = None
 
 
 def _roomaudio_filter(for_rtc=False):
@@ -469,43 +467,12 @@ def _roomaudio_output(audio_map, audio_filter):
     ]
 
 
-def _talkback_loop():
-    global _talkback_proc
-    idle_wait = 4.0
-    while True:
-        try:
-            _talkback_proc = subprocess.Popen(
-                # -vn and an explicit audio map: talkback carries the caller's
-                # camera as well as their voice once 2-WAY publishes both, and
-                # this player only ever wanted the audio.
-                [FFMPEG, '-hide_banner', '-loglevel', 'error',
-                 '-rtsp_transport', 'tcp', '-i', TALKBACK_URL,
-                 '-vn', '-map', '0:a:0',
-                 '-f', 'audiotoolbox', '-'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            # Blocks for as long as somebody is talking. Returns the moment the
-            # publisher goes away, which is the signal to go back to waiting.
-            _, err = _talkback_proc.communicate()
-            rc = _talkback_proc.returncode
-            msg = (err or b'').decode('utf-8', 'replace').strip()
-            # "404" here is the ordinary case -- nobody is talking -- and must
-            # not be logged as a fault, or the log becomes useless.
-            if msg and '404' not in msg and 'Not Found' not in msg:
-                print(f'broadcast-api: talkback player: {msg}', flush=True)
-            elif rc == 0:
-                print('broadcast-api: talkback ended', flush=True)
-        except Exception as e:
-            print(f'broadcast-api: talkback player failed to start: {e}',
-                  flush=True)
-        finally:
-            _talkback_proc = None
-        time.sleep(idle_wait)
 
 
-# TEST: talkback player disabled -- it reopened an AudioToolbox output
-# device every 4s forever, and coreaudiod was measured at 77% CPU.
-# threading.Thread(target=_talkback_loop, daemon=True).start()
-print('broadcast-api: talkback player waiting on ' + TALKBACK_URL, flush=True)
+# The talkback player lives in mediamtx's runOnReady on the talkback path
+# now (see gen_mediamtx_yml in bin/livecam): started when a publisher
+# appears, killed when they leave. It used to be a 4-second retry loop
+# here that held an AudioToolbox device open forever.
 
 
 def _start_publisher():
