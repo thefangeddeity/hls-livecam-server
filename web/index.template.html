@@ -3296,7 +3296,32 @@
           if (!rx) return;
           rx.srcObject = ev.streams[0];
           rx.muted = audioMuted;
-          rx.play().catch(function () {});
+          /* INBOUND AUTOPLAY.
+
+             This play() lands well AFTER the key was pressed: getUserMedia
+             has resolved, two SDP round trips have completed, and ICE has
+             settled. The gesture that authorised audio is long expired by
+             then, so a browser may refuse silently -- media arriving, ICE
+             established, server logging a healthy reader, and nothing
+             audible. That failure looks exactly like a broken transport,
+             which is expensive to chase.
+
+             So: report the refusal on the note line instead of swallowing
+             it, and arm a one-shot retry on the next interaction anywhere on
+             the page. The next tap the operator makes for any reason will
+             start it. */
+          var pr = rx.play();
+          if (pr && pr.catch) {
+            pr.catch(function (err) {
+              audioNote('inbound audio blocked (' +
+                        ((err && err.name) || 'autoplay') + ') -- tap to start');
+              var retry = function () {
+                document.removeEventListener('click', retry, true);
+                rx.play().catch(function () {});
+              };
+              document.addEventListener('click', retry, true);
+            });
+          }
           stage(rtcLed, 'ok');
           try {
             var t = ev.streams[0].getAudioTracks()[0];
