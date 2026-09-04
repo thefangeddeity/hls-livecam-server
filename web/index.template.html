@@ -3063,10 +3063,24 @@
        be retried. This is not the old "unmute implies play" behaviour coming
        back: the transport is already in 'play' by then, the element simply
        never got permission to start. A stopped transport stays stopped. */
-    /* The call leg is a different element, and MUTE means "silence what I
-       hear" regardless of which transport is carrying it. */
-    var rxEl = document.getElementById('twoWayRx');
-    if (rxEl) rxEl.muted = muted;
+    /* MUTE IS A MICROPHONE KEY, not a speaker key, whenever a microphone is
+       open. That is what it means in every call application, and it is what
+       makes the inbound leg testable at all: with MUTE silencing what you
+       HEAR, there is no way to listen to the room without also sending your
+       own voice into it and hearing the result.
+
+       Disabling the track is the right mechanism rather than tearing the
+       sender down: the leg stays established, the far end keeps its
+       negotiated stream, and unmuting is instant. The room receives digital
+       silence, not a dropped connection.
+
+       The incoming element is deliberately NOT touched here. It is silenced
+       only by leaving two-way. */
+    if (twoWay.stream) {
+      twoWay.stream.getAudioTracks().forEach(function (t) {
+        t.enabled = !muted;
+      });
+    }
     if (!muted && audio.paused && audioDir === 'play') {
       var pr = audio.play();
       if (pr && pr.catch) pr.catch(function () {});
@@ -3295,7 +3309,8 @@
           var rx = document.getElementById('twoWayRx');
           if (!rx) return;
           rx.srcObject = ev.streams[0];
-          rx.muted = audioMuted;
+          // Never inherits the MUTE key: that key is the microphone's now.
+          rx.muted = false;
           /* INBOUND AUTOPLAY.
 
              This play() lands well AFTER the key was pressed: getUserMedia
@@ -4197,6 +4212,42 @@
     el.textContent = txt;
   }
 
+  /* INBOUND DIAGNOSTIC -- remove once two-way inbound is settled.
+
+     Server side is proven: mediamtx logs "peer connection established" and
+     "is reading from path roomaudio, 1 track (Opus)" for the receive leg, on
+     a direct LAN candidate pair. So the audio is arriving and the fault is in
+     this page, where nothing was visible after the temporary HUD was removed.
+
+     This prints the receiving element's ACTUAL state, because every remaining
+     suspect looks identical from outside and they are told apart only by
+     these fields:
+
+       trk   how many audio tracks the element was handed. 0 means ontrack
+             never fired or the stream was empty -- a transport problem after
+             all, despite the server log.
+       en    whether that track is enabled and unmuted AT THE TRACK level.
+             live/muted here means WebRTC has the track but is receiving no
+             media through it.
+       pause whether the element is playing. true means autoplay was refused.
+       mute  the element's own mute, which follows the MUTE key.
+       rs    readyState: 0 means it never got data to render.
+  */
+  function rxDiag() {
+    if (!TwoWay.live) return;
+    var rx = document.getElementById('twoWayRx');
+    if (!rx) { audioNote('rx: element missing'); return; }
+    var s = rx.srcObject;
+    var trks = (s && s.getAudioTracks) ? s.getAudioTracks() : [];
+    var t = trks[0];
+    audioNote('rx: trk=' + trks.length
+      + ' en=' + (t ? (t.enabled ? '1' : '0') + '/' + t.readyState
+                      + (t.muted ? '/muted' : '/live') : '-')
+      + ' pause=' + (rx.paused ? '1' : '0')
+      + ' mute=' + (rx.muted ? '1' : '0')
+      + ' rs=' + rx.readyState);
+  }
+
   function paintTransportLeds() {
     // AUDIO. Listening is Icecast over HTTP (roomTx 'mp3'); Talk and 2-Way are
     // WebRTC. They are different transports now, so one lamp cannot answer
@@ -4261,6 +4312,7 @@
     paintTransportLeds();
     paintAudioDir();
     keepAtLiveEdge();
+    rxDiag();
   }, 500);
 
   /* A gesture is what lets an AudioContext run at all, and every key is one.
