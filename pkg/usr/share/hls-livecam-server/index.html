@@ -3080,6 +3080,15 @@
   }
 
   function startTwoWay() {
+    // getUserMedia only works in a SECURE context. Over plain http (e.g. the
+    // tailnet IP :8080) navigator.mediaDevices is undefined and the call below
+    // throws synchronously -- which used to leave the key disabled forever.
+    // Guard first, say why, and revert the mode instead of sticking gray.
+    if (!talkSupported()) {
+      setAudioNote('Two-way needs the https address (mic is blocked on http) -- open https://<node>.ts.net');
+      audioMode = 'stop'; paintAudioModes(); paintTransport();
+      return;
+    }
     if (twoWayBtn) twoWayBtn.disabled = true;
     roomAudio.pause();          // HLS monitor stands down; the room arrives on twoWayRx, low-latency
     navigator.mediaDevices.getUserMedia({
