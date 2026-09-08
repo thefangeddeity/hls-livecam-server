@@ -386,7 +386,7 @@
   .vlab { font-family: var(--mono); font-size: 8.5px; letter-spacing: .13em; color: var(--phos-label); text-transform: uppercase; line-height: 20px; }
   .vval { position: relative; text-align: right; line-height: 20px; height: 20px; }
   .vghost, .vlit { font-family: var(--mono); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: .05em; white-space: nowrap; line-height: 20px; }
-  .vghost { position: absolute; inset: 0; text-align: right; color: var(--phos-ghost); pointer-events: none; user-select: none; }
+  .vghost { display: none; }   /* dynamic values -- no fixed 888 phosphor ghost behind them */
   .vlit { position: relative; color: var(--phos); text-shadow: 0 0 1px var(--phos), 0 0 7px color-mix(in srgb,var(--phos) 52%,transparent), 0 0 15px color-mix(in srgb,var(--phos) 24%,transparent); }
   .vunit { font-size: 8px; letter-spacing: .1em; opacity: .7; margin-left: 3px; }
   .vind { display: flex; gap: 8px; margin-top: 6px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,.04); }
@@ -605,7 +605,7 @@
   html[data-theme="light"] .vol::-moz-range-track { background: linear-gradient(180deg,#e4e4e9,#eeeef2); box-shadow: inset 0 1px 2px rgba(0,0,0,.18); }
   html[data-theme="light"] .vol::-webkit-slider-thumb,
   html[data-theme="light"] .vol::-moz-range-thumb { background: linear-gradient(180deg,#fdfdfe,#e9e9ee); border-color: #c3c3ca; box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(0,0,0,.2); }
-  .listen { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+  .listen { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
   .listen .cap, .modemrow .cap { font-size: 9.5px; color: var(--emboss-dim); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .modemrow .chk { white-space: nowrap; }
   /* .chk is display:flex, which beats the hidden attribute on its own. */
@@ -1188,6 +1188,7 @@
             <div class="led" id="ledMtxV"><span class="bulb"></span><span class="n">MediaMTX</span></div>
             <div class="led" id="ledRtspV"><span class="bulb"></span><span class="n">RTSP</span></div>
             <div class="led" id="ledHlsV"><span class="bulb"></span><span class="n">HLS</span></div>
+            <div class="led" id="ledRtcV" title="Video WebRTC leg (not wired yet)"><span class="bulb"></span><span class="n">RTC</span></div>
           </div>
         </div>
         <div class="pdiv"></div>
@@ -1442,7 +1443,8 @@
       <div class="modemrow" style="padding:0 2px">
         <button class="pbtn" id="themeBtn" onclick="toggleTheme()">Light theme</button>
       </div>
-      <button class="pbtn" id="reconnectBtn" onclick="reloadStream()" hidden>Reconnect</button>
+      <!-- No separate Reconnect button (matches Ariana): the pinhole Reload and the
+           reconnecting LIVE-pill cover a dropped stream; global Reset restarts the server. -->
 
     </div>
   </aside>
@@ -1483,7 +1485,7 @@
   var sceneChip    = document.getElementById('sceneChip');
   var sceneBadge   = document.getElementById('sceneBadge');
   var sceneReregisterBtn = document.getElementById('sceneReregisterBtn');
-  var reconnectBtn = document.getElementById('reconnectBtn');
+  var reconnectBtn = {};   // Reconnect button removed (Ariana parity); stub keeps .hidden writes inert
   var saveBtn      = document.getElementById('saveBtn');
   var clearBtn     = document.getElementById('clearBtn');
   var cancelBtn    = document.getElementById('cancelBtn');
@@ -2513,8 +2515,8 @@
     // that you are being heard, so it says so rather than lying about whose.
     if (lab) lab.textContent = '';   // the mirrored graph draws its own IN/OUT labels
     var dirEl = document.getElementById('audioDirVal');
-    if (dirEl) dirEl.textContent = (audioMode === 'two-way') ? 'TWO-WAY AUDIO'
-                                 : (audioMode === 'play') ? 'ROOM IN'
+    if (dirEl) dirEl.textContent = (audioMode === 'two-way') ? 'BIDIRECTIONAL'
+                                 : (audioMode === 'play') ? 'INBOUND'
                                  : (audioMode === 'talk') ? 'TO ROOM' : 'AUDIO OFF';
     var rtcLed = document.getElementById('ledRtcA');
     if (rtcLed) rtcLed.className = 'led' + ((typeof twoWayOn !== 'undefined' && twoWayOn) ? ' on' : '');
@@ -2684,6 +2686,9 @@
   function manualReload() {
     reloadBtn.classList.add('spinning');
     setTimeout(function() { reloadBtn.classList.remove('spinning'); }, 600);
+    // Also rebuild the CV model server-side: it goes stale and there is no
+    // separate update button any more, so Reset owns that too.
+    fetch('/api/cv-reset', { method: 'POST' }).catch(function () {});
     reloadStream();
   }
 
@@ -3134,7 +3139,7 @@
     if (!twoWayOn) return;
     fetch('/api/talk', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.text() : null; })
-      .then(function (v) { if (v !== null && v.trim() === 'false') stopTwoWay('stopped by the node'); })
+      .then(function (v) { if (v !== null && v.trim() === 'false') stopTwoWay(); })
       .catch(function () {});
   }
   setInterval(pollTwoWay, 4000);

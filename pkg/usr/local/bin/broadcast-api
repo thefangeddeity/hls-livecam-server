@@ -94,6 +94,7 @@ _pub_proc = None
 # a Flask request handler, which runs on a different thread than the
 # writer loop that owns it.
 _cv_proc = None
+_cv_reset_evt = threading.Event()   # video Reset asks the writer loop to rebuild the CV model (reload ONNX + clear stale MOG2/evidence/scene)
 # Set the instant SIGTERM arrives. Both supervisor loops respawn any child
 # they find dead, so without this they immediately undo _shutdown()'s work:
 # the replacement ffmpeg then outlives the interpreter, the unit's cgroup
@@ -787,6 +788,19 @@ def _writer_loop():
         with _mode_lock:
             mode = _mode
 
+        # Video Reset (or a swapped model file) asks for a fresh detector:
+        # rebuilding CVProcessor reloads the ONNX weights AND drops the stale
+        # accumulated state (MOG2 history, evidence tracks, scene reference)
+        # that made detection go stale with no update button to clear it.
+        if _cv_reset_evt.is_set():
+            try:
+                cv_proc = _cvp.CVProcessor(denv)
+                _cv_proc = cv_proc
+                print('broadcast-api: CV model reset (reloaded)', flush=True)
+            except Exception as e:
+                print(f'broadcast-api: CV reset failed: {e}', flush=True)
+            _cv_reset_evt.clear()
+
         # ffmpeg inputs cannot be changed on a running process, so the only
         # way to open or close the microphone is to restart the publisher.
         # Crossing the hide boundary is therefore the ONE mode change that
@@ -1105,6 +1119,14 @@ def scene_status_get():
     else:
         state = 'registered'
     return {'state': state, 'regions': len(getattr(cv_proc, '_scene_regions', []) or [])}, 200
+
+@app.route('/api/cv-reset', methods=['POST'])
+def cv_reset_post():
+    # Rebuild the CV model on the next writer-loop iteration. Folded into the
+    # video Reset button after the standalone model-update button was removed.
+    _cv_reset_evt.set()
+    return 'ok', 200
+
 
 @app.route('/api/scene-reregister', methods=['POST'])
 def scene_reregister_post():
