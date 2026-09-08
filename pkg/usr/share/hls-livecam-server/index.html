@@ -407,7 +407,7 @@
 
   .pdiv { height: 1px; background: #242428; margin: 12px -14px; box-shadow: 0 1px 0 rgba(255,255,255,.03); }
   .btnrow { display: flex; gap: 7px; }
-  .pbtn { flex: 1; text-align: center; font-size: 11.5px; font-weight: 500; padding: 8px 4px; border-radius: 7px;
+  .pbtn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-align: center; font-size: 12px; font-weight: 500; padding: 6px 10px; border-radius: 7px; transition: all .15s;
     background: linear-gradient(180deg,#2c2c30,#232326); border: 1px solid #34343a;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); color: #d6d6da; cursor: pointer; font-family: inherit; }
   .pbtn.pressed { background: linear-gradient(180deg,#191a1c,#212124); box-shadow: inset 0 2px 4px rgba(0,0,0,.6); color: #fff; border-color: #3c3c44; }
@@ -1142,6 +1142,11 @@
          carries the same AAC muxed in, and unmuting both plays the room
          twice, slightly out of step. -->
     <audio id="roomAudio" preload="none"></audio>
+    <!-- The room during a two-way call, over WebRTC (WHEP /roomaudio) rather
+         than buffered HLS. Separate element on purpose: it must be what the
+         browser rendered through the PeerConnection, both for low latency and
+         so the far-end echo canceller has a reference. -->
+    <audio id="twoWayRx" autoplay playsinline hidden></audio>
     <div class="dark-overlay" id="darkOverlay">
       <img src="/dark.png" alt="">
     </div>
@@ -1274,7 +1279,7 @@
         <div class="modemrow">
           <button class="reset" id="reloadBtn" onclick="manualReload()"
                   title="Repair feed -- restarts the stream" aria-label="Repair feed"><span class="pin"></span></button>
-          <span class="eng rstlab">Reset</span>
+          <span class="eng rstlab">Reload</span>
           <div class="modem-group">
             <button class="modem" id="blurBtn" onclick="toggleBlur()"
                     title="Mosaic the picture -- the room is there but not legible, over Show or CV">
@@ -1295,6 +1300,7 @@
           <div class="vfd">
             <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost" id="audioRateGhost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
             <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost" id="audioKbpsGhost">888</span><span class="vlit" id="audioKbps"></span></span></div>
+            <div class="vrow"><span class="vlab">Dir</span><span class="vval"><span class="vghost">8888888888888</span><span class="vlit" id="audioDirVal"></span></span></div>
             <div class="vind">
               <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
             </div>
@@ -1303,7 +1309,8 @@
             <div class="led" id="ledMic"><span class="bulb"></span><span class="n">Mic</span></div>
             <div class="led" id="ledMtxA"><span class="bulb"></span><span class="n">MediaMTX</span></div>
             <div class="led" id="ledRtspA"><span class="bulb"></span><span class="n">RTSP</span></div>
-            <div class="led" id="ledHlsA"><span class="bulb"></span><span class="n">HLS</span></div>
+            <div class="led" id="ledHlsA" title="Listening over buffered HLS"><span class="bulb"></span><span class="n">HLS</span></div>
+            <div class="led" id="ledRtcA" title="Live WebRTC leg (Two-way)"><span class="bulb"></span><span class="n">RTC</span></div>
           </div>
         </div>
 
@@ -1327,14 +1334,17 @@
              nothing is the worst of the three states it could be in. -->
         <div class="btnrow">
           <button class="pbtn" id="audioPlayBtn" onclick="setAudioMode('play')"
-                  title="Room audio in">Play</button>
+                  title="Listen to the room">Monitor</button>
           <button class="pbtn guarded" id="audioStopBtn" onclick="setAudioMode('stop')"
-                  title="Neither direction open">Stop</button>
-          <button class="pbtn" id="talkBtn" onclick="setAudioMode('talk')"
-                  title="Talk to the room -- your voice out, room audio held">Talk</button>
-          <button class="pbtn" id="twoWayBtn" disabled
-                  title="Two-way audio -- not wired on this node yet">2-Way</button>
+                  title="Neither direction open">Silence</button>
+          <button class="pbtn" id="twoWayBtn" onclick="setAudioMode('two-way')"
+                  title="Two-way audio with the room">Two-way</button>
         </div>
+
+        <!-- Where the audio bank says what just happened -- the only channel
+             that works on a phone, where a title has no hover. -->
+        <div class="audionote" id="audioNote" aria-live="polite"
+             style="font-size:10px; color:var(--text-dim); min-height:1.2em; text-align:center; padding:2px 0;"></div>
 
         <!-- The counterpart to VIDEO's FPS trace: what is actually being
              heard, last 60 seconds. Measured off the audio itself rather than
@@ -1375,7 +1385,7 @@
           <button class="reset" id="audioReloadBtn" onclick="reloadAudio()"
                   title="Repair audio -- restarts the room audio stream"
                   aria-label="Repair audio"><span class="pin"></span></button>
-          <span class="eng rstlab">Reset</span>
+          <span class="eng rstlab">Reload</span>
           <div class="modem-group">
             <!-- No lamp on either. Both are momentary acts, not states, so
                  there is nothing for a lamp to report, and every other
@@ -1438,6 +1448,14 @@
   </aside>
 </div>
 
+<!-- Global reset. The pinhole keys above are RELOADs (re-pull the streams in
+     THIS browser). This restarts the whole server via /api/reset, which briefly
+     drops the feed for every viewer, so it is guarded by a confirm press. -->
+<div style="display:flex; justify-content:center; margin:8px 0 2px;">
+  <button type="button" class="pbtn guarded" id="globalResetBtn"
+          style="flex:0 0 auto; padding:6px 22px;"
+          title="Full reset: restarts the server. Briefly drops the stream for every viewer.">Reset</button>
+</div>
 <footer class="page-foot">
   <span><span id="prodName">HLS Livecam Server</span> by The Fanged Deity &mdash; free software under the
     <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>
@@ -1472,7 +1490,7 @@
   var hls = null;
   var recovering = false, retryTimer = null;
   var liveAt = null, uptimeInterval = null;
-  var feedMode = 'show'; // 'show' | 'cv' | 'hide'
+  var feedMode = 'hide'; // 'show'|'cv'|'hide'|'night' -- pre-poll default is HIDE so a refresh comes up hidden+silent (privacy); the /api/feed-mode poll then reconciles to the server's real state
   var fadeInTimer = null;
 
   var protoEl = document.getElementById('protoVal');
@@ -2271,6 +2289,7 @@
   }
   // Ask immediately rather than waiting out the first interval: the page has
   // no picture and no painted controls until this answers.
+  updateFeedButtons();   // paint HIDE (the pre-poll default) immediately, so a refresh shows hidden before the poll answers
   pollFeedMode();
   setInterval(pollFeedMode, 3000);
 
@@ -2455,6 +2474,7 @@
     if (m === audioMode) return;
     // Leaving talk always closes the mic, whichever key you pressed to leave.
     if (audioMode === 'talk' && typeof talking !== 'undefined' && talking) stopTalk();
+    if (audioMode === 'two-way' && typeof twoWayOn !== 'undefined' && twoWayOn) stopTwoWay();
     audioMode = m;
     if (m === 'play') {
       resolveAudioSrc(function () {
@@ -2467,6 +2487,7 @@
       roomAudio.pause();
     }
     if (m === 'talk') startTalk();
+    if (m === 'two-way') startTwoWay();
     paintTransport();
     applyAudioSilence();
   }
@@ -2478,7 +2499,7 @@
   // Pressed-in is the whole state display for the bank -- no lamps, exactly
   // like Show/Hide/CV/Night, whose keys these are copies of.
   function paintAudioModes() {
-    var keys = { play: 'audioPlayBtn', stop: 'audioStopBtn', talk: 'talkBtn' };
+    var keys = { play: 'audioPlayBtn', stop: 'audioStopBtn', 'two-way': 'twoWayBtn' };
     for (var m in keys) {
       var b = document.getElementById(keys[m]);
       if (!b) continue;
@@ -2486,11 +2507,17 @@
       b.className = base + (audioMode === m ? ' pressed' : '');
     }
     var iTalk = document.getElementById('indTalk');
-    if (iTalk) iTalk.className = (audioMode === 'talk') ? 'on' : '';
+    if (iTalk) iTalk.className = (audioMode === 'two-way') ? 'on' : '';
     var lab = document.getElementById('levelLab');
     // In Talk the trace is showing YOUR level, which is the only feedback
     // that you are being heard, so it says so rather than lying about whose.
-    if (lab) lab.textContent = (audioMode === 'talk') ? 'YOUR LEVEL' : 'LEVEL';
+    if (lab) lab.textContent = '';   // the mirrored graph draws its own IN/OUT labels
+    var dirEl = document.getElementById('audioDirVal');
+    if (dirEl) dirEl.textContent = (audioMode === 'two-way') ? 'TWO-WAY AUDIO'
+                                 : (audioMode === 'play') ? 'ROOM IN'
+                                 : (audioMode === 'talk') ? 'TO ROOM' : 'AUDIO OFF';
+    var rtcLed = document.getElementById('ledRtcA');
+    if (rtcLed) rtcLed.className = 'led' + ((typeof twoWayOn !== 'undefined' && twoWayOn) ? ' on' : '');
   }
 
   // The audio box's own reset pin: re-resolve the rendition and restart, for
@@ -2893,6 +2920,7 @@
   // publish share an origin whatever the viewer is served over.
   var talkPc = null, talkStream = null, talkRes = null, talking = false;
   var talkBtn = document.getElementById('talkBtn');
+  var twoWayBtn = document.getElementById('twoWayBtn');
 
   function talkSupported() {
     return !!(window.isSecureContext && navigator.mediaDevices &&
@@ -3010,6 +3038,108 @@
   window.addEventListener('pagehide', function () { if (talking) stopTalk(); });
   paintTalk();
 
+  // ── TWO-WAY (RTC) ───────────────────────────────────────────────────────
+  // Talk out (WHIP /talk, the node plays it over ALSA) AND listen in (WHEP
+  // /roomaudio, the room re-published as Opus for low latency) at the same
+  // time. Ported from ariana. The node keeps its mic OPEN for two-way (POST
+  // /api/talk 'two-way'), so the room WHEP leg has content; the OS echo
+  // canceller (node config) stops the caller hearing themselves.
+  var twoWayPc = null, twoWayStream = null, twoWayTalkRes = null;
+  var twoWayRxPc = null, twoWayRxRes = null, twoWayOn = false;
+  var twoWayRx = document.getElementById('twoWayRx');
+
+  function setAudioNote(m) { var n = document.getElementById('audioNote'); if (n) n.textContent = m || ''; }
+
+  function startRoomRx() {
+    twoWayRxPc = new RTCPeerConnection({ iceServers: [] });
+    twoWayRxPc.addTransceiver('audio', { direction: 'recvonly' });
+    twoWayRxPc.addEventListener('track', function (ev) {
+      if (twoWayRx) { twoWayRx.srcObject = ev.streams[0]; twoWayRx.play().catch(function () {}); }
+      levelAttachStream(ev.streams[0], 'in');   // IN lane = room over WebRTC
+    });
+    return twoWayRxPc.createOffer()
+      .then(function (o) { return twoWayRxPc.setLocalDescription(o); })
+      .then(function () { return talkIceReady(twoWayRxPc); })   // mediamtx is non-trickle
+      .then(function () {
+        return fetch('/roomaudio/whep', {
+          method: 'POST', headers: { 'Content-Type': 'application/sdp' },
+          body: twoWayRxPc.localDescription.sdp
+        });
+      })
+      .then(function (res) {
+        if (!res.ok) throw new Error('WHEP ' + res.status);
+        twoWayRxRes = res.headers.get('Location');
+        return res.text();
+      })
+      .then(function (sdp) { return twoWayRxPc.setRemoteDescription({ type: 'answer', sdp: sdp }); });
+  }
+
+  function startTwoWay() {
+    if (twoWayBtn) twoWayBtn.disabled = true;
+    roomAudio.pause();          // HLS monitor stands down; the room arrives on twoWayRx, low-latency
+    navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    })
+    .then(function (stream) {
+      twoWayStream = stream;
+      levelAttachStream(stream, 'out');   // OUT lane = your mic
+      twoWayPc = new RTCPeerConnection({ iceServers: [] });
+      stream.getAudioTracks().forEach(function (t) { twoWayPc.addTrack(t, stream); });
+      twoWayPc.addEventListener('connectionstatechange', function () {
+        if (twoWayOn && (twoWayPc.connectionState === 'failed' ||
+                         twoWayPc.connectionState === 'disconnected')) stopTwoWay('connection lost');
+      });
+      return twoWayPc.createOffer()
+        .then(function (o) { return twoWayPc.setLocalDescription(o); })
+        .then(function () { return talkIceReady(twoWayPc); })
+        .then(function () {
+          return fetch('/talk/whip', {
+            method: 'POST', headers: { 'Content-Type': 'application/sdp' },
+            body: twoWayPc.localDescription.sdp
+          });
+        });
+    })
+    .then(function (res) {
+      if (!res.ok) throw new Error('WHIP ' + res.status);
+      twoWayTalkRes = res.headers.get('Location');
+      return res.text();
+    })
+    .then(function (sdp) { return twoWayPc.setRemoteDescription({ type: 'answer', sdp: sdp }); })
+    .then(function () {   // node keeps its mic OPEN for two-way and starts the talkback player
+      return fetch('/api/talk', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'two-way' });
+    })
+    .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('api ' + r.status)); }); })
+    .then(function () { return startRoomRx(); })
+    .then(function () { twoWayOn = true; if (twoWayBtn) twoWayBtn.disabled = false; setAudioNote('Two-way live'); paintAudioModes(); paintTransport(); })
+    .catch(function (e) { stopTwoWay(String(e && e.message || e)); });
+  }
+
+  function stopTwoWay(err) {
+    twoWayOn = false;
+    fetch('/api/talk', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'false' }).catch(function () {});
+    if (twoWayTalkRes) { fetch(twoWayTalkRes, { method: 'DELETE' }).catch(function () {}); twoWayTalkRes = null; }
+    if (twoWayRxRes) { fetch(twoWayRxRes, { method: 'DELETE' }).catch(function () {}); twoWayRxRes = null; }
+    if (twoWayPc) { try { twoWayPc.close(); } catch (e) {} twoWayPc = null; }
+    if (twoWayRxPc) { try { twoWayRxPc.close(); } catch (e) {} twoWayRxPc = null; }
+    if (twoWayStream) { twoWayStream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} }); twoWayStream = null; }
+    if (twoWayRx) { try { twoWayRx.srcObject = null; } catch (e) {} }
+    levelDetachRtc();
+    if (twoWayBtn) twoWayBtn.disabled = false;
+    setAudioNote(err ? ('Two-way: ' + err) : '');
+    if (err && audioMode === 'two-way') { audioMode = 'stop'; }
+    paintAudioModes(); paintTransport();
+  }
+
+  function pollTwoWay() {
+    if (!twoWayOn) return;
+    fetch('/api/talk', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (v) { if (v !== null && v.trim() === 'false') stopTwoWay('stopped by the node'); })
+      .catch(function () {});
+  }
+  setInterval(pollTwoWay, 4000);
+  window.addEventListener('pagehide', function () { if (twoWayOn) stopTwoWay(); });
+
   // ── LEVEL TRACE ──────────────────────────────────────────────────
   //
   // VIDEO's FPS trace answers "are frames arriving"; this answers the same
@@ -3032,6 +3162,42 @@
   // away; neither does this one.
   var levelCtx = null, levelAnalyser = null, levelSrcEl = null, levelGain = null;
   var levelHist = new Array(120).fill(0);
+  var levelOutHist = new Array(120).fill(0);           // OUT lane (your mic), two-way only
+  var levelOutAnalyser = null, levelOutTap = null;     // mic stream analyser
+  var levelRtcInAnalyser = null, levelRtcInTap = null; // room-over-WebRTC analyser (two-way IN)
+  function _ensureLevelCtx() {
+    if (!levelCtx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      levelCtx = new AC();
+      levelAnalyser = levelCtx.createAnalyser(); levelAnalyser.fftSize = 512;
+      levelGain = levelCtx.createGain(); levelGain.connect(levelCtx.destination);
+    }
+    return levelCtx;
+  }
+  function _peak(an) {
+    var buf = new Uint8Array(an.frequencyBinCount);
+    an.getByteTimeDomainData(buf);
+    var p = 0; for (var i = 0; i < buf.length; i++) { var d = Math.abs(buf[i] - 128); if (d > p) p = d; }
+    return Math.min(1, p / 128);
+  }
+  // Analyser-only taps on the live call's MediaStreams (never connected to
+  // destination): OUT = your microphone, IN = the room arriving over WebRTC.
+  function levelAttachStream(stream, which) {
+    var ctx = _ensureLevelCtx(); if (!ctx) return;
+    try {
+      var an = ctx.createAnalyser(); an.fftSize = 512;
+      var tap = ctx.createMediaStreamSource(stream); tap.connect(an);
+      if (which === 'out') { levelOutTap = tap; levelOutAnalyser = an; }
+      else { levelRtcInTap = tap; levelRtcInAnalyser = an; }
+      if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) {} }
+    } catch (e) {}
+  }
+  function levelDetachRtc() {
+    [levelOutTap, levelRtcInTap].forEach(function (t) { if (t) { try { t.disconnect(); } catch (e) {} } });
+    levelOutTap = levelOutAnalyser = levelRtcInTap = levelRtcInAnalyser = null;
+    for (var i = 0; i < levelOutHist.length; i++) levelOutHist[i] = 0;
+  }
 
   function levelAttach(el) {
     if (!el || levelSrcEl === el) return;
@@ -3055,21 +3221,19 @@
   }
 
   function levelSample() {
+    // IN (room): the WebRTC leg during a two-way call, the HLS element in
+    // Monitor, flat otherwise.
     var v = 0;
-    if (levelAnalyser && levelCtx && levelCtx.state === 'running') {
-      var buf = new Uint8Array(levelAnalyser.frequencyBinCount);
-      levelAnalyser.getByteTimeDomainData(buf);
-      var peak = 0;
-      for (var i = 0; i < buf.length; i++) {
-        var d = Math.abs(buf[i] - 128);
-        if (d > peak) peak = d;
-      }
-      v = Math.min(1, peak / 128);
+    if (audioMode === 'two-way' && levelRtcInAnalyser) {
+      v = _peak(levelRtcInAnalyser);
+    } else if (audioMode === 'play' && levelAnalyser && levelCtx && levelCtx.state === 'running') {
+      v = _peak(levelAnalyser);
     }
-    // Honest zero: a stopped room reads flat, the way the FPS trace reads
-    // flat when no frames arrive.
-    if (audioMode !== 'play') v = 0;
     levelHist.push(v); levelHist.shift();
+    // OUT (your mic): only meaningful while the call is up.
+    var o = 0;
+    if (levelOutAnalyser && levelCtx && levelCtx.state === 'running') o = _peak(levelOutAnalyser);
+    levelOutHist.push(o); levelOutHist.shift();
   }
 
   function levelDraw() {
@@ -3078,6 +3242,31 @@
     var g = c.getContext('2d');
     var w = c.width, h = c.height;
     g.clearRect(0, 0, w, h);
+    // Mirrored IN/OUT around a centre rule (ported 1:1 from ariana): the room
+    // (IN, green) grows up, your microphone (OUT, amber) grows down. Log
+    // scale because hearing is -- speech near -30 dBFS is 3%% of a linear axis.
+    var _base = h - 12, _top = 4, _step = w / levelHist.length;
+    var _mid = Math.round((_top + _base) / 2), _half = _mid - _top;
+    function _bars(hist, colour, up) {
+      g.fillStyle = colour;
+      for (var i = 0; i < hist.length; i++) {
+        var val = hist[i]; if (!val) continue;
+        var db = 20 * Math.log(val) / Math.LN10;
+        var f = Math.max(0, Math.min(1, (db + 60) / 60));
+        if (f <= 0) continue;
+        var bh = Math.max(1, f * _half);
+        g.fillRect(i * _step, up ? _mid - bh : _mid + 1, Math.max(1, _step - 1), bh);
+      }
+    }
+    _bars(levelHist, 'rgba(48,209,88,.55)', true);
+    _bars(levelOutHist, 'rgba(255,159,10,.55)', false);
+    g.fillStyle = 'rgba(142,142,147,.28)'; g.fillRect(0, _mid, w, 1);
+    g.font = '9px ui-monospace, Menlo, monospace';
+    g.fillStyle = 'rgba(48,209,88,.55)'; g.fillText('IN', 3, _mid - 3);
+    g.fillStyle = levelOutAnalyser ? 'rgba(255,159,10,.65)' : 'rgba(142,142,147,.35)';
+    g.fillText('OUT', 3, _mid + 10);
+    return;
+    // eslint-disable-next-line no-unreachable  (old single-lane draw below, retired)
     // Log scale, because hearing is. Speech at conversational level sits
     // around -30 dBFS, which on a linear scale is 3% of full height and
     // indistinguishable from silence -- the trace read flat while the room
@@ -3231,6 +3420,35 @@
 
   // No initHLS() here, and no updateFeedButtons() either. Both used to run
   // on load against an assumed mode; the first poll does them once it knows.
+</script>
+<script>
+  (function () {
+    var gr = document.getElementById('globalResetBtn');
+    if (!gr) return;
+    var armed = false, armTimer = null, label = gr.textContent;
+    gr.addEventListener('click', function () {
+      if (!armed) {
+        armed = true; gr.textContent = 'Confirm reset?'; gr.classList.add('pressed');
+        armTimer = setTimeout(function () {
+          armed = false; gr.textContent = label; gr.classList.remove('pressed');
+        }, 4000);
+        return;
+      }
+      if (armTimer) clearTimeout(armTimer);
+      armed = false; gr.disabled = true; gr.textContent = 'Restarting\u2026';
+      fetch('/api/reset', { method: 'POST' }).catch(function () {});
+      setTimeout(function () {
+        var tries = 0;
+        var iv = setInterval(function () {
+          tries++;
+          fetch('/api/info', { cache: 'no-store' })
+            .then(function (r) { if (r && r.ok) { clearInterval(iv); location.reload(); } })
+            .catch(function () {});
+          if (tries > 40) { clearInterval(iv); location.reload(); }
+        }, 500);
+      }, 2500);
+    });
+  })();
 </script>
 </body>
 </html>

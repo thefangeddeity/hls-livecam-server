@@ -38,6 +38,7 @@ BLUR_MODE_FILE  = "/var/lib/hls-livecam/blur_mode"
 # node subscribes over RTSP on loopback, because mediamtx re-serves whatever
 # arrives by WHIP on every protocol it speaks, and ffmpeg speaks RTSP.
 TALK_PATH       = "talk"
+ROOM_PATH       = "roomaudio"  # room audio as Opus for the two-way WHEP receive leg
 
 # The one default in this system where the wrong value has a real-world
 # consequence: this is a privacy control on a camera pointed at a family's
@@ -127,6 +128,7 @@ def _read_device_env():
 # open, so every path back to normal is guarded: an explicit stop, a
 # watchdog, and shutdown.
 _talk_proc   = None
+_room_proc   = None   # persistent roomaudio (Opus) publisher for two-way inbound
 _talk_lock   = threading.Lock()
 _talk_timer  = None
 _talk_since  = 0.0
@@ -187,12 +189,16 @@ def _talk_stop_locked(reason):
     # never survive the thing that caused it.
     _stage_capture_level(_read_device_env())
 
-def _talk_start_locked(denv):
+def _talk_start_locked(denv, two_way=False):
     """Caller holds _talk_lock. Returns (ok, detail)."""
     global _talk_proc, _talk_timer, _talk_since
     out = denv.get('TALK_OUTPUT', 'hw:0,0').strip() or 'hw:0,0'
     gain = denv.get('TALK_GAIN_DB', '0').strip() or '0'
-    muted = _mute_capture(denv)
+    # Two-way keeps the room mic OPEN so the WHEP roomaudio leg has content
+    # to send back to the caller; feedback is handled by the OS echo-canceller
+    # (pipewire/pulse module-echo-cancel -- a node-config step), not by muting.
+    # One-way TALK still mutes, because it has no listener to protect.
+    muted = False if two_way else _mute_capture(denv)
     cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error',
            '-rtsp_transport', 'tcp', '-i', f'rtsp://127.0.0.1:8554/{TALK_PATH}',
            '-af', f'volume={gain}dB', '-ac', '2', '-ar', '48000',
@@ -228,7 +234,9 @@ def _talk_start_locked(denv):
     _talk_timer.start()
     print(f'broadcast-api: talkback started -> {out} '
           f'(mic muted: {muted}, limit {limit}s)', flush=True)
-    return True, ('playing' if muted else 'playing, mic NOT muted (no AUDIO_MIXER_LEVELS)')
+    return True, ('playing' if muted
+                  else ('two-way: room mic kept open' if two_way
+                        else 'playing, mic NOT muted (no AUDIO_MIXER_LEVELS)'))
 
 def _talk_supervise(first):
     """Restart the player if it dies while the session is still open."""
@@ -439,6 +447,46 @@ def _render_hide_frame(width, height):
     if _BLACK_FRAME is None or _BLACK_FRAME.shape[:2] != (height, width):
         _BLACK_FRAME = np.zeros((height, width, 3), dtype=np.uint8)
     return _BLACK_FRAME
+
+def _start_roomaudio():
+    """Publish the room audio as Opus on ROOM_PATH for the two-way WHEP leg.
+
+    Derived from /cam over the RTSP loopback -- the same "mediamtx re-serves
+    whatever arrives" trick the talkback player uses -- so the ALSA capture
+    device is opened exactly once (by the main publisher) and never contended.
+    Opus/voip because that is what a browser WHEP subscriber decodes with the
+    lowest latency; this is the inbound half of two-way, so latency is the
+    whole point (HLS would be seconds behind). No aresample=async anywhere --
+    it is the helicopter (see the loopback publisher's note).
+    """
+    return subprocess.Popen(
+        ['ffmpeg', '-hide_banner', '-loglevel', 'error',
+         '-rtsp_transport', 'tcp', '-i', 'rtsp://127.0.0.1:8554/cam',
+         '-vn', '-c:a', 'libopus', '-b:a', '64k', '-ar', '48000', '-ac', '1',
+         '-application', 'voip',
+         '-rtsp_transport', 'tcp', '-f', 'rtsp',
+         f'rtsp://127.0.0.1:8554/{ROOM_PATH}'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _roomaudio_supervise():
+    """Keep the roomaudio Opus leg alive for the life of the process.
+
+    It fails until /cam exists (pipeline still starting) and whenever the main
+    publisher restarts across a hide boundary; a few-second backoff between
+    respawns keeps it from busy-looping while /cam is momentarily absent.
+    Persistent, not bounded like talkback: WHEP subscribers expect it ready.
+    """
+    global _room_proc
+    while True:
+        try:
+            _room_proc = _start_roomaudio()
+            _room_proc.wait()
+        except Exception as e:
+            print(f'broadcast-api: roomaudio publisher: {e}', file=sys.stderr, flush=True)
+        _room_proc = None
+        time.sleep(3)
+
 
 def _start_loopback_publisher(denv, mode='show'):
     fr = int(denv.get('FRAMERATE', 15))
@@ -816,6 +864,7 @@ def _writer_loop():
         time.sleep(delay)
 
 threading.Thread(target=_writer_loop, daemon=True).start()
+threading.Thread(target=_roomaudio_supervise, daemon=True).start()
 
 # CV Mode pivot: the standalone B&W control is gone (SPEC §1-2). The route
 # stays routable -- older clients on other fleet nodes still call it -- but
@@ -972,7 +1021,7 @@ def talk_get():
 @app.route('/api/talk', methods=['POST'])
 def talk_post():
     val = request.get_data(as_text=True).strip().lower()
-    if val not in ('true', 'false'):
+    if val not in ('true', 'false', 'two-way'):
         abort(400)
     denv = _read_device_env()
     with _talk_lock:
@@ -981,10 +1030,27 @@ def talk_post():
             return 'false', 200
         if _talk_proc is not None and _talk_proc.poll() is None:
             return 'true', 200            # already talking; do not stack players
-        ok, detail = _talk_start_locked(denv)
+        ok, detail = _talk_start_locked(denv, two_way=(val == 'two-way'))
         if not ok:
             return detail, 503
         return 'true', 200
+
+@app.route('/api/reset', methods=['POST'])
+def api_reset():
+    # Full reset: restart the broadcast-api service (which owns the pipeline)
+    # from a DETACHED child that outlives this soon-restarted worker -- it
+    # waits ~1s so the 202 reaches the browser, then execs the restart. Needs a
+    # sudoers -n rule for `systemctl restart broadcast-api`, the same mechanism
+    # the ffmpeg-cam stop already relies on.
+    try:
+        subprocess.Popen(
+            ['/bin/sh', '-c', 'sleep 1; exec sudo -n /bin/systemctl restart broadcast-api'],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}, 500
+    return {'ok': True, 'restarting': True}, 202
+
 
 @app.route('/api/blur-mode', methods=['GET'])
 def blur_mode_get():
