@@ -1171,6 +1171,133 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-scroll">
 
+      <!-- ══ AUDIO ══ -->
+      <div class="panel">
+        <div class="panel-title eng">Audio</div>
+        <div class="split">
+          <div class="vfd">
+            <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost" id="audioRateGhost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
+            <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost" id="audioKbpsGhost">888</span><span class="vlit" id="audioKbps"></span></span></div>
+            <div class="vrow"><span class="vlab">Dir</span><span class="vval"><span class="vghost">8888888888888</span><span class="vlit" id="audioDirVal"></span></span></div>
+            <div class="vind">
+              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
+            </div>
+          </div>
+          <div class="leds">
+            <div class="led" id="ledMic"><span class="bulb"></span><span class="n">Mic</span></div>
+            <div class="led" id="ledMtxA"><span class="bulb"></span><span class="n">MediaMTX</span></div>
+            <div class="led" id="ledRtspA"><span class="bulb"></span><span class="n">RTSP</span></div>
+            <div class="led" id="ledHlsA" title="Listening over buffered HLS"><span class="bulb"></span><span class="n">HLS</span></div>
+            <div class="led" id="ledRtcA" title="Live WebRTC leg (Two-way)"><span class="bulb"></span><span class="n">RTC</span></div>
+          </div>
+        </div>
+
+        <div class="pdiv"></div>
+        <!-- FOUR KEYS, ONE BANK -- the same shape as Show/Hide/CV/Night
+             upstairs, because they are the same KIND of thing: one exclusive
+             selection of what the audio path is doing. Play and Stop are not
+             a transport separate from Talk; Stop means neither direction is
+             open, which is why it wears the guarded red Hide wears and why
+             it belongs in this bank rather than in a row of its own.
+
+             MUTE is deliberately NOT in the bank. It silences what you hear
+             without changing which direction is open, exactly as BLUR
+             modifies a video mode without being one.
+
+             2-Way is present and DISABLED rather than wired to nothing --
+             the precedent FOVEAL set on this node and CALL sets on amira.
+             Talkback here is WHIP OUT only (talkPc carries no inbound track),
+             so two-way needs a second peer connection that does not exist on
+             this branch yet. A key that looks operable and silently does
+             nothing is the worst of the three states it could be in. -->
+        <div class="btnrow">
+          <button class="pbtn" id="audioPlayBtn" onclick="setAudioMode('play')"
+                  title="Listen to the room">Monitor</button>
+          <button class="pbtn guarded" id="audioStopBtn" onclick="setAudioMode('stop')"
+                  title="Neither direction open">Silence</button>
+          <button class="pbtn" id="twoWayBtn" onclick="setAudioMode('two-way')"
+                  title="Two-way audio with the room">Two-way</button>
+        </div>
+
+        <!-- Where the audio bank says what just happened -- the only channel
+             that works on a phone, where a title has no hover. -->
+        <div class="audionote" id="audioNote" aria-live="polite"
+             style="font-size:10px; color:var(--text-dim); min-height:1.2em; text-align:center; padding:2px 0;"></div>
+
+        <!-- The counterpart to VIDEO's FPS trace: what is actually being
+             heard, last 60 seconds. Measured off the audio itself rather than
+             off a bitrate number, which only says bytes are moving. This works
+             here WITHOUT amira's media proxy for one reason: HLS_URL is
+             location.origin + '/hls/...', so the element is same-origin, and
+             WebAudio cannot analyse a cross-origin element. If the HLS source
+             ever moves back to mediamtx's own port, this trace goes flat and
+             that is the reason. -->
+        <div class="modemrow">
+          <div class="fpsglass" id="levelGlass"
+               title="Audio level actually reaching this viewer, last 60 seconds">
+            <canvas id="levelGraph" width="240" height="60"></canvas>
+            <span class="glab glab-l" id="levelLab">LEVEL</span>
+            <span class="glab glab-r">60s</span>
+          </div>
+        </div>
+
+        <!-- Read left to right in the order you reach for it: silence it,
+             then set the level. -->
+        <div class="listen">
+          <button class="modem mute-key" id="muteAudioBtn" onclick="toggleMuteAudio()"
+                  aria-pressed="false" aria-label="Mute room audio"
+                  title="Silence what you hear; the stream keeps running">
+            <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
+          </button>
+          <input type="range" class="vol" id="volSlider" min="0" max="100" step="1"
+                 value="100" oninput="setVolume()" aria-label="Volume"
+                 title="Volume in this browser only">
+        </div>
+
+        <div class="pdiv"></div>
+
+        <div class="modemrow">
+          <!-- The recessed reset, matching VIDEO's: same control, same place
+               in the row, repairing this box's stream instead of the
+               picture's. -->
+          <button class="reset" id="audioReloadBtn" onclick="reloadAudio()"
+                  title="Repair audio -- restarts the room audio stream"
+                  aria-label="Repair audio"><span class="pin"></span></button>
+          <span class="eng rstlab">Reload</span>
+        </div>
+
+      </div>
+
+      <!-- ══ AV ══  Cross-cutting "reach the room" controls. Not audio MODES
+           (they never belonged in the AUDIO bank, which is a mutually-exclusive
+           listen/talk selector), and the eventual home of the video call
+           (camera + self-view PiP) so it stops hijacking the audio Two-way. -->
+      <div class="panel">
+        <div class="panel-title eng">AV</div>
+        <div class="modemrow">
+          <div class="modem-group">
+            <!-- CALL and BUZZ: the same gesture at two volumes -- BUZZ shakes a
+                 viewer already watching, CALL summons one who is not. -->
+            <button class="modem calling" id="callBtn" disabled
+                    title="Call a viewer -- not wired yet">
+              <span class="cap2">CALL</span>
+            </button>
+            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
+                    title="Shake and sound every viewer's screen">
+              <span class="cap2">BUZZ</span>
+            </button>
+          </div>
+        </div>
+        <div class="pinrow">
+          <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
+                  aria-pressed="false" aria-label="Disable buzz"
+                  title="Opt out of buzz entirely -- neither sent nor received">
+            <span class="bulb" id="muteBuzzLamp"></span>
+          </button>
+          <span class="eng rstlab">Disable buzz</span>
+        </div>
+      </div>
+
       <!-- ══ VIDEO ══ -->
       <div class="panel">
         <div class="panel-title eng">Video</div>
@@ -1292,133 +1419,6 @@
             </button>
           </div>
         </div>
-      </div>
-
-      <!-- ══ AV ══  Cross-cutting "reach the room" controls. Not audio MODES
-           (they never belonged in the AUDIO bank, which is a mutually-exclusive
-           listen/talk selector), and the eventual home of the video call
-           (camera + self-view PiP) so it stops hijacking the audio Two-way. -->
-      <div class="panel">
-        <div class="panel-title eng">AV</div>
-        <div class="modemrow">
-          <div class="modem-group">
-            <!-- CALL and BUZZ: the same gesture at two volumes -- BUZZ shakes a
-                 viewer already watching, CALL summons one who is not. -->
-            <button class="modem calling" id="callBtn" disabled
-                    title="Call a viewer -- not wired yet">
-              <span class="cap2">CALL</span>
-            </button>
-            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
-                    title="Shake and sound every viewer's screen">
-              <span class="cap2">BUZZ</span>
-            </button>
-          </div>
-        </div>
-        <div class="pinrow">
-          <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
-                  aria-pressed="false" aria-label="Disable buzz"
-                  title="Opt out of buzz entirely -- neither sent nor received">
-            <span class="bulb" id="muteBuzzLamp"></span>
-          </button>
-          <span class="eng rstlab">Disable buzz</span>
-        </div>
-      </div>
-
-      <!-- ══ AUDIO ══ -->
-      <div class="panel">
-        <div class="panel-title eng">Audio</div>
-        <div class="split">
-          <div class="vfd">
-            <div class="vrow"><span class="vlab">Rate</span><span class="vval"><span class="vghost" id="audioRateGhost">88.8</span><span class="vlit" id="audioRate"></span></span></div>
-            <div class="vrow"><span class="vlab">Bits</span><span class="vval"><span class="vghost" id="audioKbpsGhost">888</span><span class="vlit" id="audioKbps"></span></span></div>
-            <div class="vrow"><span class="vlab">Dir</span><span class="vval"><span class="vghost">8888888888888</span><span class="vlit" id="audioDirVal"></span></span></div>
-            <div class="vind">
-              <i id="indStereo">STEREO</i><i id="indStop">STOP</i><i id="indMute">MUTE</i><i id="indTalk">TALK</i>
-            </div>
-          </div>
-          <div class="leds">
-            <div class="led" id="ledMic"><span class="bulb"></span><span class="n">Mic</span></div>
-            <div class="led" id="ledMtxA"><span class="bulb"></span><span class="n">MediaMTX</span></div>
-            <div class="led" id="ledRtspA"><span class="bulb"></span><span class="n">RTSP</span></div>
-            <div class="led" id="ledHlsA" title="Listening over buffered HLS"><span class="bulb"></span><span class="n">HLS</span></div>
-            <div class="led" id="ledRtcA" title="Live WebRTC leg (Two-way)"><span class="bulb"></span><span class="n">RTC</span></div>
-          </div>
-        </div>
-
-        <div class="pdiv"></div>
-        <!-- FOUR KEYS, ONE BANK -- the same shape as Show/Hide/CV/Night
-             upstairs, because they are the same KIND of thing: one exclusive
-             selection of what the audio path is doing. Play and Stop are not
-             a transport separate from Talk; Stop means neither direction is
-             open, which is why it wears the guarded red Hide wears and why
-             it belongs in this bank rather than in a row of its own.
-
-             MUTE is deliberately NOT in the bank. It silences what you hear
-             without changing which direction is open, exactly as BLUR
-             modifies a video mode without being one.
-
-             2-Way is present and DISABLED rather than wired to nothing --
-             the precedent FOVEAL set on this node and CALL sets on amira.
-             Talkback here is WHIP OUT only (talkPc carries no inbound track),
-             so two-way needs a second peer connection that does not exist on
-             this branch yet. A key that looks operable and silently does
-             nothing is the worst of the three states it could be in. -->
-        <div class="btnrow">
-          <button class="pbtn" id="audioPlayBtn" onclick="setAudioMode('play')"
-                  title="Listen to the room">Monitor</button>
-          <button class="pbtn guarded" id="audioStopBtn" onclick="setAudioMode('stop')"
-                  title="Neither direction open">Silence</button>
-          <button class="pbtn" id="twoWayBtn" onclick="setAudioMode('two-way')"
-                  title="Two-way audio with the room">Two-way</button>
-        </div>
-
-        <!-- Where the audio bank says what just happened -- the only channel
-             that works on a phone, where a title has no hover. -->
-        <div class="audionote" id="audioNote" aria-live="polite"
-             style="font-size:10px; color:var(--text-dim); min-height:1.2em; text-align:center; padding:2px 0;"></div>
-
-        <!-- The counterpart to VIDEO's FPS trace: what is actually being
-             heard, last 60 seconds. Measured off the audio itself rather than
-             off a bitrate number, which only says bytes are moving. This works
-             here WITHOUT amira's media proxy for one reason: HLS_URL is
-             location.origin + '/hls/...', so the element is same-origin, and
-             WebAudio cannot analyse a cross-origin element. If the HLS source
-             ever moves back to mediamtx's own port, this trace goes flat and
-             that is the reason. -->
-        <div class="modemrow">
-          <div class="fpsglass" id="levelGlass"
-               title="Audio level actually reaching this viewer, last 60 seconds">
-            <canvas id="levelGraph" width="240" height="60"></canvas>
-            <span class="glab glab-l" id="levelLab">LEVEL</span>
-            <span class="glab glab-r">60s</span>
-          </div>
-        </div>
-
-        <!-- Read left to right in the order you reach for it: silence it,
-             then set the level. -->
-        <div class="listen">
-          <button class="modem mute-key" id="muteAudioBtn" onclick="toggleMuteAudio()"
-                  aria-pressed="false" aria-label="Mute room audio"
-                  title="Silence what you hear; the stream keeps running">
-            <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
-          </button>
-          <input type="range" class="vol" id="volSlider" min="0" max="100" step="1"
-                 value="100" oninput="setVolume()" aria-label="Volume"
-                 title="Volume in this browser only">
-        </div>
-
-        <div class="pdiv"></div>
-
-        <div class="modemrow">
-          <!-- The recessed reset, matching VIDEO's: same control, same place
-               in the row, repairing this box's stream instead of the
-               picture's. -->
-          <button class="reset" id="audioReloadBtn" onclick="reloadAudio()"
-                  title="Repair audio -- restarts the room audio stream"
-                  aria-label="Repair audio"><span class="pin"></span></button>
-          <span class="eng rstlab">Reload</span>
-        </div>
-
       </div>
 
       <!-- ══ MESSAGE ══ -->
