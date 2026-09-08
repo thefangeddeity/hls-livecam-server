@@ -1294,6 +1294,36 @@
         </div>
       </div>
 
+      <!-- ══ AV ══  Cross-cutting "reach the room" controls. Not audio MODES
+           (they never belonged in the AUDIO bank, which is a mutually-exclusive
+           listen/talk selector), and the eventual home of the video call
+           (camera + self-view PiP) so it stops hijacking the audio Two-way. -->
+      <div class="panel">
+        <div class="panel-title eng">AV</div>
+        <div class="modemrow">
+          <div class="modem-group">
+            <!-- CALL and BUZZ: the same gesture at two volumes -- BUZZ shakes a
+                 viewer already watching, CALL summons one who is not. -->
+            <button class="modem calling" id="callBtn" disabled
+                    title="Call a viewer -- not wired yet">
+              <span class="cap2">CALL</span>
+            </button>
+            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
+                    title="Shake and sound every viewer's screen">
+              <span class="cap2">BUZZ</span>
+            </button>
+          </div>
+        </div>
+        <div class="pinrow">
+          <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
+                  aria-pressed="false" aria-label="Disable buzz"
+                  title="Opt out of buzz entirely -- neither sent nor received">
+            <span class="bulb" id="muteBuzzLamp"></span>
+          </button>
+          <span class="eng rstlab">Disable buzz</span>
+        </div>
+      </div>
+
       <!-- ══ AUDIO ══ -->
       <div class="panel">
         <div class="panel-title eng">Audio</div>
@@ -1387,38 +1417,8 @@
                   title="Repair audio -- restarts the room audio stream"
                   aria-label="Repair audio"><span class="pin"></span></button>
           <span class="eng rstlab">Reload</span>
-          <div class="modem-group">
-            <!-- No lamp on either. Both are momentary acts, not states, so
-                 there is nothing for a lamp to report, and every other
-                 lampless control here omits the socket rather than showing a
-                 dead one. CALL and BUZZ sit together because they are the
-                 same gesture at two volumes: BUZZ shakes a viewer who is
-                 already watching, CALL summons one who is not. -->
-            <button class="modem calling" id="callBtn" disabled
-                    title="Call a viewer -- not wired yet">
-              <span class="cap2">CALL</span>
-            </button>
-            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
-                    title="Shake and sound every viewer's screen">
-              <span class="cap2">BUZZ</span>
-            </button>
-          </div>
         </div>
 
-        <!-- Opting out of the buzz channel entirely: neither heard nor sent.
-             Deliberately NOT called mute. Mute elsewhere on this panel means
-             "what I hear" and never "what I send", and a control governing
-             both directions borrowing that word is how "Mute buzzes" came to
-             describe half of itself -- it silenced incoming alerts while
-             leaving the key that sends them fully live. -->
-        <div class="pinrow">
-          <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
-                  aria-pressed="false" aria-label="Disable buzz"
-                  title="Opt out of buzz entirely -- neither sent nor received">
-            <span class="bulb" id="muteBuzzLamp"></span>
-          </button>
-          <span class="eng rstlab">Disable buzz</span>
-        </div>
       </div>
 
       <!-- ══ MESSAGE ══ -->
