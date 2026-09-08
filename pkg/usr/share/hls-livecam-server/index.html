@@ -1492,7 +1492,7 @@
   var hls = null;
   var recovering = false, retryTimer = null;
   var liveAt = null, uptimeInterval = null;
-  var feedMode = 'hide'; // 'show'|'cv'|'hide'|'night' -- pre-poll default is HIDE so a refresh comes up hidden+silent (privacy); the /api/feed-mode poll then reconciles to the server's real state
+  var feedMode = 'show'; // 'show'|'cv'|'hide'|'night' -- pre-poll placeholder only; video mode is server-authoritative, so the /api/feed-mode poll paints the real persisted mode on load (no forced-Hide flash)
   var fadeInTimer = null;
 
   var protoEl = document.getElementById('protoVal');
@@ -2291,7 +2291,6 @@
   }
   // Ask immediately rather than waiting out the first interval: the page has
   // no picture and no painted controls until this answers.
-  updateFeedButtons();   // paint HIDE (the pre-poll default) immediately, so a refresh shows hidden before the poll answers
   pollFeedMode();
   setInterval(pollFeedMode, 3000);
 
