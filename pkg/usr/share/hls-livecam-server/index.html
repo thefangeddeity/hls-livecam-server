@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HLS Livecam</title>
+<!-- The browser-tab art, same brand mark the header already uses --
+     Tanzania never had a favicon link at all (ron: "you forgot to add the
+     browser tab art... on Tanzania"), so tabs fell back to the browser's
+     blank default. Ariana already links hers; this is the missing half. -->
+<link rel="icon" href="/brand.png">
+<link rel="apple-touch-icon" href="/brand.png">
 <!-- Vendored, not from cdnjs. Fetching the player from the public internet
      makes rendering this page depend on the CLIENT's egress rather than
      this node's, and a phone on a captive or filtered network gets a blank
@@ -306,9 +312,13 @@
   /* Warnings/errors get the viewer's eye, not a corner (ron: "centered
      horizontally too, not just vertically"): breaks #hudError out of the
      grid's row-2 slot (absolute + inset:0 removes it from grid flow
-     entirely) and centers it over the WHOLE picture on both axes, same
-     treatment .hide-overlay's "No signal" already gets. #hudStatus is
-     untouched -- routine state stays put in the grid corner. */
+     entirely) and centers it over the WHOLE picture on both axes.
+     #hudStatus is untouched -- routine state stays put in the grid corner.
+     Dead-center again now that .hide-overlay's "No signal" text is gone
+     (the collision this was dodging no longer exists). PARKED: ron wants a
+     fuller suite of video HUD errors later -- when that lands, revisit
+     whether dead-center still reads well with multiple simultaneous
+     messages. */
   #hudError {
     position: absolute; inset: 0;
     display: flex; align-items: center; justify-content: center;
@@ -360,14 +370,22 @@
      the row-scoped margin that keeps it flush with the compact combrow text. */
   .combrow .combtoggle { margin: 0; }
   .combrow.bypassed .combfreq, .combrow.bypassed .combnote { opacity: .4; text-decoration: line-through; }
-  /* Master off: the whole list dims (no per-row strikethrough -- that reads
-     "removed", this means "held, just not applied right now") so it is
-     obvious at a glance that the per-entry toggles below are moot. */
-  #combList.bypassed-all { opacity: .35; pointer-events: none; }
   .combrow .combfreq { font-family: var(--mono); color: var(--text-dim); white-space: nowrap; }
   .combrow .combnote { flex: 0 1 auto; max-width: 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--emboss-dim); }
   .combrow .combx { flex: 0 0 auto; width: 18px; height: 18px; line-height: 16px; text-align: center; padding: 0;
     border-radius: 4px; background: rgba(0,0,0,.18); border: 1px solid var(--border-strong); color: var(--text-dim); cursor: pointer; }
+  /* Sunk-in subsection (ron: "draw sunk-in textured border around notch
+     filters so it looks like a subsection") -- same recessed language the
+     LED wells already use on this page (--led-well's inset shadow), so the
+     whole notch bank reads as ONE carved-in region under the Reload-style
+     disclosure toggle, not just a loose stack of rows. */
+  #combMenu {
+    margin-top: 2px; padding: 8px;
+    background: rgba(0,0,0,.14);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: var(--led-well);
+  }
   .dark-overlay {
     position: absolute; inset: 0;
     display: none;
@@ -511,7 +529,14 @@
        the picture, not a second typeface for "no signal" specifically. */
     font-family: Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif;
   }
-  .hide-overlay.visible { display: flex; }
+  /* Removed (ron: "get rid of that basic no video message; it's obvious
+     from panel and graphics") -- the VIDEO panel's Hide button/LEDs and the
+     plain dark picture already say this, and the centered text was
+     colliding with #hudError's own centered messages with nowhere clean to
+     put either one. JS still toggles .visible/.lit on hideOverlay (see
+     updateCover et al) -- left alone rather than ripped out, it's just
+     inert now. */
+  .hide-overlay.visible { display: none; }
   .hide-title {
     font-size: 15px; font-weight: 600;
     color: rgba(255,255,255,0.55);
@@ -1614,7 +1639,7 @@
       <div class="crt-beam"></div>
     </div>
     <div class="hide-overlay" id="hideOverlay">
-      <div class="hide-title">No signal</div>
+      <div class="hide-title">No video signal</div>
       <div class="hide-sub">The camera is switched off</div>
     </div>
   </div>
@@ -1721,14 +1746,8 @@
       </div>
       <div class="panel" id="settingsPanel" hidden style="margin-top:6px;">
         <div class="panel-title eng">Settings</div>
-        <div class="pinrow">
-          <button class="pinled" id="themeBtn" onclick="toggleTheme()"
-                  aria-pressed="false" aria-label="Light theme"
-                  title="Toggle the light theme">
-            <span class="bulb" id="themeLamp"></span>
-          </button>
-          <span class="eng rstlab">Light theme</span>
-        </div>
+        <!-- Alphabetized (ron: "alphabetize these settings") -- Disable
+             buzz, Light theme, Mute server speaker/headset in RTC. -->
         <!-- Disable buzz, moved here from the AV panel. -->
         <div class="pinrow">
           <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
@@ -1737,6 +1756,14 @@
             <span class="bulb" id="muteBuzzLamp"></span>
           </button>
           <span class="eng rstlab">Disable buzz</span>
+        </div>
+        <div class="pinrow">
+          <button class="pinled" id="themeBtn" onclick="toggleTheme()"
+                  aria-pressed="false" aria-label="Light theme"
+                  title="Toggle the light theme">
+            <span class="bulb" id="themeLamp"></span>
+          </button>
+          <span class="eng rstlab">Light theme</span>
         </div>
         <!-- TEST-ONLY: mute the server's physical speaker/headset while a
              call is live, without touching anything else in the pipeline
@@ -1779,14 +1806,18 @@
           <span class="eng rstlab">Notch filters (<span id="combCount">0</span>)</span>
         </div>
         <div id="combMenu" hidden>
-          <!-- Master switch for the whole bank -- independent of each entry's
-               own toggle; off silences every notch without touching them. -->
-          <div class="pinrow" id="combMasterRow" style="margin:2px 0 6px;">
-            <button type="button" class="pinled" id="combMasterToggle" onclick="toggleNotchesMaster()"
-                    aria-label="All notch filters">
-              <span class="bulb" id="combMasterLamp"></span>
-            </button>
-            <span class="eng rstlab">All notch filters</span>
+          <!-- Bulk actions, not a sticky master switch (ron: "Logic of 'All
+               notch filters' toggle is wrong... you should still be able to
+               hand-select which ones you want" -- the old master silenced
+               every notch AND blocked editing individual ones while off,
+               via #combList.bypassed-all's pointer-events:none). One-shot:
+               click sets every entry's flag once, then individual toggles
+               below are always live, no state to fight. -->
+          <div class="setrow" style="gap:6px; margin:2px 0 6px;">
+            <button type="button" class="pbtn" style="flex:1 1 0; padding:4px 6px; font-size:10.5px;"
+                    onclick="setAllNotches(true)" title="Turn on all notch filters">Turn on all</button>
+            <button type="button" class="pbtn" style="flex:1 1 0; padding:4px 6px; font-size:10.5px;"
+                    onclick="setAllNotches(false)" title="Turn off all notch filters">Turn off all</button>
           </div>
           <div id="combList"></div>
           <div class="setrow" style="gap:4px;">
@@ -2139,14 +2170,8 @@
   // envelope; renderNotches paints both the master row and the per-entry list
   // from a single response, so nothing ever has to guess or re-fetch.
   function renderNotches(data) {
-    var masterOn = !data || data.enabled !== false;   // absent/true = on
     var list = (data && data.notches) || [];
-    var mlamp = document.getElementById('combMasterLamp');
-    if (mlamp) mlamp.classList.toggle('on', masterOn);
-    var mrow = document.getElementById('combMasterRow');
-    if (mrow) mrow.title = masterOn ? 'All notch filters ON -- click to bypass every one' : 'All notch filters BYPASSED -- click to restore';
     var box = document.getElementById('combList');
-    box && box.classList.toggle('bypassed-all', !masterOn);
     var cnt = document.getElementById('combCount');
     if (cnt) cnt.textContent = list.length;
     if (!box) return;
@@ -2184,15 +2209,14 @@
       .then(function (data) { if (data) renderNotches(data); })
       .catch(function () {});
   }
-  // The MASTER switch (ron: "a global notch filter on-off toggle"): same
-  // PATCH endpoint, but with no ?i -- the server reads that as "the whole
-  // bank", not one entry.
-  function toggleNotchesMaster() {
-    var mlamp = document.getElementById('combMasterLamp');
-    var next = !(mlamp && mlamp.classList.contains('on'));
+  // Bulk action (ron: "Turn on all notch filters" / "Turn off all notch
+  // filters"), replacing the old sticky master switch: same PATCH endpoint,
+  // no ?i -- the server reads that as "every entry", sets them all once,
+  // and holds no state of its own. Individual toggles stay live always.
+  function setAllNotches(enabled) {
     fetch('/api/notches', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: next })
+      body: JSON.stringify({ enabled: enabled })
     })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) { if (data) renderNotches(data); })
@@ -4073,9 +4097,18 @@
       v = _peak(levelAnalyser);
     }
     levelHist.push(v); levelHist.shift();
-    // OUT (your mic): only meaningful while the call is up.
+    // OUT (your mic): only meaningful while the call is up. Reads off
+    // levelOutAnalyser's OWN tap (a clone of the raw mic stream, deliberately
+    // decoupled from the RTC sender track so toggling Mute can never disturb
+    // the connection) -- which keeps reading the room even while muted,
+    // since it taps the mic itself, not what's being sent. That is correct
+    // for diagnosing "is my mic dead vs just muted", but it gave no visual
+    // confirmation that Mute mic actually did anything (ron: "I don't see a
+    // difference in sound graph after pressing Mute mic") -- forced to 0
+    // here, display-layer only, so the underlying tap/architecture is
+    // unchanged for anyone who still wants that distinction later.
     var o = 0;
-    if (levelOutAnalyser && levelCtx && levelCtx.state === 'running') o = _peak(levelOutAnalyser);
+    if (!audioMuted && levelOutAnalyser && levelCtx && levelCtx.state === 'running') o = _peak(levelOutAnalyser);
     levelOutHist.push(o); levelOutHist.shift();
   }
 

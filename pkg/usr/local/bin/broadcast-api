@@ -958,11 +958,6 @@ def _notch_filters(denv):
               file=sys.stderr, flush=True)
         return []
 
-    # Master switch for the whole bank, checked BEFORE any per-item logic --
-    # off means off, full stop, regardless of what any individual entry says.
-    if doc.get('enabled', True) is False:
-        return []
-
     filters = []
     for item in doc.get('notches', []):
         # A notch can be turned OFF without deleting it -- bypassed for
@@ -1608,10 +1603,6 @@ def _read_notches():
     except Exception:
         doc = {}
     doc.setdefault('notches', [])
-    # Master switch for the WHOLE bank (ron: "a global notch filter on-off
-    # toggle"), independent of each entry's own enabled flag -- absent key =
-    # on, so this behaves exactly as before for anyone who never touches it.
-    doc.setdefault('enabled', True)
     return doc
 
 
@@ -1623,11 +1614,14 @@ def _write_notches(doc):
 
 
 def _notches_response(doc):
-    # One envelope for every notch endpoint: the per-entry list AND the
-    # master on/off together, so the client never has to guess which it got
-    # or make a second request to know the master state after a list edit.
-    return _json.dumps({'enabled': doc.get('enabled', True),
-                         'notches': doc.get('notches', [])}), 200, {'Content-Type': 'application/json'}
+    # One envelope for every notch endpoint: the per-entry list, so the
+    # client never has to make a second request to see the result of an
+    # edit. No master on/off any more (ron: "Logic of 'All notch filters'
+    # toggle is wrong... you should still be able to hand-select which ones
+    # you want" -- a sticky master that blocked per-entry editing when off
+    # was the bug). See notches_patch for the bulk on/off actions that
+    # replaced it.
+    return _json.dumps({'notches': doc.get('notches', [])}), 200, {'Content-Type': 'application/json'}
 
 
 @app.route('/api/notches', methods=['GET'])
@@ -1701,12 +1695,15 @@ def notches_patch():
     """Toggle a notch's enabled state, body {"enabled": bool}.
 
     With ?i=N: one entry, bypass it without deleting it (ron: 'each notch
-    could have its toggle'). WITHOUT ?i (ron: 'a global notch filter on-off
-    toggle'): the master switch for the whole bank -- off silences every
-    notch at once, independent of what each one's own flag says, and does
-    not touch any of them, so turning the master back on restores exactly
-    the per-entry state it had before. Applies on the next /cam publisher
-    (re)build, same as add/remove."""
+    could have its toggle'). WITHOUT ?i: a BULK action -- sets every entry
+    to the same enabled value in one request ("Turn on/off all notch
+    filters"). This replaced a sticky master switch that silenced every
+    notch independent of each one's own flag (ron: "Logic of 'All notch
+    filters' toggle is wrong... you should still be able to hand-select
+    which ones you want" -- the master blocked per-entry editing while off,
+    which was the bug). A bulk action has no state of its own to fight: it
+    just sets every entry's flag once and individual toggles stay live
+    always. Applies on the next /cam publisher (re)build, same as add/remove."""
     try:
         body = _json.loads(request.get_data(as_text=True) or '{}')
         enabled = bool(body['enabled'])
@@ -1715,7 +1712,8 @@ def notches_patch():
     doc = _read_notches()
     i_raw = request.args.get('i')
     if i_raw is None:
-        doc['enabled'] = enabled
+        for item in doc['notches']:
+            item['enabled'] = enabled
     else:
         try:
             i = int(i_raw)
