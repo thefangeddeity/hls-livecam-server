@@ -599,11 +599,12 @@ class Tracker:
         return list(self.tracks.values())
 
 
-def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
-    """SHAKey HUD: confidence-weighted, collision-aware target annotations."""
-    out = canvas
-    h, w = out.shape[:2]
-
+def hud_banner_text(tracks):
+    """The banner line's text alone, no drawing -- pulled out of draw_hud so
+    anything that wants the SAME words (a status API, a client-side HUD)
+    reads them from one place instead of re-deriving the count logic and
+    risking it drifting from what actually gets burned into the picture.
+    See cv_processor.CVProcessor.state(), which stashes this every frame."""
     active = [
         tr for tr in tracks
         if tr.state != 'departed'
@@ -627,6 +628,15 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     text = f"DETECTING {count} TARGET{'S' if count != 1 else ''}"
     if candidates:
         text += f" +{candidates} CANDIDATE{'S' if candidates != 1 else ''}"
+    return text
+
+
+def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
+    """SHAKey HUD: confidence-weighted, collision-aware target annotations."""
+    out = canvas
+    h, w = out.shape[:2]
+
+    text = hud_banner_text(tracks)
 
     # Bottom-left telemetry block, two rows, both flush left.
     #

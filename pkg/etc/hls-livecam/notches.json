@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "A comb of bandreject notches applied to the /cam publisher's audio in",
+    "ffmpeg (see broadcast-api _notch_filters), before any encoder or the",
+    "make-up gain. Cleans everything downstream in one place: the HLS Monitor",
+    "and the roomaudio WebRTC leg both derive from /cam.",
+    "",
+    "This is a CURATED DATABASE of troublesome signals, built by ear, not",
+    "auto-generated. Each entry is one narrowband tone a human identified as a",
+    "feedback resonance or whine that is NOT in the room -- it appears only",
+    "while the speaker is driven (speaker -> own mic, set ringing by broadband",
+    "noise). Every notch is a hole carved in the room's own sound, and a room",
+    "monitor exists to hear things, so each records WHY and WHEN.",
+    "",
+    "SEEDED FROM ARIANA (mac-hls-livecam state/notches.json). Ariana's users",
+    "found these by ear; ron has heard similar noise on this Linux box and",
+    "expects the same feedback loops, so they are carried over as a sane start.",
+    "Provisional -- fine-tune later, or from a tuning module. The real fix is",
+    "echo cancellation (PipeWire module-echo-cancel on Linux); when that lands,",
+    "delete the notches rather than keeping them as insurance.",
+    "",
+    "range brackets are the +/-10 Hz the tone was heard to roam. Ordered by",
+    "frequency. Harmonics can be added the same way if they surface -- one",
+    "line each, with their own reason.",
+    "",
+    "SoX vs ffmpeg: Ariana runs SoX (bandreject FREQ WIDTHh); Tanzania runs",
+    "ffmpeg (bandreject=f=CENTRE:t=h:w=WIDTH). Same numbers, different tool."
+  ],
+  "notches": [
+    { "range": [2181, 2201], "note": "feedback resonance, 2191 Hz (seed: ariana)", "added": "2026-09-08" },
+    { "range": [2667, 2687], "note": "feedback resonance, 2677 Hz (seed: ariana)", "added": "2026-09-08" },
+    { "range": [3025, 3045], "note": "feedback resonance, 3035 Hz (seed: ariana)", "added": "2026-09-08" },
+    { "range": [3066, 3086], "note": "feedback resonance, 3076 Hz (seed: ariana)", "added": "2026-09-08" },
+    { "range": [3072, 3092], "note": "feedback resonance, 3082 Hz -- ariana's strongest sighting, 39.6 dB above local spectrum (seed: ariana)", "added": "2026-09-08" },
+    { "range": [3359, 3379], "note": "feedback resonance, 3369 Hz (seed: ariana)", "added": "2026-09-08" },
+    { "range": [3452, 3472], "note": "feedback resonance, 3462 Hz (seed: ariana)", "added": "2026-09-08" }
+  ]
+}

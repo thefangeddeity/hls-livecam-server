@@ -44,9 +44,12 @@ ROOM_PATH       = "roomaudio"  # room audio as Opus for the two-way WHEP receive
 # consequence: this is a privacy control on a camera pointed at a family's
 # living space. A restart previously reset it to 'show', exposing the clear
 # camera even though the operator had deliberately chosen cloak -- observed
-# twice in one run. CV is the safe default when no prior state exists;
-# 'show' is never assumed.
-SAFE_FEED_MODE  = 'cv'
+# twice in one run. HIDE is the safe default when no prior state exists --
+# the darkest fail-safe, no picture at all -- matching the directive that a
+# fresh page load forces Hide (the viewer commands it on load; this covers
+# the window before any viewer has connected, e.g. a restart with no state).
+# 'show' is never assumed; CV would still expose the room's shape.
+SAFE_FEED_MODE  = 'hide'
 VALID_MODES     = ('show', 'cv', 'hide', 'night')
 # CV Mode pivot (SPEC fleet contract): 'cloak' was the pre-pivot name for
 # this mode. Every node in the fleet talks to every other node's endpoints
@@ -59,6 +62,22 @@ def _normalize_mode(val):
 
 MAX_LEN         = 120
 DEVICE_ENV      = '/etc/hls-livecam/device.env'
+# TWO TIERS, deliberately (ron: "one for things you should tweak, one for things
+# it's safe for a user to tweak"). device.env is the ADMIN tier: hardware and
+# plumbing -- devices, loopback, backend, notches, ECHO_DUCK -- root-owned, my
+# domain. The USER-SAFE tier below is the DSP knobs the Settings panel lets a
+# user tweak freely; they live in their OWN group-writable file, NEVER in
+# device.env, so there is one home per key and no override tangle.
+#
+# TALK_GAIN_DB (outbound, room speaker) moved INTO this tier on ron's explicit
+# ask ("allow Settings to control inbound and outbound gain separately") --
+# it was admin-only because it can drive acoustic feedback if cranked too
+# high, so it keeps a TIGHTER clamp than inbound (see audio_settings_post) and
+# the anti-feedback band-limit (TALK_BANDLIMIT, _talk_af) stays admin-only
+# regardless of what gain the user picks -- that safety net does not move.
+AUDIO_TUNABLES_FILE = '/var/lib/hls-livecam/audio.json'
+AUDIO_TUNABLES  = ('AUDIO_HIGHPASS_HZ', 'AUDIO_LOWPASS_HZ', 'AUDIO_GAIN_DB', 'TALK_GAIN_DB',
+                    'TALK_MUTE_SPEAKER')
 LOOPBACK_DEVICE = '/dev/video10'
 def _frame_size():
     """Capture size, from device.env, defaulting to what the fleet uses.
@@ -95,6 +114,7 @@ _pub_proc = None
 # writer loop that owns it.
 _cv_proc = None
 _cv_reset_evt = threading.Event()   # video Reset asks the writer loop to rebuild the CV model (reload ONNX + clear stale MOG2/evidence/scene)
+_audio_reload_evt = threading.Event()  # Settings panel changed a user-safe audio tunable: re-read denv + respawn the /cam publisher so the new -af applies
 # Set the instant SIGTERM arrives. Both supervisor loops respawn any child
 # they find dead, so without this they immediately undo _shutdown()'s work:
 # the replacement ffmpeg then outlives the interpreter, the unit's cgroup
@@ -113,7 +133,30 @@ def _read_device_env():
                     env[k] = v
     except Exception:
         pass
+    # USER-SAFE tunables live in their own file (see AUDIO_TUNABLES). They are
+    # NOT in device.env, so this fills them in rather than overriding -- one
+    # home per key. Only the whitelisted keys are honoured, and only if set.
+    try:
+        with open(AUDIO_TUNABLES_FILE) as f:
+            for k, v in (_json.load(f) or {}).items():
+                if k in AUDIO_TUNABLES and str(v).strip() != '':
+                    env[k] = str(v)
+    except Exception:
+        pass
     return env
+
+
+def _write_audio_tunables(vals):
+    """Persist the user-safe tunables (whitelisted keys only) to their own
+    group-writable file. Returns the dict actually written."""
+    clean = {k: str(vals[k]).strip() for k in AUDIO_TUNABLES if k in vals and str(vals[k]).strip() != ''}
+    # In place, not tmp+rename: /var/lib/hls-livecam is root-owned, so http
+    # cannot create a sibling temp file there -- but the pre-created audio.json
+    # is group-http writable, so http can truncate+rewrite it. Small JSON, one
+    # writer (this endpoint), so the non-atomic write is not a real hazard.
+    with open(AUDIO_TUNABLES_FILE, 'w') as f:
+        _json.dump(clean, f)
+    return clean
 
 # -- Talkback: half duplex, and half duplex on purpose --
 #
@@ -129,16 +172,46 @@ def _read_device_env():
 # open, so every path back to normal is guarded: an explicit stop, a
 # watchdog, and shutdown.
 _talk_proc   = None
+_talk_active = False  # SESSION liveness, for the client-facing GET /api/talk poll --
+                       # deliberately NOT _talk_proc.poll(). _talk_supervise respawns
+                       # the player through transient blips (warm-up, a hiccup) with a
+                       # ~0.5s gap where _talk_proc briefly points at an already-exited
+                       # process; if the client's heartbeat poll landed in that gap
+                       # reading raw process health, it would see 'false' and tear the
+                       # WHOLE session down itself (pollTalk/pollTwoWay -> stopTalk/
+                       # stopTwoWay) over a blip the server was already recovering from
+                       # on its own. That is a strong candidate for "two-way stops after
+                       # a while for no reason": not a fixed timeout, just bad luck on
+                       # which half-second a routine respawn and a poll coincide. This
+                       # flag is the session's own claim -- true from a successful
+                       # start to an explicit stop -- independent of the player process
+                       # dying and being quietly replaced underneath it.
 _room_proc   = None   # persistent roomaudio (Opus) publisher for two-way inbound
+_talk_two_way = False # True while a TWO-WAY session is live. Makes the roomaudio
+                      # return DUCK by the /talk send (echo mitigation): when the
+                      # caller speaks, the room leg -- which carries the speaker
+                      # bleed of the caller's own voice off this node's mic -- is
+                      # compressed down, so the caller does not hear themselves
+                      # loop back loud. See _start_roomaudio; ECHO_DUCK=0 disables.
 _talk_lock   = threading.Lock()
-_talk_timer  = None
-_talk_since  = 0.0
+_talk_since  = 0.0       # session marker: set ONCE at true session start, unchanged
+                          # across respawns, so a heartbeat thread can tell "my
+                          # session" from "a newer one replaced it" by equality.
+_talk_last_seen = 0.0     # last time the client proved the page is alive (a GET
+                          # /api/talk poll, or session start). Heartbeat-driven
+                          # liveness REPLACES the old fixed TALK_MAX_SECONDS cap
+                          # (ron: two-way was cutting out "for no reason" at 120s
+                          # -- that was a one-shot Timer, not a real fault). A
+                          # session now runs indefinitely as long as the client
+                          # keeps polling; it only ends when the page actually
+                          # goes away (tab closed, crashed, network dead) and
+                          # polling stops for TALK_HEARTBEAT_GRACE_S.
 
-def _talk_max_seconds(denv):
+def _talk_heartbeat_grace_s(denv):
     try:
-        return max(10, int(denv.get('TALK_MAX_SECONDS', 120)))
+        return max(8, int(denv.get('TALK_HEARTBEAT_GRACE_S', 20)))
     except Exception:
-        return 120
+        return 20
 
 def _mute_capture(denv):
     """Take the room's microphone to zero, by name, on the configured card.
@@ -170,10 +243,16 @@ def _mute_capture(denv):
 
 def _talk_stop_locked(reason):
     """Caller holds _talk_lock."""
-    global _talk_proc, _talk_timer
-    if _talk_timer is not None:
-        _talk_timer.cancel()
-        _talk_timer = None
+    global _talk_proc, _talk_active, _talk_two_way
+    _talk_active = False
+    # Two-way is over: drop the duck flag and rebuild roomaudio plain, so the
+    # room stops being ducked once nobody is calling.
+    if _talk_two_way:
+        _talk_two_way = False
+        _kick_roomaudio()
+    # No timer to cancel any more -- the heartbeat watchdog thread (see
+    # _talk_heartbeat_watch) notices _talk_proc going None on its own next
+    # tick and exits quietly.
     if _talk_proc is not None:
         try:
             _talk_proc.terminate()
@@ -190,20 +269,91 @@ def _talk_stop_locked(reason):
     # never survive the thing that caused it.
     _stage_capture_level(_read_device_env())
 
+def _loudnorm_filter(denv):
+    """Live-safe loudness normalization for the two-way VOICE legs -- the
+    roomaudio inbound leg and the talkback outbound leg -- with the SAME target
+    so the room the viewer hears and the viewer the room hears land at ONE
+    loudness. The split meter showed the green IN lane (room) towering over
+    amber OUT (mic); this equalizes them. Deliberately NOT applied to /cam: the
+    HLS Monitor stays ambient (see the publisher), Two-way is levelled speech.
+
+    speechnorm, NOT dynaudnorm: dynaudnorm's symmetric gaussian smoothing
+    buffers future frames and adds latency a live two-way cannot spend;
+    speechnorm is per-sample (near-zero latency) and built exactly for
+    levelling speech. p=peak target, e=max expansion (lifts a quiet talker),
+    c=max compression (tames a loud one), t=threshold (below it, don't expand,
+    so room hiss / fan noise between words is not pumped up). AUDIO_LOUDNORM
+    overrides the whole string; AUDIO_LOUDNORM=off disables and falls back to
+    fixed gain."""
+    v = denv.get('AUDIO_LOUDNORM', '').strip()
+    if v.lower() in ('0', 'off', 'false', 'none'):
+        return ''
+    return v or 'speechnorm=p=0.95:e=12.5:c=2:t=0.02'
+
+
+def _talk_af(denv):
+    """-af for the talkback player (what the room SPEAKER plays).
+
+    ANTI-FEEDBACK, because without AEC the node speaker feeds its own nearby mic
+    and the loop rings up into a high-pitched squeal (Larsen). Two levers, both
+    on the speaker leg only so Monitor/capture are untouched:
+      * band-limit to a voice band (default 150-3800 Hz) -- strips the high
+        frequencies the loop resonates at; speech stays intelligible.
+      * TALK_GAIN_DB attenuation (default -15 dB) -- drops the round-trip gain
+        below unity so a ring decays instead of running away.
+    Both tunable in device.env (TALK_BANDLIMIT / TALK_GAIN_DB; set BANDLIMIT=off
+    to disable). The real cure is AEC; this just keeps two-way usable meanwhile."""
+    parts = []
+    norm = _loudnorm_filter(denv)
+    if norm:
+        parts.append(norm)
+    bl = str(denv.get('TALK_BANDLIMIT', 'highpass=f=150,lowpass=f=3800')).strip()
+    if bl and bl.lower() not in ('0', 'off', 'false', 'no'):
+        parts.append(bl)
+    gain = (denv.get('TALK_GAIN_DB', '') or '').strip() or '-15'
+    if gain and gain != '0':
+        parts.append(f'volume={gain}dB')
+    # TEST-ONLY server speaker mute (ron: "for RTC testing purposes, leaves
+    # everything intact, just mutes server speaker"). Applied LAST, after
+    # every other stage, so the whole real pipeline still runs -- capture,
+    # notches, band-limit, gain, roomaudio publish, the RTC signaling itself
+    # -- and only the final physical loudness is zeroed. Lets an operator
+    # verify RTC is actually working end-to-end without the room hearing it.
+    if str(denv.get('TALK_MUTE_SPEAKER', '0')).strip().lower() in ('1', 'on', 'true', 'yes'):
+        parts.append('volume=0')
+    return ','.join(parts) if parts else 'volume=0dB'
+
+
+def _pulse_env(denv):
+    """Env for ffmpeg legs that talk to PulseAudio (the AEC devices live there).
+    The service runs as http and cannot reach ron's per-user pulse socket, so
+    broadcast-api points at a shared anonymous socket (module-native-protocol-
+    unix, socket=PULSE_SERVER). Harmless on non-pulse legs -- they ignore it."""
+    e = dict(os.environ)
+    srv = str(denv.get('PULSE_SERVER', 'unix:/run/hls-aec/pulse.sock')).strip()
+    if srv:
+        e['PULSE_SERVER'] = srv
+    return e
+
+
 def _talk_start_locked(denv, two_way=False):
     """Caller holds _talk_lock. Returns (ok, detail)."""
-    global _talk_proc, _talk_timer, _talk_since
+    global _talk_proc, _talk_active, _talk_since, _talk_last_seen, _talk_two_way
     out = denv.get('TALK_OUTPUT', 'hw:0,0').strip() or 'hw:0,0'
     gain = denv.get('TALK_GAIN_DB', '0').strip() or '0'
-    # Two-way keeps the room mic OPEN so the WHEP roomaudio leg has content
-    # to send back to the caller; feedback is handled by the OS echo-canceller
-    # (pipewire/pulse module-echo-cancel -- a node-config step), not by muting.
-    # One-way TALK still mutes, because it has no listener to protect.
+    # Two-way keeps the room mic OPEN so the WHEP roomaudio leg has content to
+    # send back to the caller; the caller's own bleed off this node's speaker is
+    # ducked out of that return by _start_roomaudio (see _talk_two_way), rather
+    # than by muting. One-way TALK still mutes, because it has no listener.
+    # /talk exists by now (the client WHIP-published it before POSTing here), so
+    # the ducking leg can key off it. Kick roomaudio to rebuild in duck mode.
+    _talk_two_way = bool(two_way)
+    _kick_roomaudio()
     muted = False if two_way else _mute_capture(denv)
     cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error',
            '-rtsp_transport', 'tcp', '-i', f'rtsp://127.0.0.1:8554/{TALK_PATH}',
-           '-af', f'volume={gain}dB', '-ac', '2', '-ar', '48000',
-           '-f', 'alsa', out]
+           '-af', _talk_af(denv), '-ac', '2', '-ar', '48000',
+           '-f', (denv.get('TALK_BACKEND', 'alsa').strip() or 'alsa'), out]
     try:
         # stderr is kept and logged rather than dropped. This player dies for
         # exactly the reasons that matter -- the publisher went away, the
@@ -211,67 +361,88 @@ def _talk_start_locked(denv, two_way=False):
         # dropping its complaint would leave the panel saying "not talking"
         # with nothing anywhere to say why.
         _talk_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.PIPE)
+                                      stderr=subprocess.PIPE, env=_pulse_env(denv))
         threading.Thread(target=_talk_drain, args=(_talk_proc,), daemon=True).start()
     except Exception as e:
         _stage_capture_level(denv)
         return False, f'could not start playback: {e}'
+    _talk_active = True
     _talk_since = time.time()
-    limit = _talk_max_seconds(denv)
+    _talk_last_seen = _talk_since
     # The player can beat the media. A WHIP publisher is accepted by
     # mediamtx before its first packet arrives, so an ffmpeg started the
     # instant the viewer says "talking" can find the path empty, exit, and
     # leave the panel reporting silence for a microphone that is in fact
-    # about to work. So the session supervises its player and restarts it a
-    # bounded number of times -- bounded, because a player that cannot
-    # start five times is not a race, it is a fault, and faults should be
-    # visible rather than retried forever.
+    # about to work. So the session supervises its player and keeps
+    # restarting it for as long as the session is legitimately open (see
+    # _talk_supervise).
     threading.Thread(target=_talk_supervise, args=(_talk_proc,), daemon=True).start()
-    # The watchdog is not a nicety. Without it, a viewer that crashes with
-    # the key down leaves the microphone at zero for as long as the node
-    # runs, and nothing on the panel would say why the room went quiet.
-    _talk_timer = threading.Timer(limit, _talk_watchdog)
-    _talk_timer.daemon = True
-    _talk_timer.start()
+    # The watchdog is not a nicety. Without it, a viewer that crashes with the
+    # key down leaves the microphone at zero for as long as the node runs, and
+    # nothing on the panel would say why the room went quiet. But it must not
+    # be a FIXED cap either -- that cut real two-way calls off "for no reason"
+    # at whatever number was picked. So it is a HEARTBEAT: the client polls
+    # GET /api/talk every few seconds while a session is open (see pollTalk /
+    # pollTwoWay), each poll proves the page is alive, and the session runs
+    # indefinitely as long as those polls keep arriving. It only ends when
+    # they stop for TALK_HEARTBEAT_GRACE_S -- the page actually went away.
+    threading.Thread(target=_talk_heartbeat_watch, args=(_talk_since,), daemon=True).start()
     print(f'broadcast-api: talkback started -> {out} '
-          f'(mic muted: {muted}, limit {limit}s)', flush=True)
+          f'(mic muted: {muted}, heartbeat grace {_talk_heartbeat_grace_s(denv)}s)', flush=True)
     return True, ('playing' if muted
                   else ('two-way: room mic kept open' if two_way
                         else 'playing, mic NOT muted (no AUDIO_MIXER_LEVELS)'))
 
 def _talk_supervise(first):
-    """Restart the player if it dies while the session is still open."""
+    """Keep the talkback player up for as long as the SESSION is legitimately
+    open -- that IS the patience, derived from state, not a plucked retry count.
+
+    Why not a fixed count: a WHIP publisher is accepted by mediamtx before its
+    first packet arrives, so right after the viewer says "talking" the /talk
+    path can be empty and the player exits 404. How long that warm-up takes
+    varies (ICE, network), so any hard count is either too short (gives up
+    before the mic warms up -- the first Two-way came up silent until the
+    operator toggled it) or an arbitrary guess. The meaningful bound is the
+    session's own life: restart while this is still the current session (the
+    viewer has not released -- releasing swaps _talk_proc) AND the session has
+    not outlived its deadline (the same TALK_MAX_SECONDS the watchdog enforces).
+    A crash-loop is bounded by that deadline, and every failure's stderr is
+    logged, so a genuine fault (busy device, bad codec) is visible in the log
+    and as a flat level meter rather than hidden behind a give-up.
+
+    The one constant is the RESPAWN CADENCE -- a short sleep so a fast-404 loop
+    does not hammer ffmpeg. That is a rate limit, not the patience."""
     global _talk_proc
-    proc, tries = first, 0
-    while tries < 5:
+    RESPAWN_CADENCE = 0.5   # seconds between respawns; rate limit, not patience
+    proc = first
+    while True:
         try:
             proc.wait()
         except Exception:
             return
-        time.sleep(0.4)
+        time.sleep(RESPAWN_CADENCE)
         with _talk_lock:
             if _talk_proc is not proc:
                 return                       # session ended, or someone else's player
+            # No deadline check here any more -- the session is legitimately
+            # open for as long as _talk_proc is still this session's (checked
+            # above); _talk_heartbeat_watch is what ends a genuinely abandoned
+            # session, on its own schedule, independent of respawns.
             denv = _read_device_env()
             out = denv.get('TALK_OUTPUT', 'hw:0,0').strip() or 'hw:0,0'
-            gain = denv.get('TALK_GAIN_DB', '0').strip() or '0'
             cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error',
                    '-rtsp_transport', 'tcp', '-i', f'rtsp://127.0.0.1:8554/{TALK_PATH}',
-                   '-af', f'volume={gain}dB', '-ac', '2', '-ar', '48000',
-                   '-f', 'alsa', out]
+                   '-af', _talk_af(denv), '-ac', '2', '-ar', '48000',
+                   '-f', (denv.get('TALK_BACKEND', 'alsa').strip() or 'alsa'), out]
             try:
                 proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.PIPE)
+                                        stderr=subprocess.PIPE, env=_pulse_env(denv))
             except Exception as e:
                 print(f'broadcast-api: talkback player would not restart: {e}', flush=True)
                 return
             _talk_proc = proc
-            tries += 1
-            print(f'broadcast-api: talkback player restarted ({tries}/5)', flush=True)
+            print('broadcast-api: talkback player restarted (warm-up or blip)', flush=True)
             threading.Thread(target=_talk_drain, args=(proc,), daemon=True).start()
-    print('broadcast-api: talkback player failed five times -- giving up', flush=True)
-    with _talk_lock:
-        _talk_stop_locked('player kept exiting')
 
 def _talk_drain(proc):
     try:
@@ -282,9 +453,26 @@ def _talk_drain(proc):
     except Exception:
         pass
 
-def _talk_watchdog():
-    with _talk_lock:
-        _talk_stop_locked('watchdog: time limit reached')
+def _talk_heartbeat_watch(session_marker):
+    """Runs for the life of ONE talk session (one-way or two-way), independent
+    of the player process's own health -- this is what catches a page that
+    vanished (tab closed, crash, network dead) while ffmpeg was still happily
+    running, which _talk_supervise cannot: it only re-checks on process EXIT,
+    and a silently-abandoned session may never make its player exit.
+
+    session_marker is the _talk_since value captured at session start --
+    unchanged across respawns, so equality tells "still my session" apart
+    from "a newer session replaced this one" without a separate counter."""
+    while True:
+        time.sleep(3)
+        with _talk_lock:
+            if _talk_proc is None or _talk_since != session_marker:
+                return                       # session already ended or replaced
+            denv = _read_device_env()
+            grace = _talk_heartbeat_grace_s(denv)
+            if time.time() - _talk_last_seen > grace:
+                _talk_stop_locked(f'heartbeat lost ({grace}s with no client poll)')
+                return
 
 # -- Mode state --
 def _read_feed_mode():
@@ -460,14 +648,87 @@ def _start_roomaudio():
     whole point (HLS would be seconds behind). No aresample=async anywhere --
     it is the helicopter (see the loopback publisher's note).
     """
+    # VOICE leg: this is the two-way inbound the viewer hears, so it gets the
+    # shared speechnorm (same target as the outbound talkback) -- that is what
+    # equalizes the two directions the operator saw diverge on the meter. The
+    # Monitor's /cam stays ambient; the levelling happens HERE, downstream.
+    denv = _read_device_env()
+    norm = _loudnorm_filter(denv)
+    # OFF by default: the first-cut duck keyed off /talk (the caller's OPEN mic)
+    # ducked the room return CONTINUOUSLY -- an open mic always has some signal
+    # -- so the caller lost all return sound. Opt-in only (ECHO_DUCK=1) until
+    # the key is voice-activity-gated so it engages on speech, not mic-presence.
+    duck = (_talk_two_way and
+            str(denv.get('ECHO_DUCK', '0')).strip().lower() in ('1', 'on', 'true', 'yes'))
+    room_out = ['-c:a', 'libopus', '-b:a', '64k', '-ar', '48000', '-ac', '1',
+                '-application', 'voip', '-rtsp_transport', 'tcp', '-f', 'rtsp',
+                f'rtsp://127.0.0.1:8554/{ROOM_PATH}']
+    if duck:
+        # ECHO MITIGATION (self-contained, no PipeWire): sidechaincompress the
+        # room return (main = /cam) keyed by the caller (/talk). When the caller
+        # speaks, /talk is hot -> the room leg is compressed down hard, so the
+        # bleed of the caller's own voice off this node's speaker does not loop
+        # back to them. Both inputs are forced to one format so the filter
+        # accepts them; the room is speechnorm'd first (same voice target as the
+        # plain leg). Not full-duplex AEC -- during double-talk the room is
+        # briefly suppressed -- but it kills the loud loopback. Tuning defaults
+        # are empirical (like the notch widths); AUDIO_LOUDNORM/ECHO_DUCK tune it.
+        _sc = str(denv.get('ECHO_DUCK_ARGS',
+                  'threshold=0.03:ratio=20:attack=5:release=300:makeup=1')).strip()
+        fc = ('[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono'
+              + ((',' + norm) if norm else '') + '[room];'
+              + '[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono[key];'
+              + '[room][key]sidechaincompress=' + _sc + '[out]')
+        return subprocess.Popen(
+            ['ffmpeg', '-hide_banner', '-loglevel', 'error',
+             '-rtsp_transport', 'tcp', '-i', 'rtsp://127.0.0.1:8554/cam',
+             '-rtsp_transport', 'tcp', '-i', f'rtsp://127.0.0.1:8554/{TALK_PATH}',
+             '-filter_complex', fc, '-map', '[out]', *room_out],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Plain (not in a call, or ducking disabled): room passes through, voice
+    # normalized. Never let a duck-build problem cost the caller their inbound
+    # audio -- the supervise falls back here the moment two-way clears.
+    af = ['-af', norm] if norm else []
     return subprocess.Popen(
         ['ffmpeg', '-hide_banner', '-loglevel', 'error',
          '-rtsp_transport', 'tcp', '-i', 'rtsp://127.0.0.1:8554/cam',
-         '-vn', '-c:a', 'libopus', '-b:a', '64k', '-ar', '48000', '-ac', '1',
-         '-application', 'voip',
-         '-rtsp_transport', 'tcp', '-f', 'rtsp',
-         f'rtsp://127.0.0.1:8554/{ROOM_PATH}'],
+         '-vn', *af, *room_out],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _kick_talk():
+    """Nudge the ACTIVE talkback player to rebuild, so a mid-call toggle of a
+    user-safe talk setting (TALK_MUTE_SPEAKER) takes effect immediately rather
+    than on the next call. Same trick as _kick_roomaudio: terminating the
+    current player makes _talk_supervise's wait() return and respawn it,
+    which re-reads _talk_af(denv) fresh. No-op if no call is live -- there is
+    nothing to kick, and the fresh value applies naturally on the next start."""
+    with _talk_lock:
+        p = _talk_proc
+    if p is not None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+
+def _kick_roomaudio():
+    """Nudge the roomaudio supervise to rebuild the leg, so it re-reads
+    _talk_two_way and switches ducking on/off. Best-effort: terminating the
+    current player makes its wait() return and the supervise respawns.
+
+    No-op unless ducking is actually enabled: with ECHO_DUCK off (the default),
+    the roomaudio build never changes across a call edge, so there is nothing
+    to switch and churning the return would only drop it briefly for nothing."""
+    denv = _read_device_env()
+    if str(denv.get('ECHO_DUCK', '0')).strip().lower() not in ('1', 'on', 'true', 'yes'):
+        return
+    p = _room_proc
+    if p is not None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
 
 
 def _roomaudio_supervise():
@@ -486,7 +747,10 @@ def _roomaudio_supervise():
         except Exception as e:
             print(f'broadcast-api: roomaudio publisher: {e}', file=sys.stderr, flush=True)
         _room_proc = None
-        time.sleep(3)
+        # Respawn cadence: also the gap when switching duck<->plain at a call
+        # edge. Short so the switch is quick (the client's WHEP watchdog covers
+        # it); still enough to not busy-loop while /cam is momentarily absent.
+        time.sleep(1)
 
 
 def _start_loopback_publisher(denv, mode='show'):
@@ -503,7 +767,7 @@ def _start_loopback_publisher(denv, mode='show'):
     # retuned without editing code, and committed here so it survives.
     gop_seconds = int(denv.get('GOP_SECONDS', 1))
     a_on, a_dev, a_backend, a_kbps, a_rate, a_ch = _audio_conf(denv)
-    if a_on and mode != 'hide':
+    if a_on:   # audio flows in every mode now (Hide included), so stage always
         _stage_capture_level(denv)
 
     # A/V SYNC: ONE CLOCK, NOT TWO RECONCILED.
@@ -556,33 +820,33 @@ def _start_loopback_publisher(denv, mode='show'):
     maps   = ['-map', '0:v:0']
     acodec = []
     if a_on:
-        if mode == 'hide':
-            # HIDE MUST SILENCE THE ROOM. The video half is already handled
-            # upstream -- the writer loop feeds static into the loopback --
-            # but audio does not pass through that path, so without this the
-            # microphone would keep publishing while the picture said the
-            # camera was off. That is precisely the control-that-lies failure
-            # ariana found on macOS, and it would be worse here: a viewer
-            # looking at snow would still be heard.
-            #
-            # anullsrc rather than a muted mic: the device is not opened at
-            # all, so it is genuinely closed, not merely turned down.
-            inputs += ['-f', 'lavfi',
-                       '-i', f'anullsrc=channel_layout=stereo:sample_rate={a_rate}']
-        else:
-            src = a_dev
-            wall = ['-use_wallclock_as_timestamps', '1']
-            if _single_session(denv):
-                # Far end of the ALSA loopback the capture session feeds.
-                # Same clock as the video by construction, so wallclock
-                # stamping is not only unnecessary here -- it would
-                # reintroduce the system clock as a third opinion.
-                src = denv.get('AUDIO_LOOPBACK_SRC', 'hw:Loopback,1,0').strip()
-                wall = []
-            inputs += [*wall,
-                       '-thread_queue_size', '512',
-                       '-f', a_backend, '-ac', a_ch, '-ar', a_rate,
-                       '-i', src]
+        # Audio is INDEPENDENT of the picture. Hide blanks the VIDEO only --
+        # the writer loop feeds static into the v4l2 loopback -- while the room
+        # audio keeps publishing, so the two-way WHEP return and the HLS
+        # Monitor survive a hidden camera. To stop the room being heard, the
+        # operator uses Silence, a SEPARATE control.
+        #
+        # This deliberately REVERSES the old "Hide silences the room" coupling
+        # (an anullsrc input on hide). That coupling killed the roomaudio leg
+        # the instant the picture was hidden -- and once refresh forces Hide,
+        # that became the default, so every fresh viewer lost the return. The
+        # fleet decision is explicit: Hide must keep the mic live. Honesty is
+        # kept by the AUDIO panel's own state (Monitor/Silence/Two-way + Dir),
+        # which says plainly whether the room is live, rather than by the
+        # picture pretending to speak for the microphone.
+        src = a_dev
+        wall = ['-use_wallclock_as_timestamps', '1']
+        if _single_session(denv):
+            # Far end of the ALSA loopback the capture session feeds. Same
+            # clock as the video by construction, so wallclock stamping is not
+            # only unnecessary here -- it would reintroduce the system clock as
+            # a third opinion.
+            src = denv.get('AUDIO_LOOPBACK_SRC', 'hw:Loopback,1,0').strip()
+            wall = []
+        inputs += [*wall,
+                   '-thread_queue_size', '512',
+                   '-f', a_backend, '-ac', a_ch, '-ar', a_rate,
+                   '-i', src]
         maps += ['-map', '1:a:0']
         # The soundcard is genuinely slow -- it delivers ~59.5s of samples
         # in 60.0s of wall time, about 0.8%, in every timestamp arrangement
@@ -606,21 +870,47 @@ def _start_loopback_publisher(denv, mode='show'):
         #
         #   AUDIO_GAIN_DB  digital make-up gain, default 12
         #   AUDIO_FILTER   raw -af chain if more is wanted; wins if set
+        #   AUDIO_NOTCHES_JSON  comb of bandreject notches (see _notch_filters)
         a_filter = denv.get('AUDIO_FILTER', '').strip()
         if not a_filter:
             try:
                 _g = float(denv.get('AUDIO_GAIN_DB', '12') or 0)
             except ValueError:
                 _g = 0.0
+            # /cam is the MONITOR leg: optimize for AMBIENT, not voice. Notches
+            # (reject the tones) + a fixed make-up gain floor + limiter, and
+            # NO speechnorm: speechnorm's threshold gates a quiet room, which
+            # is right for a voice call but wrong here -- the whole point of a
+            # room monitor is to hear the quiet room. Voice levelling lives on
+            # the two-way legs instead (roomaudio inbound + talkback outbound),
+            # so Monitor stays natural while Two-way is equalized speech.
+            parts = _notch_filters(denv)
+            # General high-pass: the vocal fundamental starts ~85 Hz, so cutting
+            # below 80 Hz removes room rumble, HVAC and handling thumps with no
+            # effect on speech. AUDIO_HIGHPASS_HZ tunes it; 'off' disables.
+            hp = str(denv.get('AUDIO_HIGHPASS_HZ', '80')).strip()
+            if hp and hp.lower() not in ('0', 'off', 'none', 'false'):
+                parts.append(f'highpass=f={hp}')
+            # General low-pass: speech tops out ~8 kHz and all intelligibility
+            # is below ~4 kHz, so cutting above 14 kHz removes ultra-high hiss
+            # and digital fizz without touching the voice or the room's "air".
+            # Applied to /cam, so both Monitor and the roomaudio leg get it.
+            # AUDIO_LOWPASS_HZ tunes it; 'off' disables.
+            lp = str(denv.get('AUDIO_LOWPASS_HZ', '14000')).strip()
+            if lp and lp.lower() not in ('0', 'off', 'none', 'false'):
+                parts.append(f'lowpass=f={lp}')
             if _g:
-                a_filter = f'volume={_g}dB,alimiter=limit=0.95'
+                parts.append(f'volume={_g}dB')
+            parts.append('alimiter=limit=0.95')
+            a_filter = ','.join([p for p in parts if p])
         acodec = ['-c:a', 'aac', '-b:a', a_kbps, '-ar', a_rate, '-ac', a_ch]
-        if a_filter and mode != 'hide':
+        if a_filter:            # notches+gain apply in every mode, hide included
             acodec += ['-af', a_filter]
 
     print(f"broadcast-api: publisher mode={mode} audio="
-          + (f"{a_backend}:{a_dev} @{a_kbps}" if a_on and mode != 'hide'
-             else ('silence (hidden)' if a_on else 'off')), flush=True)
+          + (f"{a_backend}:{a_dev} @{a_kbps}" if a_on
+             else 'off') + (' (picture hidden)' if a_on and mode == 'hide' else ''),
+          flush=True)
 
     return subprocess.Popen([
         'ffmpeg', '-hide_banner', '-loglevel', 'error',
@@ -631,7 +921,71 @@ def _start_loopback_publisher(denv, mode='show'):
         '-b:v', '1500k', '-g', str(max(1, fr * gop_seconds)),
         *acodec, *maps,
         '-rtsp_transport', 'tcp', '-f', 'rtsp', 'rtsp://127.0.0.1:8554/cam'
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_pulse_env(denv))
+
+def _notch_filters(denv):
+    """A comb of ffmpeg bandreject notches, from a curated JSON database of
+    troublesome signals. Ported from ariana's SoX comb (its state/notches.json
+    + _notch_args); the difference here is the OUTPUT -- ffmpeg `-af` syntax
+    (`bandreject=f=..:t=h:w=..`, Hz-wide two-pole Butterworth), not SoX's
+    `bandreject FREQ WIDTHh`. Same discipline: each entry is one narrowband
+    tone a human identified BY EAR -- a feedback resonance or whine that is
+    NOT in the room and appears only while the speaker is driven -- and every
+    notch is a hole carved in the room's own sound, so each records WHY and
+    WHEN beside it. Empirically curated, not auto-generated; a tuning module
+    can come later. Anything malformed is skipped with a warning rather than
+    taking the capture down -- a bad filter list must never cost the room its
+    audio.
+
+      {"notches": [
+         {"range": [3072, 3092], "note": "why", "added": "2026-09-04"},
+         {"center": 8000, "width": 30, "note": "why"}
+      ]}
+
+    A range is the honest form when the artifact wanders; brackets are the
+    +/-10 Hz the tone was heard to roam. Returns a list of ffmpeg filter
+    strings, to be comma-joined into the -af chain BEFORE make-up gain so the
+    tone is gone before anything amplifies it.
+    """
+    path = denv.get('AUDIO_NOTCHES_JSON', '/etc/hls-livecam/notches.json')
+    try:
+        with open(path) as f:
+            doc = _json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        print(f'broadcast-api: notches.json unreadable ({exc}); no notches',
+              file=sys.stderr, flush=True)
+        return []
+
+    # Master switch for the whole bank, checked BEFORE any per-item logic --
+    # off means off, full stop, regardless of what any individual entry says.
+    if doc.get('enabled', True) is False:
+        return []
+
+    filters = []
+    for item in doc.get('notches', []):
+        # A notch can be turned OFF without deleting it -- bypassed for
+        # comparison ("is this even the tone?") without losing the entry's
+        # history. Absent key = enabled, so every pre-existing entry (none of
+        # which have ever carried this field) keeps behaving exactly as before.
+        if item.get('enabled', True) is False:
+            continue
+        try:
+            if 'range' in item:
+                lo, hi = [float(v) for v in item['range']]
+                if hi <= lo:
+                    raise ValueError('range is not ascending')
+                centre, width = (lo + hi) / 2.0, hi - lo
+            else:
+                centre = float(item['center'])
+                width = float(item.get('width', 20))
+            filters.append('bandreject=f=%.1f:t=h:w=%.1f' % (centre, width))
+        except Exception as exc:
+            print(f'broadcast-api: skipping notch {item!r}: {exc}',
+                  file=sys.stderr, flush=True)
+    return filters
+
 
 def _stage_capture_level(denv):
     """Force the ALSA capture gain to a known-sane value.
@@ -733,7 +1087,7 @@ def _start_cam_reader(denv):
     else:
         cmd += ['-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']
     return subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL)
+                            stderr=subprocess.DEVNULL, env=_pulse_env(denv))
 
 def _drain_loop(cam_holder, denv):
     global _cam_frame, _cam_proc
@@ -801,29 +1155,33 @@ def _writer_loop():
                 print(f'broadcast-api: CV reset failed: {e}', flush=True)
             _cv_reset_evt.clear()
 
-        # ffmpeg inputs cannot be changed on a running process, so the only
-        # way to open or close the microphone is to restart the publisher.
-        # Crossing the hide boundary is therefore the ONE mode change that
-        # costs a stream blip -- and it is the one worth paying for, because
-        # the alternative is a hidden camera that is still listening.
-        #
-        # show <-> cv does NOT restart anything: that swap happens in the
-        # frames we write into the loopback, which the publisher never
-        # notices. Only privacy moves the process.
-        audio_on = _audio_conf(denv)[0]
-        if audio_on and (mode == 'hide') != (pub_mode == 'hide'):
-            if _shutting_down.is_set():
-                return
-            pub_holder[0].terminate()
+        # Settings panel changed a user-safe audio tunable (highpass/lowpass/
+        # gain): re-read denv (which now merges audio.json) and respawn the
+        # /cam publisher so the new -af applies. A brief blip on a DELIBERATE
+        # tweak is fine -- unlike a video mode change, which must never blip.
+        if _audio_reload_evt.is_set():
+            _audio_reload_evt.clear()
+            denv = _read_device_env()
             try:
-                pub_holder[0].wait(timeout=3)   # reap; a zombie reads as alive
+                pub_holder[0].terminate(); pub_holder[0].wait(timeout=3)
             except Exception:
-                pub_holder[0].kill()
-            pub_mode = mode
+                try: pub_holder[0].kill()
+                except Exception: pass
             pub_holder[0] = _start_loopback_publisher(denv, pub_mode)
             _pub_proc = pub_holder[0]
             time.sleep(0.5)
 
+        # NO video mode change restarts the publisher any more -- audio must
+        # never blip when the picture changes (A/V fully independent). Every
+        # mode is just different frames written into the v4l2 loopback below:
+        # show/cv/night render the scene, hide renders static; the publisher
+        # reads the loopback continuously and never notices the swap (the same
+        # way show<->cv always worked). The old hide-boundary restart existed
+        # ONLY to close the mic on hide -- but the mic is decoupled now (audio
+        # flows in every mode), so that restart was pure cost: it dropped /cam
+        # audio, which dropped the roomaudio leg, which killed two-way inbound
+        # on a mere CV/Hide toggle. Removed. The publisher is respawned ONLY if
+        # it actually dies:
         if pub_holder[0].poll() is not None:
             if _shutting_down.is_set():
                 return
@@ -929,6 +1287,33 @@ def _port_listening(port):
 # is better evidence than this server's opinion of its own endpoint.
 _PIPELINE_CACHE = {'at': 0.0, 'val': None}
 
+def _alsa_card_present(dev):
+    """Is the ALSA card named/indexed in `dev` actually present right now?
+
+    Powers the Mic lamp's device-absent ERROR (red), distinct from 'disabled'
+    (not configured -> dark) and 'off' (deliberately not running). This is the
+    'no audio device found' the operator needs to see rather than a silent
+    room with a green lamp. `dev` is an AUDIO_DEVICE string like
+    'hw:CARD=PCH,DEV=0' or 'hw:1,0'. If we cannot read /proc/asound/cards we
+    return True: never cry wolf about a device we simply could not inspect.
+    """
+    import re
+    if not dev:
+        return True
+    try:
+        cards = open('/proc/asound/cards').read()
+    except Exception:
+        return True
+    m = re.search(r'CARD=([A-Za-z0-9_]+)', dev)
+    if m:
+        return ('[%s ' % m.group(1)) in cards or ('[%s]' % m.group(1)) in cards \
+               or (' %s ' % m.group(1)) in cards
+    m = re.match(r'hw:(\d+)', dev)
+    if m:
+        return re.search(r'^\s*%s\s' % re.escape(m.group(1)), cards, re.M) is not None
+    return True
+
+
 @app.route('/api/pipeline', methods=['GET'])
 def pipeline_get():
     now = time.time()
@@ -949,8 +1334,14 @@ def pipeline_get():
         'camera':   'off' if mode == 'hide' else ('ok' if fresh else 'down'),
         'mediamtx': 'ok' if _port_listening(8554) else 'down',
         'rtsp':     'ok' if _tcp_established_to(8554) else 'down',
+        # Mic is INDEPENDENT of the picture (Hide no longer closes it -- see
+        # the publisher), so it is NOT 'off' in hide any more: the room is
+        # genuinely live behind a hidden picture, and the lamp must say so.
+        # 'disabled' (not configured) -> dark; 'down' (configured but the ALSA
+        # card is absent, "no audio device found") -> red; else 'ok' -> green.
         'mic':      ('disabled' if not a_on else
-                     'off' if mode == 'hide' else 'ok'),
+                     'down' if not _alsa_card_present(denv.get('AUDIO_DEVICE', '').strip())
+                     else 'ok'),
         'hls':      'pending',
     }
     _PIPELINE_CACHE['at'] = now
@@ -1018,7 +1409,8 @@ def cv_state_get():
     proc = _cv_proc
     if proc is None or _read_feed_mode() != 'cv':
         return _json.dumps({'mog2': False, 'gated': False,
-                            'scene_registered': False, 'scene_stale': False}), 200, \
+                            'scene_registered': False, 'scene_stale': False,
+                            'text': '', 'capability_text': ''}), 200, \
                {'Content-Type': 'application/json'}
     try:
         return _json.dumps(proc.state()), 200, {'Content-Type': 'application/json'}
@@ -1028,8 +1420,16 @@ def cv_state_get():
 
 @app.route('/api/talk', methods=['GET'])
 def talk_get():
+    global _talk_last_seen
     with _talk_lock:
-        live = _talk_proc is not None and _talk_proc.poll() is None
+        # _talk_active, NOT raw process health -- see its declaration for why
+        # (a routine respawn must never read as "session ended" to the client).
+        live = _talk_active
+        if live:
+            # THE HEARTBEAT: this poll (the client hits it every few seconds
+            # while a session is open, see pollTalk/pollTwoWay) is what proves
+            # the page is still alive and keeps an indefinite session running.
+            _talk_last_seen = time.time()
         return ('true' if live else 'false'), 200
 
 @app.route('/api/talk', methods=['POST'])
@@ -1126,6 +1526,211 @@ def cv_reset_post():
     # video Reset button after the standalone model-update button was removed.
     _cv_reset_evt.set()
     return 'ok', 200
+
+
+@app.route('/api/audio-settings', methods=['GET'])
+def audio_settings_get():
+    """The user-safe audio tunables + their current effective values (defaults
+    apply when unset). What the Settings panel reads on load."""
+    denv = _read_device_env()
+    return _json.dumps({
+        'AUDIO_HIGHPASS_HZ': denv.get('AUDIO_HIGHPASS_HZ', '80'),
+        'AUDIO_LOWPASS_HZ':  denv.get('AUDIO_LOWPASS_HZ', '14000'),
+        'AUDIO_GAIN_DB':     denv.get('AUDIO_GAIN_DB', '12'),    # inbound (room -> viewer)
+        'TALK_GAIN_DB':      denv.get('TALK_GAIN_DB', '0'),      # outbound (viewer -> room speaker)
+        'TALK_MUTE_SPEAKER': str(denv.get('TALK_MUTE_SPEAKER', '0')).strip().lower() in ('1', 'on', 'true', 'yes'),
+    }), 200, {'Content-Type': 'application/json'}
+
+
+@app.route('/api/audio-settings', methods=['POST'])
+def audio_settings_post():
+    """Set user-safe tunables. Whitelisted keys only, clamped to sane ranges;
+    garbage is rejected per key rather than taking the audio down. Partial POST
+    keeps the others. Applies on the next writer-loop tick (publisher respawn)."""
+    try:
+        body = _json.loads(request.get_data(as_text=True) or '{}')
+    except Exception:
+        abort(400)
+    def _num(v):
+        try: return float(v)
+        except Exception: return None
+    out = {}
+    hp = _num(body.get('AUDIO_HIGHPASS_HZ'))
+    if hp is not None: out['AUDIO_HIGHPASS_HZ'] = str(int(max(0, min(1000, hp))))
+    lp = _num(body.get('AUDIO_LOWPASS_HZ'))
+    if lp is not None: out['AUDIO_LOWPASS_HZ'] = str(int(max(1000, min(24000, lp))))
+    g = _num(body.get('AUDIO_GAIN_DB'))
+    if g is not None: out['AUDIO_GAIN_DB'] = str(round(max(-20.0, min(30.0, g)), 1))
+    # TALK_GAIN_DB (outbound, the room speaker) gets a TIGHTER clamp than
+    # inbound: too hot here is the acoustic-feedback knob (speaker -> mic
+    # loop). The admin-only band-limit in _talk_af is the other half of that
+    # safety net and is NOT reachable from here regardless of this value.
+    tg = _num(body.get('TALK_GAIN_DB'))
+    if tg is not None: out['TALK_GAIN_DB'] = str(round(max(-20.0, min(12.0, tg)), 1))
+    # TEST-ONLY server speaker mute (ron: "for RTC testing purposes, leaves
+    # everything intact, just mutes server speaker"). A real boolean, not a
+    # clamped number -- present in the body at all (even false) is a real
+    # instruction, distinct from every other field's "absent = leave alone".
+    if 'TALK_MUTE_SPEAKER' in body:
+        out['TALK_MUTE_SPEAKER'] = '1' if bool(body['TALK_MUTE_SPEAKER']) else '0'
+    if not out:
+        abort(400)
+    cur = {}
+    try:
+        with open(AUDIO_TUNABLES_FILE) as f: cur = _json.load(f) or {}
+    except Exception:
+        pass
+    cur.update(out)
+    try:
+        written = _write_audio_tunables(cur)
+    except Exception as e:
+        print(f'broadcast-api: audio-settings write failed: {e}', flush=True)
+        abort(500)
+    # Only respawn the /cam ROOM publisher when a key it actually reads
+    # changed. TALK_GAIN_DB and TALK_MUTE_SPEAKER feed the talk pipeline
+    # (_talk_af) only -- setting _audio_reload_evt for those needlessly
+    # bounced HLS/room audio on every RTC-only tweak (ron: "Make sure none
+    # of your muting wirings killed HLS audio" -- they did; this was why).
+    if any(k in out for k in ('AUDIO_HIGHPASS_HZ', 'AUDIO_LOWPASS_HZ', 'AUDIO_GAIN_DB')):
+        _audio_reload_evt.set()
+    if 'TALK_MUTE_SPEAKER' in out or 'TALK_GAIN_DB' in out:
+        _kick_talk()   # take effect on an ALREADY-live call immediately, not just the next one
+    return _json.dumps(written), 200, {'Content-Type': 'application/json'}
+
+
+NOTCHES_FILE = '/etc/hls-livecam/notches.json'
+
+
+def _read_notches():
+    try:
+        with open(NOTCHES_FILE) as f:
+            doc = _json.load(f) or {}
+    except Exception:
+        doc = {}
+    doc.setdefault('notches', [])
+    # Master switch for the WHOLE bank (ron: "a global notch filter on-off
+    # toggle"), independent of each entry's own enabled flag -- absent key =
+    # on, so this behaves exactly as before for anyone who never touches it.
+    doc.setdefault('enabled', True)
+    return doc
+
+
+def _write_notches(doc):
+    # In place, like audio.json: the file is pre-created group-http-writable
+    # (see the fleet audio memory), so http can truncate+rewrite it directly.
+    with open(NOTCHES_FILE, 'w') as f:
+        _json.dump(doc, f)
+
+
+def _notches_response(doc):
+    # One envelope for every notch endpoint: the per-entry list AND the
+    # master on/off together, so the client never has to guess which it got
+    # or make a second request to know the master state after a list edit.
+    return _json.dumps({'enabled': doc.get('enabled', True),
+                         'notches': doc.get('notches', [])}), 200, {'Content-Type': 'application/json'}
+
+
+@app.route('/api/notches', methods=['GET'])
+def notches_get():
+    """The notch filter database, for the Settings submenu (ron: 'add comb
+    filter to SETTINGS panel... maybe as a submenu'). Exposes the curated
+    feedback-tone list for view/add/remove, on the SAME file broadcast-api
+    already reads at every publisher (re)build."""
+    return _notches_response(_read_notches())
+
+
+@app.route('/api/notches', methods=['POST'])
+def notches_post():
+    """Add one notch: {"center": Hz, "width": Hz, "note": "why"} or
+    {"range": [lo, hi], "note": "why"}. Validated (audible band, ascending
+    range, sane width) rather than trusted -- a bad entry must not take the
+    room's audio down. Applies on the next /cam publisher (re)build."""
+    try:
+        body = _json.loads(request.get_data(as_text=True) or '{}')
+    except Exception:
+        abort(400)
+    note = str(body.get('note', '')).strip()[:200] or 'added from Settings'
+    entry = {'note': note, 'added': time.strftime('%Y-%m-%d')}
+    try:
+        if 'range' in body:
+            lo, hi = float(body['range'][0]), float(body['range'][1])
+            if not (20 <= lo < hi <= 20000):
+                abort(400)
+            entry['range'] = [lo, hi]
+        else:
+            c = float(body['center'])
+            w = float(body.get('width', 20))
+            if not (20 <= c <= 20000) or not (1 <= w <= 500):
+                abort(400)
+            entry['center'], entry['width'] = c, w
+    except (KeyError, TypeError, ValueError, IndexError):
+        abort(400)
+    doc = _read_notches()
+    doc['notches'].append(entry)
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    _audio_reload_evt.set()
+    return _notches_response(doc)
+
+
+@app.route('/api/notches', methods=['DELETE'])
+def notches_delete():
+    """Remove one notch by its index in the current list (?i=N)."""
+    try:
+        i = int(request.args.get('i', ''))
+    except (TypeError, ValueError):
+        abort(400)
+    doc = _read_notches()
+    if not (0 <= i < len(doc['notches'])):
+        abort(404)
+    doc['notches'].pop(i)
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    _audio_reload_evt.set()
+    return _notches_response(doc)
+
+
+@app.route('/api/notches', methods=['PATCH'])
+def notches_patch():
+    """Toggle a notch's enabled state, body {"enabled": bool}.
+
+    With ?i=N: one entry, bypass it without deleting it (ron: 'each notch
+    could have its toggle'). WITHOUT ?i (ron: 'a global notch filter on-off
+    toggle'): the master switch for the whole bank -- off silences every
+    notch at once, independent of what each one's own flag says, and does
+    not touch any of them, so turning the master back on restores exactly
+    the per-entry state it had before. Applies on the next /cam publisher
+    (re)build, same as add/remove."""
+    try:
+        body = _json.loads(request.get_data(as_text=True) or '{}')
+        enabled = bool(body['enabled'])
+    except (TypeError, ValueError, KeyError):
+        abort(400)
+    doc = _read_notches()
+    i_raw = request.args.get('i')
+    if i_raw is None:
+        doc['enabled'] = enabled
+    else:
+        try:
+            i = int(i_raw)
+        except ValueError:
+            abort(400)
+        if not (0 <= i < len(doc['notches'])):
+            abort(404)
+        doc['notches'][i]['enabled'] = enabled
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    _audio_reload_evt.set()
+    return _notches_response(doc)
 
 
 @app.route('/api/scene-reregister', methods=['POST'])

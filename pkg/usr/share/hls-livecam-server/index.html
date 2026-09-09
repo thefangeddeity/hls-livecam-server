@@ -168,6 +168,26 @@
     overflow: hidden;
     box-shadow: var(--shadow);
     min-width: 0; min-height: 0;
+    /* 'size' (both axes), not 'inline-size': the HUD note below sizes and
+       positions itself in cqh (container query height units), which only
+       exist when the container is a SIZE container. .video-wrap's own
+       height comes from flex (the parent, not its content), so this is safe
+       containment, not a collapse risk. */
+    container-type: size;
+    /* No reason to letterbox when there's room to fit exactly (ron: "plenty
+       of wiggle room to adjust display rectangle... no reason to have
+       letterboxing" -- "without prejudice to when video feed size forces
+       letterboxing", i.e. this is a should-fit-exactly default, not a
+       guarantee). --feed-ar is the single feed-dimensions reference (see
+       updateFeedAR in the script) -- when this box can actually BE that
+       ratio it fills exactly and object-fit:contain below has nothing left
+       to letterbox; align-self:center (replacing flex row's default
+       stretch) plus max-height stop it from being forced taller than its
+       ratio allows, so a genuinely cramped window still degrades to
+       object-fit:contain's letterboxing rather than overflowing. */
+    aspect-ratio: var(--feed-ar, 16 / 9);
+    align-self: center;
+    max-height: 100%;
   }
   video {
     width: 100%; height: 100%;
@@ -183,6 +203,171 @@
     background: #000;
     transition: opacity 1s ease;
   }
+  /* ══════════════════════════ HUD FRAME ══════════════════════════
+     An ABSTRACT TEXT BOX drawn over the video, not just a status readout --
+     the grid math below (rows, columns, the two padding units) is general
+     purpose. If a future feature needs to burn ANY text onto the picture
+     (a terminal, a JSON edit box, more HUD lines) this is where it lives:
+     the CSS is here (.video-hud / .hud-line, ending at "/HUD FRAME" below);
+     the one-time JS that measures the font and completes the grid is in
+     the <script>, bracketed the same way (search "HUD FRAME" there too);
+     the markup is #videoHud in the video-wrap, holding one .hud-line div
+     per row (#hudStatus = line 1/state, #hudError = line 2/status; add
+     more the same way). All three pieces share this one name on purpose --
+     grep it to find the whole thing.
+     Status/error notes burned onto the picture as a HUD line instead of the
+     side panel -- keeps the operator's eye on the feed, and works on a phone
+     where the panel note is easy to miss. Top-left, clear of the CV telemetry
+     the pipeline burns bottom-left. Phosphor look; never eats clicks. */
+  /* The occasional status/error line, drawn to the SAME spec as the burned-in
+     CV HUD (cv_detect.draw_hud): FONT_HERSHEY_SIMPLEX -> a thin single-stroke
+     sans (weight 400, not bold), ink (220,220,220), and a 1px black shadow one
+     pixel down-and-right. SIZE follows the fleet e% RULE: cap height = e% of
+     the container's height -- expressed as PURE CSS via cqh (container query
+     height) units, not JS: .video-wrap is a size container (container-type:
+     size above), so 1cqh = 1% of ITS rendered height, always, recomputed by
+     the browser on every layout change with nothing to race or go stale.
+     2.71828 is e (Math.E), 1.64/1.3 are cv_detect.draw_hud's own tx/row
+     offset ratios against cap height, carried over unchanged. --hud-cap-ratio
+     is the one thing CSS cannot measure (a font's cap-height/em ratio) --
+     JS sets it ONCE, with no video-dimension dependency, so no race there
+     either; the value below is only the fallback before that runs. */
+  /* GRID ABSTRACTION (ron: "back-end grid abstraction for display screen,
+     HUD goes one character indented and on row 2"). Two independent
+     mathematical constants, one per axis, per ron -- no font measurement,
+     no eyeballing: row pitch (vertical) is e% (2.71828cqh, the same cap-
+     height constant every other HUD metric on this page already uses);
+     column width (horizontal) is the row pitch scaled by 1/sqrt(2), ron's
+     explicit metric for the width axis. */
+  .video-hud {
+    --hud-cap-ratio: 0.716;
+    --grid-row: 2.71828cqh;
+    --grid-col: calc(var(--grid-row) / 1.41421356);
+    /* TWO separately-named units, a common middle point (ron: "concrete
+       padding" -- the top-edge gap and the between-lines gap render
+       differently at equal raw values because a between-lines gap sums
+       BOTH adjacent lines' own leading while an edge gap only picks up
+       one, so pure equality doesn't read as equal; split the difference
+       rather than chase exact leading math). --grid-col (the sqrt(2)
+       character-width unit) is what "one character over" actually means
+       for the LEFT indent -- distinct from the edge/linespace pair, which
+       is vertical rhythm, not character width. */
+    --edge-padding-unit: calc(var(--grid-row) * 0.225);
+    --linespace-padding-unit: calc(var(--grid-row) * 0.225);
+    /* FOUND IT, ROUND TWO (ron: "right edge has no limit... now do bottom
+       edge"): padding only reserves space for content that FITS -- it is
+       not a wall. Overflowing block content just flows straight through
+       padding-bottom and gets clipped at the outer padding-box edge, past
+       where the margin should be (this is exactly why padding-right didn't
+       hold either, until overflow-wrap made lines stop short of it by
+       WRAPPING, which has no vertical equivalent -- rows don't "wrap" to
+       avoid a bottom line, they just keep stacking). The fix is structural,
+       not cosmetic: inset (not padding) makes THIS box itself genuinely
+       smaller than .video-wrap by one unit on every side, so overflow:hidden
+       clips at a boundary that already has the margin built in -- true on
+       all four sides by construction, nothing left to special-case. */
+    /* z-index 25, not 6: above .crt-stage (22) and .switch-overlay, so the
+       HUD keeps reading through a switch/power-off transition instead of
+       being buried under the snow (ron: "HUD should draw over static
+       too") -- pointer-events:none below means it still never eats the
+       static's own clicks/animation underneath it. */
+    position: absolute; z-index: 25; inset: var(--grid-col); overflow: hidden;
+    display: grid; grid-auto-rows: auto; row-gap: var(--linespace-padding-unit);
+    align-items: start;
+    font-size: calc(2.71828cqh / var(--hud-cap-ratio));
+    /* Back to Arial (ron: "get the friggin font") -- matches the burned-in
+       server HUD's FONT_HERSHEY_SIMPLEX look, which is the point of a HUD
+       that's meant to read as the SAME telemetry as the picture's own.
+       The brief var(--mono) experiment bought exact per-glyph grid width
+       at the cost of that visual match; --grid-col stays a sqrt(2)-derived
+       ABSTRACT unit (never was a literal measured glyph width anyway) so
+       the grid math needs no changes going back. */
+    font-family: Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif;
+    font-weight: 400; letter-spacing: .01em; text-transform: uppercase;
+    white-space: pre-wrap; color: rgb(220,220,220); text-shadow: 1px 1px 0 #000;
+    pointer-events: none; opacity: 0; transition: opacity 150ms ease;
+  }
+  .video-hud.show { opacity: 1; }
+  .hud-line { line-height: normal; }
+  /* CV telemetry, bottom-left (ron: "bottom two lines for CV status") --
+     the same corner the burned-in server HUD occupies, so the client
+     overlay reads as the SAME instrument rather than a second one stuck at
+     the top. Its own flex stack, not a row in .video-hud's top grid: left:0/
+     bottom:0 sit flush with .video-hud's OWN edges, which are already
+     inset by --grid-col on every side (see .video-hud's `inset` rule) --
+     no separate offset needed here. Banner above capability, same order
+     cv_detect.draw_hud stacks them (secondary_y closer to the true bottom
+     edge than primary_y). */
+  #hudCvBlock {
+    position: absolute; left: 0; bottom: 0;
+    display: flex; flex-direction: column;
+    gap: var(--linespace-padding-unit);
+  }
+  /* Warnings/errors get the viewer's eye, not a corner (ron: "centered
+     horizontally too, not just vertically"): breaks #hudError out of the
+     grid's row-2 slot (absolute + inset:0 removes it from grid flow
+     entirely) and centers it over the WHOLE picture on both axes, same
+     treatment .hide-overlay's "No signal" already gets. #hudStatus is
+     untouched -- routine state stays put in the grid corner. */
+  #hudError {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center;
+  }
+  #hudError:empty { display: none; }
+  /* ══════════════════════════ /HUD FRAME ══════════════════════════
+     End of the abstract HUD text-box (see "HUD FRAME" at its top, above).
+     Nothing past this line belongs to it. ═══════════════════════════ */
+  /* User-safe audio tunables in the Settings panel (high-pass / low-pass / gain). */
+  .setgrp { font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--phos-label); padding: 4px 2px 2px; }
+  .setrow { display: flex; align-items: center; gap: 8px; padding: 3px 2px; cursor: text; }
+  .setlab { flex: 1 1 auto; font-size: 11px; color: var(--text-dim); }
+  .setnum { width: 70px; text-align: right; font-family: var(--mono); font-size: 11px; padding: 3px 6px;
+            background: rgba(0,0,0,.18); color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 5px; }
+  .setnum:focus { outline: 2px solid var(--led-on); outline-offset: 1px; }
+  .setunit { width: 22px; font-size: 9px; color: var(--phos-label); text-align: left; }
+  /* In-call control row (AV panel): the genuinely CIRCULAR icon buttons every
+     real video-call product converges on (Zoom/Meet/Discord/Daily) -- distinct
+     from the rectangular .modem/.pbtn keys elsewhere on the panel on purpose,
+     because this row's job is "an in-progress call", a different MODE of the
+     panel, not another instrument reading. Colour carries meaning the same way
+     those products use it: neutral grey = idle toggle, red = the exit action. */
+  .callctl-row { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 10px 0 2px; }
+  .callctl { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; flex: 0 0 auto; border: 1px solid #34343a;
+    background: linear-gradient(180deg,#2c2c30,#232326);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); transition: all .15s; }
+  .callctl svg { width: 18px; height: 18px; stroke: #d6d6da; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .callctl.pressed { background: linear-gradient(180deg,#3a1414,#2a0f0f); border-color: #5a2020; }
+  .callctl.pressed svg { stroke: #ff8a8a; }
+  .callctl.end { background: linear-gradient(180deg,#b3392c,#8f2c22); border-color: #6e211a; }
+  .callctl.end svg { stroke: #fff; }
+  .callctl:disabled { cursor: not-allowed; opacity: .4; }
+  .callctl:disabled.end { background: linear-gradient(180deg,#2c2c30,#232326); border-color: #34343a; }
+  .callctl:disabled.end svg { stroke: #d6d6da; }
+  .setsubtoggle { font-size: 8.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--phos-label); padding: 4px 2px 2px; text-align: left; }
+  /* #combToggle is a PLAIN, UNMODIFIED .reset -- a clone of Reload (ron: "you're
+     thrashing; remove button altogether and clone Reload button, no LED").
+     No dedicated CSS at all: every custom touch tried so far (an led-on
+     green pin, a repositioned-but-still-glowing pin, a corrected-geometry
+     slide) kept reading as a lamp in one way or another. It does not need to
+     LOOK stateful -- the submenu opening below it already says so. */
+  .combrow { display: flex; align-items: center; gap: 8px; padding: 3px 2px; font-size: 10.5px; }
+  /* Bypass, not delete: a pilot light per notch, lit = filtering, dark = held
+     in the list but not applied to the audio right now. .pinled + .bulb now
+     (ron: "exactly like the global pilot button"), not a bespoke flat dot --
+     .pinled/.bulb/.bulb.on already provide the full look, this rule is just
+     the row-scoped margin that keeps it flush with the compact combrow text. */
+  .combrow .combtoggle { margin: 0; }
+  .combrow.bypassed .combfreq, .combrow.bypassed .combnote { opacity: .4; text-decoration: line-through; }
+  /* Master off: the whole list dims (no per-row strikethrough -- that reads
+     "removed", this means "held, just not applied right now") so it is
+     obvious at a glance that the per-entry toggles below are moot. */
+  #combList.bypassed-all { opacity: .35; pointer-events: none; }
+  .combrow .combfreq { font-family: var(--mono); color: var(--text-dim); white-space: nowrap; }
+  .combrow .combnote { flex: 0 1 auto; max-width: 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--emboss-dim); }
+  .combrow .combx { flex: 0 0 auto; width: 18px; height: 18px; line-height: 16px; text-align: center; padding: 0;
+    border-radius: 4px; background: rgba(0,0,0,.18); border: 1px solid var(--border-strong); color: var(--text-dim); cursor: pointer; }
   .dark-overlay {
     position: absolute; inset: 0;
     display: none;
@@ -321,6 +506,10 @@
     gap: 6px;
     pointer-events: none;
     z-index: 15;
+    /* Same family as .video-hud (ron: "for consistency, let's update this
+       font too, so it matches HUD") -- one look for everything drawn over
+       the picture, not a second typeface for "no signal" specifically. */
+    font-family: Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif;
   }
   .hide-overlay.visible { display: flex; }
   .hide-title {
@@ -698,7 +887,13 @@
   .sidebar::-webkit-scrollbar { width: 6px; }
   .sidebar::-webkit-scrollbar-track { background: transparent; }
   .sidebar::-webkit-scrollbar-thumb { background: #2e2e33; border-radius: 3px; }
-  .sidebar-scroll { display: flex; flex-direction: column; gap: 11px; }
+  /* flex:1 + space-between (ron: "display is too low compared to panels,
+     all should share space equally") -- .sidebar is already height:100%,
+     matching .video-wrap's row, but its content used to just sit at the
+     top with all the leftover height dumped in one gap below the last
+     panel. This spreads that same leftover height evenly BETWEEN panels
+     instead, so the last panel's bottom edge lines up with the video's. */
+  .sidebar-scroll { display: flex; flex-direction: column; gap: 11px; flex: 1; justify-content: space-between; }
   .section {
     display: flex; flex-direction: column; gap: 8px;
     background: var(--panel);
@@ -856,7 +1051,14 @@
     body { overflow: auto; height: auto; min-height: 100dvh; }
     header { padding: 10px 16px; }
     .main { flex-direction: column; padding: 0; gap: 0; flex: none; }
-    .video-wrap { flex: none; width: 100%; aspect-ratio: 16 / 9; border-radius: 0; box-shadow: none; }
+    /* order:-1 keeps the video FIRST on mobile now that panels flank it on
+       desktop -- the column stack is video, then the left column's panels
+       (Audio, Video), then the right column's (AV, Message, Settings).
+       position:sticky freezes the feed at the top while the panels scroll
+       underneath it (opaque #000 background from .video-wrap hides them as
+       they slide under its lower edge). */
+    .video-wrap { flex: none; width: 100%; aspect-ratio: var(--feed-ar, 16 / 9); border-radius: 0; box-shadow: none;
+                  order: -1; position: sticky; top: 0; z-index: 5; }
     video { object-fit: contain; }
     .sidebar {
       width: 100%; height: auto; border-radius: 0;
@@ -1109,16 +1311,12 @@
      rather than starting at the panel's left edge where nothing else does.
      Lamp last, so it lands flush right under the final key; Reset keeps the
      opposite order because it is a pinhole in the housing, not a state lamp. */
+  /* Pilot light LEFT, label RIGHT -- the natural DOM order (pinled then
+     rstlab), so every lamp lines up down the panel's left edge regardless of
+     label width. */
   .pinrow { display: flex; align-items: center; gap: 10px; margin: 9px 0 7px;
-    justify-content: flex-end; flex-direction: row; }
-  .pinrow .pinled { order: 2; }
-  .pinrow .rstlab { order: 1;
-    /* A common width so the lamps line up down the panel. .eng inherits a
-       PROPORTIONAL face, so "Disable buzz" and "Lock message" are different
-       pixel widths despite both being twelve characters -- and with the row
-       right-aligned and the lamp leading, that difference would land the two
-       lamps on different axes. */
-    min-width: 74px; text-align: right; }
+    justify-content: flex-start; flex-direction: row; }
+  .pinrow .rstlab { text-align: left; }
 </style>
 </head>
 <body>
@@ -1135,42 +1333,8 @@
 </header>
 
 <div class="main">
-  <div class="video-wrap" id="videoContainer">
-    <video id="video" autoplay muted playsinline webkit-playsinline></video>
-    <!-- Room audio rides its own element on the audio-only rendition, the
-         way ariana does it. The <video> above stays muted permanently: it
-         carries the same AAC muxed in, and unmuting both plays the room
-         twice, slightly out of step. -->
-    <audio id="roomAudio" preload="none"></audio>
-    <!-- The room during a two-way call, over WebRTC (WHEP /roomaudio) rather
-         than buffered HLS. Separate element on purpose: it must be what the
-         browser rendered through the PeerConnection, both for low latency and
-         so the far-end echo canceller has a reference. -->
-    <audio id="twoWayRx" autoplay playsinline hidden></audio>
-    <div class="dark-overlay" id="darkOverlay">
-      <img src="/dark.png" alt="">
-    </div>
-    <button class="fs-btn" onclick="toggleFullscreen()" title="Fullscreen">
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
-      </svg>
-    </button>
-    <div class="switch-overlay" id="switchOverlay">
-      <canvas class="switch-static" id="switchStatic"></canvas>
-    </div>
-    <div class="crt-stage" id="crtStage">
-      <canvas id="crtCanvas"></canvas>
-      <div class="crt-beam"></div>
-    </div>
-    <div class="hide-overlay" id="hideOverlay">
-      <div class="hide-title">No signal</div>
-      <div class="hide-sub">The camera is switched off</div>
-    </div>
-  </div>
-
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar side-left" id="sidebarLeft">
     <div class="sidebar-scroll">
-
       <!-- ══ AUDIO ══ -->
       <div class="panel">
         <div class="panel-title eng">Audio</div>
@@ -1212,17 +1376,19 @@
              nothing is the worst of the three states it could be in. -->
         <div class="btnrow">
           <button class="pbtn" id="audioPlayBtn" onclick="setAudioMode('play')"
-                  title="Listen to the room">Monitor</button>
+                  title="Listen to the room over buffered HLS (a few seconds behind, no mic)">HLS</button>
           <button class="pbtn guarded" id="audioStopBtn" onclick="setAudioMode('stop')"
                   title="Neither direction open">Silence</button>
           <button class="pbtn" id="twoWayBtn" onclick="setAudioMode('two-way')"
-                  title="Two-way audio with the room">Two-way</button>
+                  title="Live two-way audio with the room over WebRTC">RTC</button>
         </div>
 
         <!-- Where the audio bank says what just happened -- the only channel
              that works on a phone, where a title has no hover. -->
+        <!-- Notes now render on the video HUD (see #videoHud / setAudioNote),
+             not here; kept in the DOM but hidden so the panel stays clean. -->
         <div class="audionote" id="audioNote" aria-live="polite"
-             style="font-size:10px; color:var(--text-dim); min-height:1.2em; text-align:center; padding:2px 0;"></div>
+             style="display:none;"></div>
 
         <!-- The counterpart to VIDEO's FPS trace: what is actually being
              heard, last 60 seconds. Measured off the audio itself rather than
@@ -1244,11 +1410,15 @@
         <!-- Read left to right in the order you reach for it: silence it,
              then set the level. -->
         <div class="listen">
-          <button class="modem mute-key" id="muteAudioBtn" onclick="toggleMuteAudio()"
-                  aria-pressed="false" aria-label="Mute room audio"
-                  title="Silence what you hear; the stream keeps running">
-            <span class="bulb" id="muteLamp"></span><span class="cap2">MUTE</span>
-          </button>
+          <!-- Same style/font as HLS/Silence/RTC above (ron), not the round
+               modem key: this is a mode-adjacent TOGGLE (mutes YOUR mic during
+               RTC only), so it reads as a sibling of that row, not a knob.
+               Widened (not the LED removed) to fit the lamp + "Mute mic". -->
+          <button class="pbtn" id="muteAudioBtn" onclick="toggleMuteAudio()"
+                  style="flex: 0 0 auto; white-space: nowrap; padding-left: 12px; padding-right: 14px;"
+                  aria-pressed="false" aria-label="Mute mic"
+                  title="Mute your microphone during RTC (two-way)">
+            <span class="bulb" id="muteLamp"></span>Mute mic</button>
           <input type="range" class="vol" id="volSlider" min="0" max="100" step="1"
                  value="100" oninput="setVolume()" aria-label="Volume"
                  title="Volume in this browser only">
@@ -1266,36 +1436,6 @@
           <span class="eng rstlab">Reload</span>
         </div>
 
-      </div>
-
-      <!-- ══ AV ══  Cross-cutting "reach the room" controls. Not audio MODES
-           (they never belonged in the AUDIO bank, which is a mutually-exclusive
-           listen/talk selector), and the eventual home of the video call
-           (camera + self-view PiP) so it stops hijacking the audio Two-way. -->
-      <div class="panel">
-        <div class="panel-title eng">AV</div>
-        <div class="modemrow">
-          <div class="modem-group">
-            <!-- CALL and BUZZ: the same gesture at two volumes -- BUZZ shakes a
-                 viewer already watching, CALL summons one who is not. -->
-            <button class="modem calling" id="callBtn" disabled
-                    title="Call a viewer -- not wired yet">
-              <span class="cap2">CALL</span>
-            </button>
-            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
-                    title="Shake and sound every viewer's screen">
-              <span class="cap2">BUZZ</span>
-            </button>
-          </div>
-        </div>
-        <div class="pinrow">
-          <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
-                  aria-pressed="false" aria-label="Disable buzz"
-                  title="Opt out of buzz entirely -- neither sent nor received">
-            <span class="bulb" id="muteBuzzLamp"></span>
-          </button>
-          <span class="eng rstlab">Disable buzz</span>
-        </div>
       </div>
 
       <!-- ══ VIDEO ══ -->
@@ -1421,6 +1561,135 @@
         </div>
       </div>
 
+    </div>
+  </aside>
+
+  <div class="video-wrap" id="videoContainer">
+    <video id="video" autoplay muted playsinline webkit-playsinline></video>
+    <!-- HUD FRAME (see the CSS block of the same name): the abstract text
+         box's markup. One .hud-line per row -- #hudStatus is row 1/state
+         (e.g. TWO-WAY LIVE / HLS LIVE). #hudError breaks out of the grid
+         entirely (see its own CSS rule) to center over the whole picture
+         instead of sitting in a row -- warnings get the eye, not a corner.
+         Add more .hud-line rows the same way if a future feature needs
+         them. -->
+    <div class="video-hud" id="videoHud" aria-live="polite">
+      <div class="hud-line" id="hudStatus"></div>
+      <div class="hud-line" id="hudError"></div>
+      <!-- Bottom-left, same corner the burned-in server HUD uses (ron:
+           "bottom two lines for CV status") -- #hudCv/#hudCvCap are the
+           SAME words as that banner/capability text (see cv_processor.
+           state()'s text/capability_text, sourced from
+           cv_detect.hud_banner_text so the two can never drift), shown
+           only while feedMode is 'cv'. Its own mini-stack (#hudCvBlock),
+           not part of the top grid -- see its CSS rule for why. -->
+      <div id="hudCvBlock">
+        <div class="hud-line" id="hudCv"></div>
+        <div class="hud-line" id="hudCvCap"></div>
+      </div>
+    </div>
+    <!-- Room audio rides its own element on the audio-only rendition, the
+         way ariana does it. The <video> above stays muted permanently: it
+         carries the same AAC muxed in, and unmuting both plays the room
+         twice, slightly out of step. -->
+    <audio id="roomAudio" preload="none"></audio>
+    <!-- The room during a two-way call, over WebRTC (WHEP /roomaudio) rather
+         than buffered HLS. Separate element on purpose: it must be what the
+         browser rendered through the PeerConnection, both for low latency and
+         so the far-end echo canceller has a reference. -->
+    <audio id="twoWayRx" autoplay playsinline hidden></audio>
+    <div class="dark-overlay" id="darkOverlay">
+      <img src="/dark.png" alt="">
+    </div>
+    <button class="fs-btn" onclick="toggleFullscreen()" title="Fullscreen">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M1 1h5M1 1v5M17 1h-5M17 1v5M1 17h5M1 17v-5M17 17h-5M17 17v-5" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <div class="switch-overlay" id="switchOverlay">
+      <canvas class="switch-static" id="switchStatic"></canvas>
+    </div>
+    <div class="crt-stage" id="crtStage">
+      <canvas id="crtCanvas"></canvas>
+      <div class="crt-beam"></div>
+    </div>
+    <div class="hide-overlay" id="hideOverlay">
+      <div class="hide-title">No signal</div>
+      <div class="hide-sub">The camera is switched off</div>
+    </div>
+  </div>
+
+  <aside class="sidebar side-right" id="sidebar">
+    <div class="sidebar-scroll">
+      <!-- ══ AV ══  Cross-cutting "reach the room" controls. Not audio MODES
+           (they never belonged in the AUDIO bank, which is a mutually-exclusive
+           listen/talk selector), and the eventual home of the video call
+           (camera + self-view PiP) so it stops hijacking the audio Two-way. -->
+      <div class="panel">
+        <div class="panel-title eng">AV</div>
+        <!-- Same instrument grammar as AUDIO/VIDEO: a phosphor VFD reading the
+             call state, an indicator strip, and the leg lamps -- the sockets
+             the video call (task: wire CALL) lights up. Reads IDLE until a call
+             exists; CALLING while it rings; IN PROGRESS once connected. -->
+        <div class="split">
+          <div class="vfd">
+            <div class="vrow"><span class="vlab">Call</span><span class="vval"><span class="vghost">8888888888888</span><span class="vlit" id="avStateVal">IDLE</span></span></div>
+            <div class="vrow"><span class="vlab">Peer</span><span class="vval"><span class="vghost">88888</span><span class="vlit" id="avPeerVal">&mdash;</span></span></div>
+            <div class="vind">
+              <i id="indRing">RING</i><i id="indCallLive">LIVE</i><i id="indPip">PIP</i>
+            </div>
+          </div>
+          <div class="leds">
+            <div class="led" id="ledCamAv" title="Caller camera leg (wired with CALL)"><span class="bulb"></span><span class="n">Cam</span></div>
+            <div class="led" id="ledMicAv" title="Caller mic leg (wired with CALL)"><span class="bulb"></span><span class="n">Mic</span></div>
+            <div class="led" id="ledRtcAv" title="Video-call WebRTC leg (wired with CALL)"><span class="bulb"></span><span class="n">RTC</span></div>
+          </div>
+        </div>
+
+        <div class="pdiv"></div>
+        <!-- CALL and BUZZ: the same gesture at two volumes -- BUZZ shakes a
+             viewer already watching, CALL summons one who is not. CALL is the
+             future home of the video call (camera + self-view PiP); disabled
+             until wired. Disable-buzz now lives in Settings.
+             .modem-group's margin-left:auto is for sharing a row with a
+             Reload+label pair to its left (see AUDIO's own reload row) --
+             nothing shares THIS row, so that same rule left it hugging the
+             right edge with all the empty space stacked on one side (ron).
+             Centred here instead, scoped to this one instance. -->
+        <div class="modemrow" style="padding: 4px 6px;">
+          <div class="modem-group" style="margin: 0 auto;">
+            <button class="modem calling" id="callBtn" disabled
+                    title="Call the server -- not wired yet">
+              <span class="cap2">CALL SERVER</span>
+            </button>
+            <button class="modem alerting" id="buzzBtn" onclick="sendBuzz()"
+                    title="Shake and sound every viewer's screen">
+              <span class="cap2">BUZZ</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- IN-CALL controls: present and disabled (the FOVEAL/CALL precedent
+             elsewhere on this page), not wired to nothing -- lights up once
+             the video call (task: wire CALL) makes a real call to control. -->
+        <div class="callctl-row">
+          <button type="button" class="callctl" id="callMicBtn" disabled
+                  aria-pressed="false" aria-label="Mute mic (in call)"
+                  title="Mute your mic for this call -- not wired yet">
+            <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/></svg>
+          </button>
+          <button type="button" class="callctl" id="callCamBtn" disabled
+                  aria-pressed="false" aria-label="Camera (in call)"
+                  title="Turn your camera off for this call -- not wired yet">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="M21 8.5 15.5 12 21 15.5Z"/></svg>
+          </button>
+          <button type="button" class="callctl end" id="callEndBtn" disabled
+                  aria-label="End call" title="End the call -- not wired yet">
+            <svg viewBox="0 0 24 24"><path d="M4 14c4-3 12-3 16 0v3a1 1 0 0 1-1.2 1c-1.6-.3-3-.9-4-1.6-.5-.4-.6-1-.3-1.6l.6-1.1c-2-1-4.2-1-6.2 0l.6 1.1c.3.6.2 1.2-.3 1.6-1 .7-2.4 1.3-4 1.6A1 1 0 0 1 4 17Z"/></svg>
+          </button>
+        </div>
+      </div>
+
       <!-- ══ MESSAGE ══ -->
       <div class="panel">
         <div class="panel-title eng">Message <span id="msgHint" class="msg-hint"></span></div>
@@ -1440,8 +1709,93 @@
         </div>
       </div>
 
-      <div class="modemrow" style="padding:0 2px">
-        <button class="pbtn" id="themeBtn" onclick="toggleTheme()">Light theme</button>
+      <!-- Reset (left) + Settings (right) share this row. Settings opens the
+           panel below, which holds the controls moved off the main banks. -->
+      <div class="modemrow" style="padding:0 2px; display:flex; gap:8px;">
+        <button type="button" class="pbtn guarded" id="globalResetBtn"
+                style="flex:1 1 0; padding:6px 10px;"
+                title="Full reset: restarts the server. Briefly drops the stream for every viewer.">Reset</button>
+        <button type="button" class="pbtn" id="settingsBtn" onclick="toggleSettings()"
+                style="flex:1 1 0; padding:6px 10px;" aria-expanded="false"
+                aria-controls="settingsPanel" title="Theme, buzz and audio settings">Settings</button>
+      </div>
+      <div class="panel" id="settingsPanel" hidden style="margin-top:6px;">
+        <div class="panel-title eng">Settings</div>
+        <div class="pinrow">
+          <button class="pinled" id="themeBtn" onclick="toggleTheme()"
+                  aria-pressed="false" aria-label="Light theme"
+                  title="Toggle the light theme">
+            <span class="bulb" id="themeLamp"></span>
+          </button>
+          <span class="eng rstlab">Light theme</span>
+        </div>
+        <!-- Disable buzz, moved here from the AV panel. -->
+        <div class="pinrow">
+          <button class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
+                  aria-pressed="false" aria-label="Disable buzz"
+                  title="Opt out of buzz entirely -- neither sent nor received">
+            <span class="bulb" id="muteBuzzLamp"></span>
+          </button>
+          <span class="eng rstlab">Disable buzz</span>
+        </div>
+        <!-- TEST-ONLY: mute the server's physical speaker/headset while a
+             call is live, without touching anything else in the pipeline
+             (mic capture, roomaudio, RTC signaling all keep running) -- lets
+             an operator verify RTC end-to-end without the room hearing it.
+             Grouped with the other simple toggles (Disable buzz), not inside
+             the Audio filters block below -- that block is one exclusive
+             unit of numeric filter controls, this is a plain on/off pilot. -->
+        <div class="pinrow">
+          <button type="button" class="pinled" id="muteSpeakerBtn" onclick="toggleTalkMuteSpeaker()"
+                  aria-pressed="false" aria-label="Mute server speaker/headset in RTC"
+                  title="Mute the server's physical speaker/headset during RTC -- testing only, mic/roomaudio/signaling stay live">
+            <span class="bulb" id="muteSpeakerLamp"></span>
+          </button>
+          <span class="eng rstlab">Mute server speaker/headset in RTC</span>
+        </div>
+        <div class="pdiv"></div>
+        <!-- USER-SAFE audio tunables (server-side, one home per key in
+             audio.json; see /api/audio-settings). Risky knobs (talk gain,
+             notches, echo) stay admin-only in device.env. Everything from
+             here to the notch-filter submenu below is ONE exclusive block --
+             don't interleave unrelated toggles into it. -->
+        <div class="setgrp eng">Audio filters</div>
+        <label class="setrow"><span class="setlab eng">High-pass</span><input type="number" id="setHighpass" class="setnum" min="0" max="1000" step="10" inputmode="numeric"><span class="setunit eng">Hz</span></label>
+        <label class="setrow"><span class="setlab eng">Low-pass</span><input type="number" id="setLowpass" class="setnum" min="1000" max="24000" step="500" inputmode="numeric"><span class="setunit eng">Hz</span></label>
+        <label class="setrow" title="Room -> viewer (HLS + RTC listen)"><span class="setlab eng">Inbound gain</span><input type="number" id="setGainIn" class="setnum" min="-20" max="30" step="1" inputmode="numeric"><span class="setunit eng">dB</span></label>
+        <label class="setrow" title="Viewer -> room speaker (RTC talk)"><span class="setlab eng">Outbound gain</span><input type="number" id="setGainOut" class="setnum" min="-20" max="12" step="1" inputmode="numeric"><span class="setunit eng">dB</span></label>
+        <!-- Notch filters submenu: the curated notch database (see notches.json /
+             /api/notches), collapsed by default -- this is a deeper tool than
+             the filters above, for the specific whine/resonance case. Labelled
+             "Notch filters", not "comb filter" -- a comb filter is a different,
+             periodic-interference effect (flanger/phaser territory); this is a
+             bank of individually-placed notch (bandreject) filters, each one a
+             specific tone somebody heard. A/K/A "comb" only in the loose sense
+             that a chart of narrow gaps looks comb-shaped. The toggle itself is
+             a plain, unmodified .reset (see its CSS comment for why). -->
+        <div class="modemrow" style="padding-bottom: 8px;">
+          <button type="button" class="reset" id="combToggle" onclick="toggleCombMenu()"
+                  aria-expanded="false" aria-controls="combMenu" aria-label="Notch filters"><span class="pin"></span></button>
+          <span class="eng rstlab">Notch filters (<span id="combCount">0</span>)</span>
+        </div>
+        <div id="combMenu" hidden>
+          <!-- Master switch for the whole bank -- independent of each entry's
+               own toggle; off silences every notch without touching them. -->
+          <div class="pinrow" id="combMasterRow" style="margin:2px 0 6px;">
+            <button type="button" class="pinled" id="combMasterToggle" onclick="toggleNotchesMaster()"
+                    aria-label="All notch filters">
+              <span class="bulb" id="combMasterLamp"></span>
+            </button>
+            <span class="eng rstlab">All notch filters</span>
+          </div>
+          <div id="combList"></div>
+          <div class="setrow" style="gap:4px;">
+            <input type="number" id="combFreq" class="setnum" placeholder="Hz" style="width:56px;" inputmode="numeric">
+            <input type="number" id="combWidth" class="setnum" placeholder="&plusmn;Hz" style="width:48px;" value="10" min="1" title="How far the tone roams either side of the centre frequency (matches the seeded entries' own +/-10 Hz convention)" inputmode="numeric">
+            <input type="text" id="combNote" placeholder="why (e.g. speaker whine)" style="flex:1 1 auto; min-width:0; font-size:10.5px; background:rgba(0,0,0,.18); color:var(--text-dim); border:1px solid var(--border-strong); border-radius:5px; padding:3px 6px;">
+            <button type="button" class="pbtn" style="flex:0 0 auto; padding:4px 8px; font-size:10.5px;" onclick="addNotch()">Add</button>
+          </div>
+        </div>
       </div>
       <!-- No separate Reconnect button (matches Ariana): the pinhole Reload and the
            reconnecting LIVE-pill cover a dropped stream; global Reset restarts the server. -->
@@ -1450,14 +1804,8 @@
   </aside>
 </div>
 
-<!-- Global reset. The pinhole keys above are RELOADs (re-pull the streams in
-     THIS browser). This restarts the whole server via /api/reset, which briefly
-     drops the feed for every viewer, so it is guarded by a confirm press. -->
-<div style="display:flex; justify-content:center; margin:8px 0 2px;">
-  <button type="button" class="pbtn guarded" id="globalResetBtn"
-          style="flex:0 0 auto; padding:6px 22px;"
-          title="Full reset: restarts the server. Briefly drops the stream for every viewer.">Reset</button>
-</div>
+<!-- Global Reset moved into the Reset+Settings row inside the sidebar; it is
+     still a guarded two-press control (same id, same /api/reset handler). -->
 <footer class="page-foot">
   <span><span id="prodName">HLS Livecam Server</span> by The Fanged Deity &mdash; free software under the
     <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>
@@ -1473,6 +1821,23 @@
   // blank on exactly the address people need to use to talk.
   var HLS_URL = window.location.origin + '/hls/cam/index.m3u8';
   var video        = document.getElementById('video');
+  // SINGLE feed-dimensions reference (ron: "one single 'feed dimensions'
+  // reference that all these anchor to, provided by cam or empirically").
+  // Anything that needs the camera's real aspect ratio -- the static-noise
+  // texture below, and anything future that needs to reason about the
+  // letterboxed picture rect rather than the outer wrap box -- reads THIS,
+  // not its own separate guess. Empirical: the browser's own decoded video
+  // dimensions, the same number the RES readout already trusts (see
+  // updateFeedAR's call site in paintLamps). Starts at the fleet default
+  // 16:9 until the first frame's metadata is in, same as the static
+  // texture's own old hardcoded fallback.
+  var feedAR = 16 / 9;
+  function updateFeedAR() {
+    if (video.videoWidth && video.videoHeight) {
+      feedAR = video.videoWidth / video.videoHeight;
+      if (videoWrap) videoWrap.style.setProperty('--feed-ar', feedAR);
+    }
+  }
   var liveInd      = document.getElementById('liveIndicator');
   var darkOverlay  = document.getElementById('darkOverlay');
   var showBtn      = document.getElementById('showBtn');
@@ -1670,16 +2035,200 @@
     if (lightTheme) document.documentElement.setAttribute('data-theme', 'light');
     else document.documentElement.removeAttribute('data-theme');
     var tb = document.getElementById('themeBtn');
-    if (tb) {
-      tb.className = 'pbtn' + (lightTheme ? ' pressed' : '');
-      tb.textContent = lightTheme ? 'Dark theme' : 'Light theme';
-    }
+    if (tb) { tb.classList.toggle('pressed', lightTheme); tb.setAttribute('aria-pressed', lightTheme ? 'true' : 'false'); }
+    var lamp = document.getElementById('themeLamp');
+    if (lamp) lamp.classList.toggle('on', lightTheme);   // pilot light on = light theme active
   }
   function toggleTheme() {
     lightTheme = !lightTheme;
     localStorage.setItem('lightTheme', lightTheme);
     applyTheme();
   }
+  // Settings panel: hidden until its button is pressed (shares the Reset row).
+  function toggleSettings() {
+    var p = document.getElementById('settingsPanel');
+    var b = document.getElementById('settingsBtn');
+    if (!p) return;
+    var open = p.hasAttribute('hidden');
+    if (open) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
+    if (b) { b.classList.toggle('pressed', open); b.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+  }
+
+  // User-safe audio tunables: load current values, POST (debounced) on change.
+  // The server clamps and echoes back the accepted values, so the field snaps
+  // to the allowed bound if you overshoot.
+  var _talkMuteSpeaker = false;
+  function _applyAudioSettings(s) {
+    if (!s) return;
+    var m = { setHighpass: 'AUDIO_HIGHPASS_HZ', setLowpass: 'AUDIO_LOWPASS_HZ',
+              setGainIn: 'AUDIO_GAIN_DB', setGainOut: 'TALK_GAIN_DB' };
+    for (var id in m) { var el = document.getElementById(id); if (el && s[m[id]] != null) el.value = s[m[id]]; }
+    // Loose truthy check: GET returns a real boolean, POST echoes back the
+    // stored '1'/'0' string -- both must be accepted without caring which.
+    if (s.TALK_MUTE_SPEAKER != null) {
+      _talkMuteSpeaker = (s.TALK_MUTE_SPEAKER === true || s.TALK_MUTE_SPEAKER === '1');
+      if (typeof paintMute === 'function') paintMute();
+    }
+  }
+  function toggleTalkMuteSpeaker() {
+    var next = !_talkMuteSpeaker;
+    fetch('/api/audio-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ TALK_MUTE_SPEAKER: next })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(_applyAudioSettings).catch(function () {});
+  }
+  function loadAudioSettings() {
+    fetch('/api/audio-settings', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(_applyAudioSettings).catch(function () {});
+  }
+  var _audioSetTimer = null;
+  function postAudioSetting(key, val) {
+    clearTimeout(_audioSetTimer);
+    _audioSetTimer = setTimeout(function () {
+      var body = {}; body[key] = val;
+      fetch('/api/audio-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(_applyAudioSettings).catch(function () {});
+    }, 400);
+  }
+  (function () {
+    [['setHighpass', 'AUDIO_HIGHPASS_HZ'], ['setLowpass', 'AUDIO_LOWPASS_HZ'],
+     ['setGainIn', 'AUDIO_GAIN_DB'], ['setGainOut', 'TALK_GAIN_DB']].forEach(function (p) {
+      var el = document.getElementById(p[0]);
+      if (el) el.addEventListener('change', function () { postAudioSetting(p[1], el.value); });
+    });
+    loadAudioSettings();
+  })();
+
+  // Comb filter submenu: the curated notch database, view/add/remove. The
+  // count loads immediately (cheap) so the collapsed toggle reads correctly
+  // without opening it; the list itself only needs to exist once expanded.
+  function toggleCombMenu() {
+    var menu = document.getElementById('combMenu');
+    var btn = document.getElementById('combToggle');
+    if (!menu) return;
+    var open = menu.hasAttribute('hidden');
+    if (open) menu.removeAttribute('hidden'); else menu.setAttribute('hidden', '');
+    if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  function _notchFreqLabel(n) {
+    if (n.range) {
+      var lo = n.range[0], hi = n.range[1];
+      return Math.round((lo + hi) / 2) + 'Hz ±' + Math.round((hi - lo) / 2);
+    }
+    return Math.round(n.center) + 'Hz ±' + Math.round(n.width || 20);
+  }
+  // The seeded notches' notes carry developer/provenance detail (measurement
+  // numbers, "(seed: ariana)") that means nothing to someone just scanning the
+  // list -- ron: "user doesn't need to see all that extra info". Strip it for
+  // the visible label; the untouched original stays in the row's title
+  // tooltip for whoever DOES want it.
+  function _notchNoteLabel(note) {
+    var s = String(note || '');
+    s = s.split(' (seed')[0];
+    s = s.split(' -- ')[0];
+    s = s.replace(/\s*\d+(\.\d+)?\s*Hz\b/gi, '');
+    s = s.replace(/[,\s]+$/, '').trim();
+    if (s.length > 34) s = s.slice(0, 33) + '…';
+    return s;
+  }
+  // Every notch endpoint returns {enabled: <master>, notches: [...]} in one
+  // envelope; renderNotches paints both the master row and the per-entry list
+  // from a single response, so nothing ever has to guess or re-fetch.
+  function renderNotches(data) {
+    var masterOn = !data || data.enabled !== false;   // absent/true = on
+    var list = (data && data.notches) || [];
+    var mlamp = document.getElementById('combMasterLamp');
+    if (mlamp) mlamp.classList.toggle('on', masterOn);
+    var mrow = document.getElementById('combMasterRow');
+    if (mrow) mrow.title = masterOn ? 'All notch filters ON -- click to bypass every one' : 'All notch filters BYPASSED -- click to restore';
+    var box = document.getElementById('combList');
+    box && box.classList.toggle('bypassed-all', !masterOn);
+    var cnt = document.getElementById('combCount');
+    if (cnt) cnt.textContent = list.length;
+    if (!box) return;
+    box.innerHTML = '';
+    list.forEach(function (n, i) {
+      var enabled = n.enabled !== false;   // absent key = enabled (matches the server default)
+      var row = document.createElement('div'); row.className = 'combrow' + (enabled ? '' : ' bypassed');
+      // Exactly the master pilot light's own markup (ron: "individual notch
+      // filter pilot switches need to be exactly like the global pilot
+      // button") -- .pinled wrapping a .bulb, not the flat dot this used to
+      // be. The .on class lives on the BULB, matching every other lamp.
+      var t = document.createElement('button'); t.type = 'button';
+      t.className = 'pinled combtoggle';
+      t.title = enabled ? 'Filtering -- click to bypass' : 'Bypassed -- click to filter again';
+      t.onclick = function () { toggleNotchEnabled(i, !enabled); };
+      var tb = document.createElement('span'); tb.className = 'bulb' + (enabled ? ' on' : '');
+      t.appendChild(tb);
+      var f = document.createElement('span'); f.className = 'combfreq'; f.textContent = _notchFreqLabel(n);
+      var note = document.createElement('span'); note.className = 'combnote';
+      note.title = n.note || '';                        // full text on hover
+      note.textContent = _notchNoteLabel(n.note);        // trimmed for the list
+      var x = document.createElement('button'); x.type = 'button'; x.className = 'combx';
+      x.textContent = '×'; x.title = 'Remove this notch';
+      x.onclick = function () { removeNotch(i); };
+      row.appendChild(t); row.appendChild(f); row.appendChild(note); row.appendChild(x);
+      box.appendChild(row);
+    });
+  }
+  function toggleNotchEnabled(i, enabled) {
+    fetch('/api/notches?i=' + encodeURIComponent(i), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+  // The MASTER switch (ron: "a global notch filter on-off toggle"): same
+  // PATCH endpoint, but with no ?i -- the server reads that as "the whole
+  // bank", not one entry.
+  function toggleNotchesMaster() {
+    var mlamp = document.getElementById('combMasterLamp');
+    var next = !(mlamp && mlamp.classList.contains('on'));
+    fetch('/api/notches', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: next })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+  function loadNotches() {
+    fetch('/api/notches', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(renderNotches).catch(function () {});
+  }
+  function addNotch() {
+    var f = document.getElementById('combFreq'), w = document.getElementById('combWidth'), n = document.getElementById('combNote');
+    var center = parseFloat(f && f.value), plusMinus = parseFloat(w && w.value) || 10;
+    if (!center || center < 20 || center > 20000) { if (f) f.focus(); return; }
+    // A true +/- range (ron), matching the seeded entries' own convention
+    // exactly -- "brackets are +/-10 Hz" there means HALF the stored range,
+    // not the raw ffmpeg bandwidth. Sending {center, width} used to hand the
+    // "+/-Hz" field straight to ffmpeg's w= (a full bandwidth, not a radius),
+    // so typing "20" meaning +/-20 Hz actually notched only 20 Hz wide, half
+    // what the label promised. {range: [lo, hi]} is unambiguous either way.
+    fetch('/api/notches', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ range: [center - plusMinus, center + plusMinus], note: (n && n.value) || '' })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) { renderNotches(data); if (f) f.value = ''; if (n) n.value = ''; } })
+      .catch(function () {});
+  }
+  function removeNotch(i) {
+    fetch('/api/notches?i=' + encodeURIComponent(i), { method: 'DELETE' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+  loadNotches();
+
   applyTheme();
 
   function sendBuzz() {
@@ -1742,7 +2291,15 @@
   //
   // Windows covers a feed switch with this rather than a countdown -- there
   // is no timer to read, so nothing has to predict how long the switch takes.
-  var NOISE_W = 224, NOISE_H = 126;
+  // Height derives from feedAR (the single feed-dimensions reference, see
+  // its declaration above) instead of a hardcoded 126 that happened to
+  // agree with today's 16:9 camera -- ron: "no watchdog to tailor static
+  // ... to size of actual feed... one single 'feed dimensions' reference
+  // that all these anchor to". Width stays a fixed pixel budget; recomputed
+  // every draw (cheap -- the whole texture regenerates every frame anyway)
+  // so a genuine feedAR change (a different camera, a crop) is never stale.
+  var NOISE_W = 224;
+  function noiseH() { return Math.max(1, Math.round(NOISE_W / feedAR)); }
 
   function drawStatic() { drawStaticInto(switchStatic); }
 
@@ -1750,7 +2307,8 @@
   // CRT power-off needs exactly one frame of it to collapse.
   function drawStaticInto(target) {
     var ctx = target.getContext('2d');
-    if (target.width !== NOISE_W) {
+    var NOISE_H = noiseH();
+    if (target.width !== NOISE_W || target.height !== NOISE_H) {
       target.width = NOISE_W; target.height = NOISE_H;
     }
     var img = ctx.createImageData(NOISE_W, NOISE_H);
@@ -2013,6 +2571,7 @@
     set('ledFov',     cvState.gated ? 'ok' : '');
     set('ledScene2d', sceneState === 'registered' ? 'ok'
                     : sceneState === 'stale'      ? 'down' : '');
+    if (typeof setHudCv === 'function') setHudCv(cvState.text, cvState.capability_text);
   }
 
   function paintLamps() {
@@ -2029,10 +2588,20 @@
     // feed attaches no player at all (see pollFeedMode), so there is nothing
     // to measure -- and 'down' would be the viewer inventing a fault out of
     // a camera that is off on purpose. Dark: unknown, not broken.
-    var hls = live ? 'ok'
-            : (!feedModeKnown || feedMode === 'hide') ? ''
+    // Consistent with the AUDIO HLS lamp (off in Silence): the HLS lamp means
+    // "am I consuming this feed over HLS", so it is OFF when the feed is off.
+    // Hidden video == silenced audio -> dark, not 'ok'. (The stream is still
+    // packaging black frames, but the operator is not watching a feed, exactly
+    // as a silenced room is still being published but not heard.)
+    var hls = (feedModeKnown && feedMode === 'hide') ? ''
+            : live ? 'ok'
+            : (!feedModeKnown) ? ''
             : (pipeline ? 'down' : '');
-    set('ledHlsV', hls); set('ledHlsA', hls);
+    set('ledHlsV', hls);
+    // ledHlsA (the AUDIO panel's HLS lamp) is NOT server health: it means
+    // "listening over buffered HLS", the inbound audio SOURCE, so it is
+    // driven by audioMode in paintAudioModes and goes dark the moment the
+    // RTC (Two-way) leg takes over inbound -- matching ariana.
     paintAnalysis();
     set('ledCamera', stage('camera'));
     set('ledMic', stage('mic'));
@@ -2044,6 +2613,7 @@
     if (iAv) iAv.className = audioReady ? 'on' : '';
     var res = document.getElementById('resVal');
     if (res && video.videoWidth) res.textContent = video.videoWidth + '\u00d7' + video.videoHeight;
+    updateFeedAR();
   }
 
   // ── BLUR — server-side, modifier over Show and CV alike ──
@@ -2271,9 +2841,31 @@
         // of replaying a switch-off nobody triggered.
         if (!feedModeKnown) {
           feedModeKnown = true;
-          feedMode = m;
-          updateFeedButtons();
-          if (feedMode !== 'hide') initHLS();
+          // SAFETY, by directive: a fresh page load ALWAYS forces the picture
+          // to Hide -- the same fail-safe posture audio takes (load = Silence).
+          // Overrides the server's persisted SAFE_FEED_MODE ('cv'), which was
+          // the code that kept "rebelling" and bringing CV back on refresh.
+          //
+          // Video is SERVER state, so we COMMAND hide via setFeedMode rather
+          // than painting a local guess -- painting alone is exactly what the
+          // poll then repaints over, and the two fight ("CV came back pressed").
+          // feedMode is still the 'show' placeholder here, so setFeedMode sees
+          // a real change and POSTs; coverFor('hide') covers instantly, so no
+          // CV/Show frame is ever shown, and no player is attached on arrival.
+          // After this one-shot the client follows other viewers' changes as
+          // normal (the m !== feedMode branch below).
+          if (m === 'hide') {
+            feedMode = 'hide';
+            updateFeedButtons();
+          } else {
+            // Adopt the server's CURRENT mode first, so a poll landing during
+            // the hide POST sees no divergence (m === feedMode) and stays a
+            // no-op instead of re-adopting the live picture -- then command
+            // hide through the existing function. coverFor('hide') inside it
+            // covers the stage at once and no player is ever attached.
+            feedMode = m;
+            setFeedMode('hide');
+          }
           return;
         }
 
@@ -2439,6 +3031,63 @@
   // feed while sitting under a heading called LISTEN would be lying about
   // what it does.
   var roomAudio = document.getElementById('roomAudio');
+  // The HLS audio lamp (ledHlsA) reads roomAudio's real state, so repaint on
+  // the events that change it. But do MORE than paint on error: an <audio>
+  // element LATCHES a media error until it is reloaded, so a brief manifest
+  // gap (e.g. while the node restarts) would strand Monitor red-and-silent
+  // until the operator hit Reload. Self-heal instead -- re-resolve the source
+  // (a restart can rotate the manifest) and replay.
+  //
+  // NEVER PERMANENTLY GIVE UP. This used to cap at 5 tries and then latch red
+  // forever -- which read as "HLS down" indefinitely even though the SERVER
+  // was fine, because five real (but transient) restarts close together is
+  // exactly what a night of node tweaking looks like, and the cap does not
+  // distinguish that from a truly dead source. "Stop crying wolf" instead
+  // means RATE-LIMIT the retries (cap the backoff), not stop retrying: this
+  // keeps trying forever at a slow, harmless cadence, so Monitor recovers on
+  // its own the moment the source comes back, with no click required.
+  var _roomRecover = { tries: 0, timer: null };
+  var ROOM_RECOVER_MAX_BACKOFF_S = 15;
+  // Shared by the 'error' handler below AND the stall watchdog (see
+  // audioLivenessTick): a real media error is the loud way this shows up, a
+  // frozen currentTime with no error is the quiet way (a settings-triggered
+  // publisher restart, ron found, does this -- the manifest gap is often too
+  // brief for the browser to ever fire 'error', so THAT path alone left
+  // Monitor stuck silent with nothing watching for it).
+  // Separate hls.js instance dedicated to roomAudio (ron: iOS Safari graph
+  // reads flat forever). Safari's NATIVE HLS pipeline for an <audio>
+  // element doesn't reliably route decoded samples into
+  // createMediaElementSource -- a documented WebKit limitation, not a bug
+  // in the meter code; playback itself is fine, only the Web Audio tap
+  // sees nothing. hls.js demuxes into an MSE SourceBuffer instead, which
+  // Web Audio CAN see, on every platform. VIDEO keeps native-first (see
+  // initHLS) -- that trade favours the platform decoder for efficiency,
+  // which doesn't apply here: this is audio-only, a few hundred kbps, and
+  // metering correctness matters more than the marginal decode cost.
+  var roomHls = null;
+  function _teardownRoomHls() {
+    if (roomHls) { try { roomHls.destroy(); } catch (e) {} roomHls = null; }
+  }
+  function recoverRoomAudio() {
+    if (audioMode !== 'play') return;
+    _roomRecover.tries++;
+    clearTimeout(_roomRecover.timer);
+    var backoff = Math.min(_roomRecover.tries, ROOM_RECOVER_MAX_BACKOFF_S);
+    _roomRecover.timer = setTimeout(function () {
+      audioSrcResolved = false;
+      if (roomHls) { _teardownRoomHls(); } else { try { roomAudio.load(); } catch (e) {} }
+      resolveAudioSrc(function () {
+        roomAudio.play().then(paintTransport).catch(paintTransport);
+      });
+    }, 1000 * backoff);   // backoff: 1s, 2s, ... capped at 15s, forever
+  }
+  if (roomAudio) {
+    roomAudio.addEventListener('error', function () { paintAudioModes(); recoverRoomAudio(); });
+    roomAudio.addEventListener('playing', function () { _roomRecover.tries = 0; });
+    ['playing', 'pause', 'stalled', 'emptied'].forEach(function (ev) {
+      roomAudio.addEventListener(ev, paintAudioModes);
+    });
+  }
   var audioSrcResolved = false;
 
   // Resolve the audio-only rendition out of the master manifest rather than
@@ -2458,7 +3107,21 @@
           if (m) uri = m[1];
         }
         // No rendition found: fall back to the master. Worse, but audible.
-        roomAudio.src = uri ? HLS_URL.replace(/[^/]*$/, uri) : HLS_URL;
+        var url = uri ? HLS_URL.replace(/[^/]*$/, uri) : HLS_URL;
+        _teardownRoomHls();
+        if (window.Hls && Hls.isSupported()) {
+          roomHls = new Hls({
+            lowLatencyMode: false, backBufferLength: 4, maxBufferLength: 8,
+            liveSyncDurationCount: 3, enableWorker: true,
+          });
+          roomHls.loadSource(url);
+          roomHls.attachMedia(roomAudio);
+          roomHls.on(Hls.Events.ERROR, function (e, data) {
+            if (data.fatal) recoverRoomAudio();
+          });
+        } else {
+          roomAudio.src = url;   // no hls.js: last resort, native or nothing
+        }
         audioSrcResolved = true;
         cb();
       });
@@ -2514,11 +3177,36 @@
     // that you are being heard, so it says so rather than lying about whose.
     if (lab) lab.textContent = '';   // the mirrored graph draws its own IN/OUT labels
     var dirEl = document.getElementById('audioDirVal');
-    if (dirEl) dirEl.textContent = (audioMode === 'two-way') ? 'BIDIRECTIONAL'
+    if (dirEl) dirEl.textContent = (audioMode === 'two-way') ? 'TWO-WAY'
                                  : (audioMode === 'play') ? 'INBOUND'
-                                 : (audioMode === 'talk') ? 'TO ROOM' : 'AUDIO OFF';
+                                 : (audioMode === 'talk') ? 'TO ROOM' : 'NONE';
     var rtcLed = document.getElementById('ledRtcA');
     if (rtcLed) rtcLed.className = 'led' + ((typeof twoWayOn !== 'undefined' && twoWayOn) ? ' on' : '');
+    // HLS audio lamp = actually listening over buffered HLS. Off in Silence,
+    // and off during Two-way -- roomAudio is paused there and inbound arrives
+    // on the RTC leg (see startTwoWay), so the two lamps never both claim the
+    // inbound at once. This is the ariana behaviour ron confirmed.
+    // Green when actually playing over HLS; RED (down) when Monitor is
+    // selected but playback has errored -- the one place red is meaningful
+    // for an audio source. RTC never sits "up but broken": a failed two-way
+    // tears down to Silence, so ledRtcA is green/dark only. Dark otherwise,
+    // including selected-but-not-yet-playing: ariana's rule, "not yet" must
+    // not look like "broken".
+    var hlsLed = document.getElementById('ledHlsA');
+    if (hlsLed) {
+      var hs = (audioMode !== 'play') ? ''
+             : roomAudio.error ? 'down'
+             : !roomAudio.paused ? 'ok' : '';
+      hlsLed.className = 'led' + (hs === 'ok' ? ' on' : hs === 'down' ? ' down' : '');
+    }
+    // HUD line 1 = the live A/V status, mirroring the mode.
+    if (typeof setHudStatus === 'function') {
+      setHudStatus(audioMode === 'two-way' ? 'RTC AUDIO LIVE'
+                 : audioMode === 'play' ? 'HLS AUDIO LIVE'
+                 : audioMode === 'talk' ? 'TALK LIVE' : '');
+    }
+    // Keep the Mute-mic key's enabled/greyed state in step with the call.
+    if (typeof paintMute === 'function') paintMute();
   }
 
   // The audio box's own reset pin: re-resolve the rendition and restart, for
@@ -2528,8 +3216,7 @@
     audioSrcResolved = false;
     var wasPlaying = (audioMode === 'play');
     roomAudio.pause();
-    roomAudio.removeAttribute('src');
-    roomAudio.load();
+    if (roomHls) { _teardownRoomHls(); } else { roomAudio.removeAttribute('src'); roomAudio.load(); }
     if (wasPlaying) {
       resolveAudioSrc(function () {
         roomAudio.play().then(paintTransport).catch(paintTransport);
@@ -2583,21 +3270,40 @@
     var v = 1;
     var slider = document.getElementById('volSlider');
     if (slider) v = Math.max(0, Math.min(1, (parseFloat(slider.value) || 0) / 100));
-    // Stop and Talk are silence too: neither has the room open.
-    var silent = audioMuted || audioMode !== 'play';
+    // The room you HEAR is audible only in Monitor; Two-way listens on the RTC
+    // element (twoWayRx) and Silence is silence. MUTE is a MIC key now (see
+    // toggleMuteAudio/applyMicMute), so audioMuted is deliberately NOT consulted
+    // here -- muting your mic must never silence the room you are listening to.
+    var silent = audioMode !== 'play';
     if (levelGain) {
       levelGain.gain.value = silent ? 0 : v;
       roomAudio.muted = false;
       roomAudio.volume = 1;
     } else {
-      roomAudio.muted = audioMuted;
+      roomAudio.muted = silent;
       roomAudio.volume = v;
     }
   }
 
+  // MUTE MIC (ported from ariana's setMuted): mute ONLY the outbound microphone,
+  // and only while a call is open. The inbound room audio is never touched --
+  // that is Silence or the volume slider's job. Disabling the track (rather than
+  // tearing the sender down) keeps the leg established and unmuting instant; the
+  // room simply receives digital silence.
+  function applyMicMute() {
+    if (typeof twoWayStream !== 'undefined' && twoWayStream) {
+      twoWayStream.getAudioTracks().forEach(function (t) { t.enabled = !audioMuted; });
+    }
+  }
   function toggleMuteAudio() {
+    // Always toggleable (ron: "I can want to remember to toggle it off
+    // without needing it to be live"), not gated on a call being open. When
+    // no call exists there is nothing for applyMicMute() to actually mute
+    // yet -- it no-ops on the twoWayStream check -- but the STATE still
+    // changes and persists, so it is already armed the moment a call starts
+    // (see startTwoWay's own applyMicMute() call on the fresh mic).
     audioMuted = !audioMuted;
-    applyAudioSilence();
+    applyMicMute();
     paintMute();
     try { localStorage.setItem('livecamMuted', audioMuted ? '1' : '0'); } catch (e) {}
   }
@@ -2616,14 +3322,29 @@
   // business changing the play key's appearance, and the volume slider
   // shares this because a slider at zero is silence by another route.
   function paintMute() {
+    // NOT gated on a live call any more (ron: "I don't see why Mute mic
+    // button has to be suppressed in Silence or HLS modes; I can want to
+    // remember to toggle it off without needing it to be live") -- always
+    // clickable, so the remembered state can be armed ahead of a call. The
+    // same reasoning applies to the speaker test-mute below, symmetrically.
+    // .pbtn.pressed matches the HLS/Silence/RTC language, AND the lamp is
+    // back (ron: widen the button, don't take the LED away) -- red/alarm is
+    // the one state on this panel worth flagging even at a glance, since a
+    // muted mic during a live call is easy to forget you left on.
     var lamp = document.getElementById('muteLamp');
     if (lamp) lamp.className = 'bulb' + (audioMuted ? ' alarm' : '');
     var key = document.getElementById('muteAudioBtn');
-    if (key) key.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
-    var slider = document.getElementById('volSlider');
-    var atZero = slider ? (parseFloat(slider.value) || 0) === 0 : false;
+    if (key) {
+      key.classList.toggle('pressed', audioMuted);
+      key.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
+    }
     var iMute = document.getElementById('indMute');
-    if (iMute) iMute.className = (audioMuted || atZero) ? 'on' : '';
+    if (iMute) iMute.className = audioMuted ? 'on' : '';
+    // Test-only server speaker mute: same always-clickable rule as Mute mic.
+    var sLamp = document.getElementById('muteSpeakerLamp');
+    if (sLamp) sLamp.className = 'bulb' + (_talkMuteSpeaker ? ' on' : '');
+    var sBtn = document.getElementById('muteSpeakerBtn');
+    if (sBtn) sBtn.setAttribute('aria-pressed', _talkMuteSpeaker ? 'true' : 'false');
   }
 
   function paintListen() { paintTransport(); paintMute(); }
@@ -3048,16 +3769,98 @@
   // time. Ported from ariana. The node keeps its mic OPEN for two-way (POST
   // /api/talk 'two-way'), so the room WHEP leg has content; the OS echo
   // canceller (node config) stops the caller hearing themselves.
-  var twoWayPc = null, twoWayStream = null, twoWayTalkRes = null;
+  var twoWayPc = null, twoWayStream = null, twoWayTalkRes = null, twoWayMeterTrack = null;
   var twoWayRxPc = null, twoWayRxRes = null, twoWayOn = false;
   var twoWayRx = document.getElementById('twoWayRx');
 
-  function setAudioNote(m) { var n = document.getElementById('audioNote'); if (n) n.textContent = m || ''; }
+  // ══════════════════════════ HUD FRAME ══════════════════════════
+  // The JS third of the abstract HUD text box (CSS: .video-hud in <style>;
+  // markup: #videoHud in video-wrap -- both bracketed the same way, grep
+  // "HUD FRAME"). This piece: the one-time font measurement, then the
+  // status/error setters everything else on the page calls.
+  // ── Universal client HUD renderer ───────────────────────────────────────
+  // ONE implementation of the fleet HUD spec (see cv_detect.draw_hud), so
+  // anything painting telemetry/notes over the picture on the client sizes and
+  // places itself identically to the burned-in server HUD and can never drift
+  // from it. THE e% RULE: cap height = e% of the DISPLAYED picture height --
+  // same Math.E/100 constant the server uses -- measured off the contained
+  // picture rect (object-fit:contain letterboxes the frame), exactly as amira's
+  // overlay does. Ink/weight/shadow are the .video-hud rule (grey 220, thin,
+  // 1px black shadow), matching FONT_HERSHEY_SIMPLEX thickness 1 and ink=(220,).
+  // POSITION AND SIZE ARE NOW PURE CSS (cqh units on .video-wrap, which is a
+  // size container -- see its container-type). Two attempts at doing this in
+  // JS (measuring wrap.clientHeight + video.videoWidth/videoHeight and setting
+  // el.style.top/left/fontSize by hand) both left the note sitting wrong (ron
+  // flagged it twice) -- the JS ran at whatever moment sizeHuds() happened to
+  // be called, which could race video.videoWidth still being 0 (metadata not
+  // loaded yet) or wrap.clientHeight mid-layout, and nothing forced a
+  // recompute once text was already showing. CSS container query units have
+  // NO such race: the browser recomputes them on every layout change,
+  // automatically, forever, with no JS in the loop at all.
+  //
+  // The one thing CSS genuinely cannot measure is a FONT's cap-height/em
+  // ratio (different platforms' "Arial" differ), so that -- and ONLY that --
+  // is still measured in JS, once, into a custom property the CSS calc()
+  // reads. This has no video-dimension dependency and therefore no race:
+  // font metrics are available the instant the font resolves, load-order be
+  // damned.
+  // Kept in sync with .video-hud's own font-family (back to Arial, ron:
+  // "get the friggin font" -- matches FONT_HERSHEY_SIMPLEX's look) --
+  // measuring the wrong font here would silently mis-size every line, the
+  // exact class of bug this file exists to avoid.
+  var HUD_FONT_FAMILY = 'Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif';
+  (function () {
+    var ratio = 0.716;   // Arial's real ratio -- the fallback if measureText's advanced metrics are unavailable
+    try {
+      var c = document.createElement('canvas').getContext('2d');
+      var REF = 1000;
+      c.font = '400 ' + REF + 'px ' + HUD_FONT_FAMILY;
+      var asc = c.measureText('H').actualBoundingBoxAscent;
+      if (asc && asc > 0) ratio = asc / REF;
+    } catch (e) {}
+    var el = document.getElementById('videoHud');
+    if (el) el.style.setProperty('--hud-cap-ratio', ratio);
+  })();
 
-  function startRoomRx() {
+  // Picture HUD (ron: "off my panel"), through the universal renderer. Line
+  // 1 = live A/V status (TWO-WAY LIVE / HLS AUDIO LIVE); CV mode adds its
+  // own two rows (see setHudCv below); errors get their own centered
+  // overlay (#hudError). The whole HUD shows while ANY row has text.
+  function _hudShow() {
+    var hud = document.getElementById('videoHud');
+    var ids = ['hudStatus', 'hudCv', 'hudCvCap', 'hudError'];
+    var on = ids.some(function (id) {
+      var el = document.getElementById(id);
+      return !!(el && el.textContent.trim());
+    });
+    if (hud) hud.classList.toggle('show', on);
+  }
+  function setHudStatus(m) { var el = document.getElementById('hudStatus'); if (el) el.textContent = m || ''; _hudShow(); }
+  function setHudError(m)  { var el = document.getElementById('hudError');  if (el) el.textContent = m || ''; _hudShow(); }
+  // Legacy call sites pass error/notice strings; route them to the error line.
+  function setAudioNote(m) { setHudError(m); }
+  // CV mode's own rows -- the SAME words as the burned-in banner/capability
+  // lines (see cv_processor.state()'s text/capability_text), shown only
+  // while feedMode is 'cv'; empty (and hidden) otherwise. Called from
+  // paintAnalysis(), which already runs on every /api/cv-state poll.
+  function setHudCv(text, capText) {
+    var a = document.getElementById('hudCv'), b = document.getElementById('hudCvCap');
+    if (a) a.textContent = (feedMode === 'cv') ? (text || '') : '';
+    if (b) b.textContent = (feedMode === 'cv') ? (capText || '') : '';
+    _hudShow();
+  }
+
+  function startRoomRx(attempt) {
+    attempt = attempt || 1;
+    var gotTrack = false;
+    // Drop any prior subscribe session before (re)subscribing, so a retry does
+    // not leave an orphaned WHEP session on the node.
+    if (twoWayRxRes) { fetch(twoWayRxRes, { method: 'DELETE' }).catch(function () {}); twoWayRxRes = null; }
+    if (twoWayRxPc) { try { twoWayRxPc.close(); } catch (e) {} }
     twoWayRxPc = new RTCPeerConnection({ iceServers: [] });
     twoWayRxPc.addTransceiver('audio', { direction: 'recvonly' });
     twoWayRxPc.addEventListener('track', function (ev) {
+      gotTrack = true;
       if (twoWayRx) { twoWayRx.srcObject = ev.streams[0]; twoWayRx.play().catch(function () {}); }
       levelAttachStream(ev.streams[0], 'in');   // IN lane = room over WebRTC
     });
@@ -3075,7 +3878,21 @@
         twoWayRxRes = res.headers.get('Location');
         return res.text();
       })
-      .then(function (sdp) { return twoWayRxPc.setRemoteDescription({ type: 'answer', sdp: sdp }); });
+      .then(function (sdp) { return twoWayRxPc.setRemoteDescription({ type: 'answer', sdp: sdp }); })
+      .then(function () {
+        // mediamtx answers /roomaudio/whep even when the roomaudio path has no
+        // publisher yet -- common in the seconds after a node restart -- so a
+        // clean SDP exchange does NOT guarantee media: the 'track' event may
+        // never fire and the call is silent inbound with nothing to explain it.
+        // Watchdog: if no track arrives shortly, the leg is dead; re-subscribe.
+        // This automates the manual Silence->Two-way that used to be needed.
+        return new Promise(function (resolve) {
+          setTimeout(function () {
+            if (gotTrack || attempt >= 4) { resolve(); return; }
+            resolve(startRoomRx(attempt + 1));
+          }, 2500);
+        });
+      });
   }
 
   function startTwoWay() {
@@ -3095,7 +3912,19 @@
     })
     .then(function (stream) {
       twoWayStream = stream;
-      levelAttachStream(stream, 'out');   // OUT lane = your mic
+      // OUT lane taps a CLONE of the mic track, not the track itself. The
+      // original is what Mute mic disables (t.enabled) and what the sender
+      // encodes -- sharing that same track object with the meter coupled two
+      // unrelated things (what you SEND vs what you're MONITORING), and
+      // toggling mute visibly disturbed the RTC graph (ron). A clone has its
+      // own independent .enabled (spec: clones do not inherit it live), so
+      // the meter keeps reading your actual mic level -- useful on its own,
+      // since it shows you're still talking into a muted mic -- and Mute mic
+      // can never again touch the RTC connection or its graph.
+      var mt = stream.getAudioTracks()[0];
+      twoWayMeterTrack = (mt && mt.clone) ? mt.clone() : null;
+      levelAttachStream(twoWayMeterTrack ? new MediaStream([twoWayMeterTrack]) : stream, 'out');
+      applyMicMute();   // honour a remembered Mute-mic state on the fresh mic
       twoWayPc = new RTCPeerConnection({ iceServers: [] });
       stream.getAudioTracks().forEach(function (t) { twoWayPc.addTrack(t, stream); });
       twoWayPc.addEventListener('connectionstatechange', function () {
@@ -3123,7 +3952,7 @@
     })
     .then(function (r) { if (!r.ok) return r.text().then(function (t) { throw new Error(t || ('api ' + r.status)); }); })
     .then(function () { return startRoomRx(); })
-    .then(function () { twoWayOn = true; if (twoWayBtn) twoWayBtn.disabled = false; setAudioNote('Two-way live'); paintAudioModes(); paintTransport(); })
+    .then(function () { twoWayOn = true; if (twoWayBtn) twoWayBtn.disabled = false; setHudError(''); paintAudioModes(); paintTransport(); paintMute(); })
     .catch(function (e) { stopTwoWay(String(e && e.message || e)); });
   }
 
@@ -3135,6 +3964,7 @@
     if (twoWayPc) { try { twoWayPc.close(); } catch (e) {} twoWayPc = null; }
     if (twoWayRxPc) { try { twoWayRxPc.close(); } catch (e) {} twoWayRxPc = null; }
     if (twoWayStream) { twoWayStream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} }); twoWayStream = null; }
+    if (twoWayMeterTrack) { try { twoWayMeterTrack.stop(); } catch (e) {} twoWayMeterTrack = null; }
     if (twoWayRx) { try { twoWayRx.srcObject = null; } catch (e) {} }
     levelDetachRtc();
     if (twoWayBtn) twoWayBtn.disabled = false;
@@ -3302,7 +4132,98 @@
     g.fillRect(0, base, w, 1);
   }
 
-  setInterval(function () { levelSample(); levelDraw(); }, 500);
+  // ── Mid-call liveness watchdogs (Monitor + RTC) ────────────────────────
+  //
+  // ron: changing a Settings audio filter "kills inbound in both modes" and
+  // has to be noticed and manually recovered. Root cause: the SERVER'S
+  // publisher restart to apply the new filter is brief (sub-second, measured
+  // directly against the RTSP source), but nothing on the CLIENT was
+  // watching an ALREADY-ESTABLISHED leg for "stopped receiving" -- only the
+  // very first connect had a retry (see startRoomRx's own gotTrack check).
+  // Monitor's own 'error' handler only fires on a hard media error, which a
+  // brief manifest gap often never triggers at all; it just stalls quietly.
+  //
+  // AMPLITUDE IS THE WRONG SIGNAL for either watchdog: a quiet room is a
+  // valid, common state (nobody talking, HVAC-quiet night), and "energy near
+  // zero" would fire constantly on a fine night and retrain the operator to
+  // ignore the very thing meant to catch a real outage. Both watchdogs below
+  // instead measure whether DATA is moving, never whether it is LOUD:
+  //   - Monitor: roomAudio.currentTime must keep advancing while playing.
+  //     Silence still advances playback time; a stalled/frozen source does
+  //     not, so this is silence-proof by construction.
+  //   - RTC: RTCPeerConnection.getStats() packetsReceived must keep
+  //     climbing. Silence still arrives as (small, comfort-noise) RTP
+  //     packets; a dead leg delivers none, so packet COUNT, not audio level,
+  //     is what actually answers "is anything still coming in".
+  var STALL_GRACE_S = 8;   // generous: longer than any expected respawn, short enough to feel automatic
+  var _monLastTime = -1, _monLastChangeAt = 0;
+  // Two DIFFERENT stalls, both real: "playing but frozen" (currentTime stuck,
+  // caught below) and "just stopped" (.paused went true with nothing to
+  // un-pause it). The second one was the actual bug (ron: "still need to hit
+  // reload... otherwise inbound audio gets stuck on off position") -- a
+  // settings-triggered publisher restart can pause the element WITHOUT ever
+  // firing a DOM 'error' event (browsers are inconsistent about this for a
+  // brief manifest gap), and the old check explicitly SKIPPED recovery
+  // whenever roomAudio.paused was true, so a silent pause was never caught by
+  // anything. A short grace (not zero) so the NORMAL pause between a mode
+  // switch and the first play() resolving is never mistaken for a stall.
+  var PAUSED_STUCK_GRACE_S = 3;
+  var _monPausedSince = 0;
+  function monitorLivenessTick(now) {
+    if (!roomAudio || audioMode !== 'play') { _monLastTime = -1; _monPausedSince = 0; return; }
+    if (roomAudio.paused) {
+      if (!_monPausedSince) _monPausedSince = now;
+      else if ((now - _monPausedSince) / 1000 > PAUSED_STUCK_GRACE_S) {
+        _monPausedSince = now;   // don't re-fire every tick while still stuck
+        recoverRoomAudio();
+      }
+      _monLastTime = -1;
+      return;
+    }
+    _monPausedSince = 0;
+    var t = roomAudio.currentTime;
+    if (t !== _monLastTime) { _monLastTime = t; _monLastChangeAt = now; return; }
+    if (_monLastChangeAt && (now - _monLastChangeAt) / 1000 > STALL_GRACE_S) {
+      _monLastChangeAt = now;   // don't re-fire every tick while still stuck
+      recoverRoomAudio();
+    }
+  }
+  var _rtcLastPackets = -1, _rtcLastChangeAt = 0, _rtcRecovering = false;
+  function rtcLivenessTick(now) {
+    if (!twoWayOn || audioMode !== 'two-way' || !twoWayRxPc) { _rtcLastPackets = -1; return; }
+    if (_rtcRecovering) return;
+    twoWayRxPc.getStats(null).then(function (stats) {
+      var packets = null;
+      stats.forEach(function (r) {
+        if (r.type === 'inbound-rtp' && r.kind === 'audio') packets = r.packetsReceived;
+      });
+      if (packets == null) return;   // stat not published yet -- nothing to judge
+      if (packets !== _rtcLastPackets) { _rtcLastPackets = packets; _rtcLastChangeAt = now; return; }
+      if (_rtcLastChangeAt && (now - _rtcLastChangeAt) / 1000 > STALL_GRACE_S) {
+        _rtcRecovering = true;
+        startRoomRx();   // tears down + resubscribes the WHEP leg (see its own docstring)
+        setTimeout(function () { _rtcRecovering = false; }, 4000);
+      }
+    }).catch(function () {});
+  }
+
+  setInterval(function () {
+    // paintAudioModes is otherwise event-driven only (error/playing/pause/
+    // stalled/emptied) -- a transient error that fires once and then quietly
+    // self-recovers (segments resume, roomAudio keeps playing) never refires
+    // any of those, so the LED/HUD stay stuck on the stale paint forever.
+    // Cheap className/text writes, safe every tick (ron: "Says live but HLS
+    // LED is red and no graph").
+    paintAudioModes();
+    // Likewise the level meter's AudioContext only ever resumes from a page
+    // click -- if it suspended with no click since, the graph reads flat
+    // forever even though roomAudio itself is playing fine.
+    if (levelCtx && levelCtx.state === 'suspended') { try { levelCtx.resume(); } catch (e) {} }
+    if (audioMode === 'play') levelAttach(roomAudio);
+    levelSample(); levelDraw();
+    var now = Date.now();
+    monitorLivenessTick(now); rtcLivenessTick(now);
+  }, 500);
 
   // A gesture is what lets an AudioContext run at all on iOS, and every key
   // on this panel is a gesture.

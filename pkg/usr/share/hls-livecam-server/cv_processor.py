@@ -912,6 +912,11 @@ class CVProcessor:
             'gated': (now - self._crop_at) < fresh,
             'scene_registered': bool(getattr(self, '_scene_registered', False)),
             'scene_stale':      bool(getattr(self, '_scene_stale', False)),
+            # Same words as the burned-in banner (see _detect_and_hud /
+            # cv_detect.hud_banner_text) -- one source, so the client HUD
+            # can show this and it can never drift from the picture's own.
+            'text': getattr(self, '_hud_text', ''),
+            'capability_text': getattr(self, '_hud_capability_text', ''),
         }
 
     def set_foveal(self, enabled):
@@ -1627,9 +1632,15 @@ class CVProcessor:
                     t for t in self._tracker.tracks.values()
                     if t.state != 'departed'
                 ]
+        # Stashed every frame regardless of _hud_enabled (measured, not
+        # configured -- same convention as _mog2_at/_crop_at below), so
+        # state() can hand the CLIENT-side HUD the exact same banner words
+        # burned into the picture, from the one place that computes them.
+        self._hud_text = _cvd.hud_banner_text(tracks)
+        self._hud_capability_text = self._capability_line()
         if self._hud_enabled:
             canvas = _cvd.draw_hud(canvas, tracks,
-                                   capabilities=self._capability_line())
+                                   capabilities=self._hud_capability_text)
             # HUD labels for furniture come from the region dictionary, not
             # live inference (CV Mode Phase 3) -- the live detector never
             # spends a pass trying to reconfirm a couch. Suppressed while
