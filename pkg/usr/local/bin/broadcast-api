@@ -1731,6 +1731,32 @@ def notches_patch():
     return _notches_response(doc)
 
 
+def _notch_center_hz(item):
+    if 'range' in item:
+        lo, hi = item['range']
+        return (float(lo) + float(hi)) / 2.0
+    return float(item.get('center', 0))
+
+
+@app.route('/api/notches/sort', methods=['POST'])
+def notches_sort():
+    """Reorder the list by centre frequency (ron: 'Add button to order all
+    by frequency'), restoring the file's own stated convention ('Ordered by
+    frequency' -- see notches.json's _comment) after manual/API additions
+    append to the end regardless of where they'd sort. Order has no effect
+    on what's audible (bandreject filters are independent of each other in
+    the -af chain), so this does NOT kick the publisher -- nothing to
+    reapply, just a list re-sequence."""
+    doc = _read_notches()
+    doc['notches'].sort(key=_notch_center_hz)
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    return _notches_response(doc)
+
+
 @app.route('/api/scene-reregister', methods=['POST'])
 def scene_reregister_post():
     """Grab a fresh frame from this node's own camera, re-match against the

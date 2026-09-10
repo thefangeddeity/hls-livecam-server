@@ -912,13 +912,6 @@
   .sidebar::-webkit-scrollbar { width: 6px; }
   .sidebar::-webkit-scrollbar-track { background: transparent; }
   .sidebar::-webkit-scrollbar-thumb { background: #2e2e33; border-radius: 3px; }
-  /* flex:1 + space-between (ron: "display is too low compared to panels,
-     all should share space equally") -- .sidebar is already height:100%,
-     matching .video-wrap's row, but its content used to just sit at the
-     top with all the leftover height dumped in one gap below the last
-     panel. This spreads that same leftover height evenly BETWEEN panels
-     instead, so the last panel's bottom edge lines up with the video's. */
-  .sidebar-scroll { display: flex; flex-direction: column; gap: 11px; flex: 1; justify-content: space-between; }
   .section {
     display: flex; flex-direction: column; gap: 8px;
     background: var(--panel);
@@ -962,11 +955,19 @@
   .badge.scene-registered { color: var(--success); background: color-mix(in srgb, var(--success) 8%, var(--panel)); border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
   .badge.scene-stale { color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
   .badge.scene-unregistered { color: var(--text-muted); }
+  /* flex:1 + flex-start (ron: "have panels snug together toward top; I
+     don't like them spaced out like that" -- reverses an earlier
+     space-between pass that spread leftover height evenly BETWEEN panels
+     so the last one's bottom edge lined up with the video's; ron now
+     prefers panels packed together with the leftover height collecting
+     below the last one instead, same choice 7elwe's port independently
+     landed on for its own shorter panel set). */
   .sidebar-scroll {
     display: flex;
     flex-direction: column;
     gap: 10px;
     flex: 1;
+    justify-content: flex-start;
     min-height: 0;
     overflow-y: auto;
     scrollbar-gutter: stable;
@@ -1819,6 +1820,14 @@
             <button type="button" class="pbtn" style="flex:1 1 0; padding:4px 6px; font-size:10.5px;"
                     onclick="setAllNotches(false)" title="Turn off all notch filters">Turn off all</button>
           </div>
+          <!-- ron: "Add button to order all by frequency" -- restores the
+               file's own stated convention ("Ordered by frequency") after
+               additions, which always append to the end regardless of
+               where they'd sort. -->
+          <div class="setrow" style="gap:6px; margin:0 0 6px;">
+            <button type="button" class="pbtn" style="flex:1 1 0; padding:4px 6px; font-size:10.5px;"
+                    onclick="sortNotches()" title="Reorder the list by centre frequency, low to high">Sort by frequency</button>
+          </div>
           <div id="combList"></div>
           <div class="setrow" style="gap:4px;">
             <input type="number" id="combFreq" class="setnum" placeholder="Hz" style="width:56px;" inputmode="numeric">
@@ -2218,6 +2227,15 @@
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: enabled })
     })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+  // ron: "Add button to order all by frequency" -- own endpoint, not a
+  // client-side sort, so the reordered list actually PERSISTS (a client-only
+  // sort would just look right until the next reload).
+  function sortNotches() {
+    fetch('/api/notches/sort', { method: 'POST' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) { if (data) renderNotches(data); })
       .catch(function () {});
