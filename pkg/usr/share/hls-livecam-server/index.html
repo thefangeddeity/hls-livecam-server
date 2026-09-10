@@ -292,6 +292,14 @@
   }
   .video-hud.show { opacity: 1; }
   .hud-line { line-height: normal; }
+  /* CV's rows sit bottom-left as their own stack rather than joining the
+     top grid, matching how cv_detect.draw_hud stacks the burned-in
+     versions on a Linux node. Ported from tanzania verbatim. */
+  #hudCvBlock {
+    position: absolute; left: 0; bottom: 0;
+    display: flex; flex-direction: column;
+    gap: var(--linespace-padding-unit);
+  }
   /* 7elwe port note: Tanzania's #hudCvBlock (CV telemetry, bottom-left)
      dropped -- no CV pipeline on this node to source it from. */
   /* Warnings/errors get the viewer's eye, not a corner (ron: "centered
@@ -1520,6 +1528,22 @@
             <span class="glab glab-r"></span>
           </div>
         </div>
+        <!-- CV "ways of seeing", ported from tanzania. Every lamp here is
+             measured, never configured -- see paintAnalysis(). DETECT is
+             7elwe's own addition and the only one Phase 1 can light: the
+             detection sidecar (cv.rs) reports whether it is producing
+             fresh readings. MOG2/FOV/2D belong to CVProcessor, which is
+             Phase 2 and genuinely not running, so they sit dark rather
+             than lit-but-meaningless -- and 3D is dark on tanzania too
+             ("depth -- not implemented on this branch"). A dark socket
+             names the gap; inventing a green one would hide it. -->
+        <div class="ledstrip">
+          <div class="led" id="ledDetect" title="Detection sidecar producing fresh readings"><span class="bulb"></span><span class="n">DETECT</span></div>
+          <div class="led" id="ledMog2" title="Background model producing a foreground mask (CV Mode -- not running)"><span class="bulb"></span><span class="n">MOG2</span></div>
+          <div class="led" id="ledFov" title="Detection gated to the moving region (CV Mode -- not running)"><span class="bulb"></span><span class="n">FOV</span></div>
+          <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary (CV Mode -- not running)"><span class="bulb"></span><span class="n">2D</span></div>
+          <div class="led" id="ledScene3d" title="Depth -- not implemented on this branch"><span class="bulb"></span><span class="n">3D</span></div>
+        </div>
         <div class="pdiv"></div>
         <!-- The recessed reset every piece of network hardware has: small,
              out of the way, and deliberately a little awkward, because you
@@ -1571,6 +1595,15 @@
     <div class="video-hud" id="videoHud" aria-live="polite">
       <div class="hud-line" id="hudStatus"></div>
       <div class="hud-line" id="hudError"></div>
+      <!-- CV telemetry: the SAME words the burned-in banner uses on a
+           Linux node (cv_detect.hud_banner_text, reached here through
+           /api/cv-state's text/capability_text), so the two can never
+           drift. Its own mini-stack anchored bottom-left, not part of
+           the top grid -- see #hudCvBlock's CSS rule. -->
+      <div id="hudCvBlock">
+        <div class="hud-line" id="hudCv"></div>
+        <div class="hud-line" id="hudCvCap"></div>
+      </div>
       <!-- 7elwe port note: Tanzania's #hudCvBlock (CV banner/capability
            text, cv_processor.state()-sourced) dropped -- no CV pipeline. -->
     </div>
@@ -2581,12 +2614,41 @@
   pollPipeline();
   setInterval(function() { if (!document.hidden) pollPipeline(); }, 4000);
 
-  // 7elwe port note: Tanzania's paintAnalysis() (CV ways-of-seeing lamps --
-  // MOG2/FOV/2D/3D -- plus the CV HUD lines) is dropped entirely, not
-  // stubbed. There is no CV pipeline on this node to source any of that
-  // from, and unlike the /api/pipeline-driven lamps below (a real
-  // subsystem, just not exposed over HTTP yet -- see the port report),
-  // these sockets represent a faculty 7elwe fundamentally does not have.
+  // CV telemetry (Phase 1): detection only, from the Python sidecar via
+  // /api/cv-state. Read-only -- it never touches the published picture.
+  var cvState = { mog2: false, gated: false };
+  function pollCvState() {
+    fetch('/api/cv-state', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (j) { if (j) { cvState = j; paintAnalysis(); } });
+  }
+  pollCvState();
+  setInterval(function () { if (!document.hidden) pollCvState(); }, 2000);
+
+  // Measured, not configured: every lamp reports what the sidecar said it
+  // did in the last few seconds, so a stalled or absent sidecar puts them
+  // out by itself rather than leaving them lit over a frozen picture.
+  function paintAnalysis() {
+    function set(id, state) {
+      var el = document.getElementById(id);
+      if (el) el.className = 'led' + (state === 'ok' ? ' on' : state === 'down' ? ' down' : '');
+    }
+    // DETECT is the one Phase 1 can actually light. The server returns
+    // capability_text only while the sidecar is producing fresh readings
+    // (cv.rs blanks it once they go stale), so this is measured, not a
+    // proxy for "configured".
+    set('ledDetect', cvState.capability_text ? 'ok' : '');
+    // MOG2/FOV/2D are CVProcessor faculties -- Phase 2. They report false
+    // and stay dark. Dark is "not running", which is true; red would be
+    // "measured and failed", which would be a lie. 3D is dark on tanzania
+    // too: depth is not implemented on that branch either.
+    set('ledMog2',    cvState.mog2  ? 'ok' : '');
+    set('ledFov',     cvState.gated ? 'ok' : '');
+    set('ledScene2d', cvState.scene_registered ? 'ok'
+                    : cvState.scene_stale      ? 'down' : '');
+    if (typeof setHudCv === 'function') setHudCv(cvState.text, cvState.capability_text);
+  }
 
   function paintLamps() {
     var live = (liveInd && liveInd.textContent === 'LIVE');
@@ -3759,7 +3821,7 @@
   // see the setHudCv port note above.)
   function _hudShow() {
     var hud = document.getElementById('videoHud');
-    var ids = ['hudStatus', 'hudError'];
+    var ids = ['hudStatus', 'hudError', 'hudCv', 'hudCvCap'];
     var on = ids.some(function (id) {
       var el = document.getElementById(id);
       return !!(el && el.textContent.trim());
@@ -3770,8 +3832,22 @@
   function setHudError(m)  { var el = document.getElementById('hudError');  if (el) el.textContent = m || ''; _hudShow(); }
   // Legacy call sites pass error/notice strings; route them to the error line.
   function setAudioNote(m) { setHudError(m); }
-  // 7elwe port note: Tanzania's setHudCv (CV mode's banner/capability HUD
-  // rows) dropped -- no CV pipeline, no #hudCvBlock to write into.
+  // CV's two HUD rows -- the SAME words as the burned-in banner on a
+  // Linux node (cv_detect.hud_banner_text via /api/cv-state), so the
+  // client HUD and the picture's own text cannot drift.
+  //
+  // 7elwe port note: tanzania gates these on feedMode === 'cv'. There is
+  // no 'cv' feed mode here -- CV Mode (processing the picture) is Phase
+  // 2 -- so that gate would hide this permanently. Detection on 7elwe is
+  // always-on read-only telemetry, so the honest gate is "the sidecar is
+  // actually reporting something", which is what capability_text being
+  // non-empty means.
+  function setHudCv(text, capText) {
+    var a = document.getElementById('hudCv'), b = document.getElementById('hudCvCap');
+    if (a) a.textContent = text || '';
+    if (b) b.textContent = capText || '';
+    _hudShow();
+  }
 
   function startRoomRx(attempt) {
     attempt = attempt || 1;

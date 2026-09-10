@@ -3,3 +3,7 @@ pkg/usr/local/etc/mediamtx.yml.default
 
 # Build/deploy log written by windows/deploy.ps1 on every run.
 windows/deploy.log
+
+# Python bytecode from the CV sidecar/modules.
+__pycache__/
+*.pyc

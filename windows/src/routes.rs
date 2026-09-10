@@ -46,6 +46,7 @@ pub struct Ctx {
     pub state: Arc<AppState>,
     pub pipeline: Arc<Pipeline>,
     pub talk: Arc<Talk>,
+    pub cv: Arc<crate::cv::Cv>,
 }
 
 /// Flask's content type for a bare `return "text", 200`.
@@ -88,6 +89,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/notches/sort", post(notches_sort))
         .route("/api/talk", get(talk_get).post(talk_post))
         .route("/api/pipeline", get(api_pipeline))
+        .route("/api/cv-state", get(api_cv_state))
         .route(
             "/api/audio-settings",
             get(audio_settings_get).post(audio_settings_post),
@@ -349,6 +351,20 @@ async fn audio_settings_post(State(ctx): State<Arc<Ctx>>, body: String) -> Respo
 
     let body = serde_json::to_vec(&Value::Object(accepted)).unwrap_or_default();
     build(StatusCode::OK, "application/json", body, false, false)
+}
+
+// ------------------------------------------------------------- cv-state
+//
+// What the CV faculties are actually doing, measured rather than
+// configured -- same field names broadcast-api answers with, so a client
+// written against a Linux node reads this one unchanged. An absent or
+// stale sidecar reports everything off, never unknown-but-probably-fine.
+// See cv.rs for why Phase 1 honestly reports mog2/gated/scene_* false:
+// those faculties live in CVProcessor, which is Phase 2.
+
+async fn api_cv_state(State(ctx): State<Arc<Ctx>>) -> Response {
+    let body = serde_json::to_vec(&ctx.cv.state()).unwrap_or_default();
+    build(StatusCode::OK, "application/json", body, false, true)
 }
 
 // -------------------------------------------------------------- pipeline
