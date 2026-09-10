@@ -1152,19 +1152,15 @@ def _notch_args():
     Anything malformed is skipped with a warning rather than taking the
     capture down: a bad filter list must not cost the room its audio.
     """
-    path = os.path.join(ROOT, 'state', 'notches.json')
-    try:
-        with open(path) as f:
-            doc = json.load(f)
-    except FileNotFoundError:
-        return []
-    except Exception as exc:
-        print(f'broadcast-api: notches.json unreadable ({exc}); no notches',
-              file=sys.stderr, flush=True)
-        return []
-
+    doc = _read_notches()
     args = []
     for item in doc.get('notches', []):
+        # A notch can be turned OFF without deleting it -- bypassed for
+        # comparison without losing the entry's history. Absent key =
+        # enabled, so every pre-existing entry (none of which ever carried
+        # this field) keeps behaving exactly as before.
+        if item.get('enabled', True) is False:
+            continue
         try:
             if 'range' in item:
                 lo, hi = [float(v) for v in item['range']]
@@ -1179,6 +1175,167 @@ def _notch_args():
             print(f'broadcast-api: skipping notch {item!r}: {exc}',
                   file=sys.stderr, flush=True)
     return args
+
+
+NOTCHES_FILE = os.path.join(ROOT, 'state', 'notches.json')
+
+
+def _read_notches():
+    try:
+        with open(NOTCHES_FILE) as f:
+            doc = json.load(f) or {}
+    except Exception:
+        doc = {}
+    doc.setdefault('notches', [])
+    return doc
+
+
+def _write_notches(doc):
+    with open(NOTCHES_FILE, 'w') as f:
+        json.dump(doc, f)
+
+
+def _notches_response(doc):
+    return json.dumps({'notches': doc.get('notches', [])}), 200, {'Content-Type': 'application/json'}
+
+
+def _bump_mode_generation():
+    # Same trick /api/cv-blur-mode uses: bumping this under _mode_lock makes
+    # _writer_loop notice and restart the combined AV publisher, which
+    # rebuilds _mic_capture_cmd() (and therefore _notch_args()) from
+    # scratch on its next spawn. Notches have no separate reload path of
+    # their own on this node -- this IS the reload path.
+    global _mode_generation
+    with _mode_lock:
+        _mode_generation += 1
+
+
+@app.route('/api/notches', methods=['GET'])
+def notches_get():
+    """The notch filter database, for the Settings submenu. Ported from
+    Tanzania's /api/notches (see broadcast-api there) -- same envelope, same
+    bulk/per-entry PATCH split, no master switch (a sticky master that
+    silenced everything AND blocked hand-picking individual entries while
+    off was found to be a bug on Tanzania and removed there before this
+    port happened)."""
+    return _notches_response(_read_notches())
+
+
+@app.route('/api/notches', methods=['POST'])
+def notches_post():
+    """Add one notch: {"center": Hz, "width": Hz, "note": "why"} or
+    {"range": [lo, hi], "note": "why"}. Validated rather than trusted -- a
+    bad entry must not take the room's audio down. Applies on the next
+    capture rebuild (see _bump_mode_generation)."""
+    try:
+        body = json.loads(request.get_data(as_text=True) or '{}')
+    except Exception:
+        abort(400)
+    note = str(body.get('note', '')).strip()[:200] or 'added from Settings'
+    entry = {'note': note, 'added': time.strftime('%Y-%m-%d')}
+    try:
+        if 'range' in body:
+            lo, hi = float(body['range'][0]), float(body['range'][1])
+            if not (20 <= lo < hi <= 20000):
+                abort(400)
+            entry['range'] = [lo, hi]
+        else:
+            c = float(body['center'])
+            w = float(body.get('width', 20))
+            if not (20 <= c <= 20000) or not (1 <= w <= 500):
+                abort(400)
+            entry['center'], entry['width'] = c, w
+    except (KeyError, TypeError, ValueError, IndexError):
+        abort(400)
+    doc = _read_notches()
+    doc['notches'].append(entry)
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    _bump_mode_generation()
+    return _notches_response(doc)
+
+
+@app.route('/api/notches', methods=['DELETE'])
+def notches_delete():
+    """Remove one notch by its index in the current list (?i=N)."""
+    try:
+        i = int(request.args.get('i', ''))
+    except (TypeError, ValueError):
+        abort(400)
+    doc = _read_notches()
+    if not (0 <= i < len(doc['notches'])):
+        abort(404)
+    doc['notches'].pop(i)
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    _bump_mode_generation()
+    return _notches_response(doc)
+
+
+@app.route('/api/notches', methods=['PATCH'])
+def notches_patch():
+    """Toggle a notch's enabled state, body {"enabled": bool}.
+
+    With ?i=N: one entry, bypass it without deleting it. WITHOUT ?i: a BULK
+    action -- sets every entry to the same enabled value in one request
+    ("Turn on all" / "Turn off all"). Ported from Tanzania's final design;
+    an earlier sticky-master-switch version was replaced there because it
+    silenced everything AND blocked hand-picking individual entries while
+    off -- a bulk action has no state of its own to fight."""
+    try:
+        body = json.loads(request.get_data(as_text=True) or '{}')
+        enabled = bool(body['enabled'])
+    except (TypeError, ValueError, KeyError):
+        abort(400)
+    doc = _read_notches()
+    i_raw = request.args.get('i')
+    if i_raw is None:
+        for item in doc['notches']:
+            item['enabled'] = enabled
+    else:
+        try:
+            i = int(i_raw)
+        except ValueError:
+            abort(400)
+        if not (0 <= i < len(doc['notches'])):
+            abort(404)
+        doc['notches'][i]['enabled'] = enabled
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    _bump_mode_generation()
+    return _notches_response(doc)
+
+
+def _notch_center_hz(item):
+    if 'range' in item:
+        lo, hi = item['range']
+        return (float(lo) + float(hi)) / 2.0
+    return float(item.get('center', 0))
+
+
+@app.route('/api/notches/sort', methods=['POST'])
+def notches_sort():
+    """Reorder the list by centre frequency. Order has no effect on what's
+    audible (SoX applies the bandreject chain in sequence regardless of
+    which one is listed first), so this does NOT bump the mode generation
+    -- nothing to reapply, just a list re-sequence."""
+    doc = _read_notches()
+    doc['notches'].sort(key=_notch_center_hz)
+    try:
+        _write_notches(doc)
+    except Exception as e:
+        print(f'broadcast-api: notches write failed: {e}', flush=True)
+        abort(500)
+    return _notches_response(doc)
 
 
 def _mic_capture_cmd(mode):
@@ -1935,9 +2092,16 @@ def pipeline():
         mog2 = getattr(cvp, '_fg_mask', None) is not None
         foveal = bool(getattr(cvp, '_foveal_enabled', False)) and mog2
         scene = 'registered' if getattr(cvp, '_scene_registered', False) else 'none'
+        # Same words as the burned-in banner/capability lines (ported from
+        # tanzania: see cv_processor._detect_and_hud / cv_detect.
+        # hud_banner_text) -- one source, so a client-side HUD can show
+        # this and it can never drift from what's on the picture.
+        cv_text = getattr(cvp, '_hud_text', '')
+        cv_capability_text = getattr(cvp, '_hud_capability_text', '')
     else:
         mog2 = foveal = None
         scene = None
+        cv_text = cv_capability_text = None
 
     data = {
         # The microphone opened iff the capture session did; they are one
@@ -1947,6 +2111,8 @@ def pipeline():
         'cv_mog2':  mog2,
         'cv_foveal': foveal,
         'cv_scene': scene,
+        'cv_text': cv_text,
+        'cv_capability_text': cv_capability_text,
         'mic':      capture,
         'audio_rate_hz':  audio_rate,
         'audio_channels': audio_ch,
@@ -1994,6 +2160,25 @@ def info():
         'product':       _cfg.get('PRODUCT_NAME',   'HLS Livecam'),
         'product_short': _cfg.get('PRODUCT_SHORT',  'HLSLS'),
     }
+
+
+@app.route('/api/reset', methods=['POST'])
+def api_reset():
+    # Full reset: relaunch the whole stack the way `livecam restart` does, from a
+    # DETACHED child that outlives this (soon-restarted) worker. It waits ~1s so
+    # the 202 reaches the browser, then execs the restart.
+    livecam = os.path.join(BIN_DIR, 'livecam')
+    try:
+        subprocess.Popen(
+            ['/bin/sh', '-c',
+             'sleep 1; PATH=/usr/local/bin:$PATH exec "$0" restart', livecam],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cwd=ROOT,
+        )
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}, 500
+    return {'ok': True, 'restarting': True}, 202
 
 
 # ── Static web serving (replaces nginx) ──────────────────────────

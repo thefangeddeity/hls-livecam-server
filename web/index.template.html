@@ -1166,6 +1166,8 @@
        not need is width the slider loses. */
     width: auto; padding: 0 10px; white-space: nowrap;
   }
+  /* Greyed when the mic key is not actionable (outside a call). */
+  .mute-key:disabled { opacity: .45; cursor: default; }
   /* Type comes from the KEYS, not from the modem row. The modem legend is
      mono, small and letter-spaced -- right for BLUR and FOVEAL, which are
      terse switch labels, and wrong here: this key sits with Monitor, Silence
@@ -1495,7 +1497,7 @@
         <div class="modemrow">
           <button type="button" class="reset" id="reconnectBtn"
                   onclick="reloadStream()" title="Reload the video stream" aria-label="Reload the video stream"><span class="pin"></span></button>
-          <span class="eng rstlab">Reset</span>
+          <span class="eng rstlab">Reload</span>
           <div class="modem-group">
             <button type="button" class="modem" id="blurBtn" onclick="toggleCvBlur()"
                     title="Block-art cloak — modifier on CV mode">
@@ -1628,7 +1630,7 @@
           <button type="button" class="reset" id="audioReloadBtn"
                   title="Repair audio -- restarts the room audio stream"
                   aria-label="Repair audio"><span class="pin"></span></button>
-          <span class="eng rstlab">Reset</span>
+          <span class="eng rstlab">Reload</span>
           <div class="modem-group">
             <button class="modem calling" id="callBtn" disabled
                     title="Call a viewer -- not wired yet">
@@ -1704,6 +1706,14 @@
        burned into the frame by the HUD code, so it comes from the picture and
        is the same for every viewer regardless of their machine's clock. When
        that lands the footer keeps the licence and drops the date. -->
+  <!-- Global reset. The pinhole keys above are RELOADs (re-pull the streams in
+       THIS browser). This restarts the whole server stack via /api/reset, which
+       briefly drops the feed for every viewer, so it is guarded by a confirm. -->
+  <div style="display:flex; justify-content:center; margin:8px 0 2px;">
+    <button type="button" class="btn guarded" id="globalResetBtn"
+            style="width:auto; padding:6px 22px;"
+            title="Full reset: restarts the server (mediamtx + broadcast-api). Briefly drops the stream for every viewer.">Reset</button>
+  </div>
   <div class="page-foot">
     HLS Livecam Server by The Fanged Deity — free software under the
     <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>
@@ -3193,7 +3203,15 @@
     indicator(document.getElementById('indStop'), audio.paused);
     indicator(document.getElementById('indMute'), audioMuted);
 
-    if (muteKey) muteKey.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
+    if (muteKey) {
+      // Mute mic is only actionable during a call; greyed (still showing the
+      // remembered state) otherwise. Guarded: paintTransport runs at init,
+      // before twoWay is defined.
+      var micLive = (typeof twoWay !== 'undefined') && twoWay.on &&
+                    (twoWay.dir === 'two-way' || twoWay.dir === 'to');
+      muteKey.disabled = !micLive;
+      muteKey.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
+    }
     if (listenEl) {
       /* Muting dims the groove rather than dragging it to zero. */
       listenEl.classList.toggle('is-muted', audioMuted);
@@ -4379,6 +4397,35 @@
 
 
 })();
+</script>
+<script>
+  (function () {
+    var gr = document.getElementById('globalResetBtn');
+    if (!gr) return;
+    var armed = false, armTimer = null, label = gr.textContent;
+    gr.addEventListener('click', function () {
+      if (!armed) {
+        armed = true; gr.textContent = 'Confirm reset?'; gr.classList.add('pressed');
+        armTimer = setTimeout(function () {
+          armed = false; gr.textContent = label; gr.classList.remove('pressed');
+        }, 4000);
+        return;
+      }
+      if (armTimer) clearTimeout(armTimer);
+      armed = false; gr.disabled = true; gr.textContent = 'Restarting\u2026';
+      fetch('/api/reset', { method: 'POST' }).catch(function () {});
+      setTimeout(function () {
+        var tries = 0;
+        var iv = setInterval(function () {
+          tries++;
+          fetch('/api/info', { cache: 'no-store' })
+            .then(function (r) { if (r && r.ok) { clearInterval(iv); location.reload(); } })
+            .catch(function () {});
+          if (tries > 40) { clearInterval(iv); location.reload(); }
+        }, 500);
+      }, 2500);
+    });
+  })();
 </script>
 </body>
 </html>

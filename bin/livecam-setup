@@ -134,7 +134,10 @@ if [ -f "$WEB_DIR/index.template.html" ]; then
 import sys; sys.path.insert(0, '$BIN_DIR')
 import livecam_platform as P
 print(P.version_label())" 2>/dev/null || echo "unknown")"
-  SETUP_VERSION="${SETUP_VERSION_LABEL%% *}"
+  # Display version is the clean tag only. `git describe` appends -<n>-g<hash>
+  # (commits since the tag) and -dirty (uncommitted tree); those are build-stamp
+  # detail, kept in the hover title (@BUILD_LABEL@) but out of the header label.
+  SETUP_VERSION="$(printf '%s' "${SETUP_VERSION_LABEL%% *}" | sed -E 's/-[0-9]+-g[0-9a-f]+//; s/-dirty//')"
 
   sed -e "s|@HLS_PORT@|${HLS_PORT}|g" \
       -e "s|@VERSION@|${SETUP_VERSION}|g" \

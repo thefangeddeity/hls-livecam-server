@@ -26,6 +26,7 @@ tabby is mid-luminance and brown/orange. That runs in microseconds and needs
 no training data.
 """
 
+import math
 import time
 
 import numpy as np
@@ -538,11 +539,12 @@ class Tracker:
         return list(self.tracks.values())
 
 
-def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
-    """SHAKey HUD: confidence-weighted, collision-aware target annotations."""
-    out = canvas
-    h, w = out.shape[:2]
-
+def hud_banner_text(tracks):
+    """The banner line's text alone, no drawing -- pulled out of draw_hud
+    (ported from tanzania) so anything that wants the SAME words (a status
+    API, a client-side HUD) reads them from one place instead of re-deriving
+    the count logic and risking it drifting from what actually gets burned
+    into the picture. See cv_processor.CVProcessor's per-frame stash."""
     active = [
         tr for tr in tracks
         if tr.state != 'departed'
@@ -566,6 +568,15 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     text = f"DETECTING {count} TARGET{'S' if count != 1 else ''}"
     if candidates:
         text += f" +{candidates} CANDIDATE{'S' if candidates != 1 else ''}"
+    return text
+
+
+def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
+    """SHAKey HUD: confidence-weighted, collision-aware target annotations."""
+    out = canvas
+    h, w = out.shape[:2]
+
+    text = hud_banner_text(tracks)
 
     # macOS-light-inspired telemetry:
     # smaller, lighter, quieter, and using the same visual weight as the
@@ -575,20 +586,30 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
         for channel in ink
     )
 
+    # THE e% RULE (ron: "ignore her previous setting; e% is the rule for all
+    # text"), replacing the fixed telemetry_scale=0.52 this carried before.
+    # Fleet-wide: HUD cap height = e% of frame height, identical on every
+    # node and every resolution, so nothing needs re-tuning when a camera
+    # changes -- the exact reasoning tanzania's cv_detect.draw_hud documents,
+    # now applied here too rather than living as a Linux-only convention.
+    # _CAP_AT_UNIT_SCALE (measured: cv2.getTextSize(..., 1.0, 1)[0][1]) is a
+    # property of the Hershey font rasterizer itself, not of this camera, so
+    # the same constant Tanzania measured transfers here unchanged.
+    HUD_CAP_FRACTION = math.e / 100.0
+    _CAP_AT_UNIT_SCALE = 27.0
+    hud_cap = HUD_CAP_FRACTION * h
+    hud_scale = hud_cap / _CAP_AT_UNIT_SCALE
+
     telemetry_font = cv2.FONT_HERSHEY_SIMPLEX
-    telemetry_scale = 0.52
+    telemetry_scale = hud_scale
     telemetry_thickness = 1
     telemetry_spacing = 3
 
-    tx = 18
-    # Back to 42 after a detour through 96 and 56. The strip was being
-    # cropped in the web viewer, and moving it up the frame was treating the
-    # symptom: nothing was wrong with the render, the viewer was choosing to
-    # crop the picture (object-fit: cover) after we drew on it. The viewer
-    # now uses object-fit: contain, so the whole frame is shown and this
-    # number can be about composition again rather than about dodging
-    # somebody's window shape.
-    ty = h - 42
+    # Position as multiples of cap height, not fixed pixels, so the strip
+    # keeps its place proportionally as the frame scales -- same tx/row
+    # ratios tanzania's draw_hud uses for its own telemetry block.
+    tx = int(round(1.64 * hud_cap))
+    ty = h - int(round(2.00 * hud_cap))
 
     # Right-aligned companion to the DETECTING banner: which CV tools are
     # actually running. Same ink, size and baseline so the two read as one
@@ -630,7 +651,7 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
         tx += cw + telemetry_spacing
 
     tag_font = cv2.FONT_HERSHEY_SIMPLEX
-    tag_scale = 0.52
+    tag_scale = hud_scale   # same e%-derived scale as the telemetry banner (ron: one rule for all text)
     tag_thickness = 2
 
     pad_x = 8
@@ -932,7 +953,12 @@ def draw_scene_regions(canvas, regions, ink=(140, 140, 220)):
     out = canvas
     h, w = out.shape[:2]
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale = 0.42
+    # e% rule (ron: "ignore her previous setting; e% is the rule for all
+    # text"), same as draw_hud -- frame-relative, not a fixed pixel scale.
+    # The 0.42:0.52 ratio this always had against draw_hud's telemetry text
+    # is preserved (this caption is deliberately smaller/quieter, per the
+    # docstring above); only the RESOLUTION-INDEPENDENCE is new.
+    scale = (math.e / 100.0) * h / 27.0 * (0.42 / 0.52)
     thickness = 1
 
     for r in regions:

@@ -1640,9 +1640,15 @@ class CVProcessor:
                     t for t in self._tracker.tracks.values()
                     if t.state != 'departed'
                 ]
+        # Stashed every frame regardless of _hud_enabled (ported from
+        # tanzania: measured, not configured), so broadcast-api's pipeline
+        # endpoint can hand the CLIENT-side HUD the exact same banner words
+        # burned into the picture, from the one place that computes them.
+        self._hud_text = _cvd.hud_banner_text(tracks)
+        self._hud_capability_text = self._capability_line()
         if self._hud_enabled:
             canvas = _cvd.draw_hud(canvas, tracks,
-                                   capabilities=self._capability_line())
+                                   capabilities=self._hud_capability_text)
             # HUD labels for furniture come from the region dictionary, not
             # live inference (CV Mode Phase 3) -- the live detector never
             # spends a pass trying to reconfirm a couch. Suppressed while

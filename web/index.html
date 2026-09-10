@@ -252,6 +252,12 @@
     overflow: hidden;
     box-shadow: var(--shadow);
     min-width: 0; min-height: 0;
+    /* Ported from tanzania: .video-hud below sizes/positions itself in cqh
+       (container query height) units, which need this. Safe here: on this
+       node video is object-fit:cover, so .video-wrap's own box already IS
+       the displayed picture rect -- no letterbox offset to reconcile, the
+       one thing that made tanzania's version harder. */
+    container-type: size;
   }
   video {
     width: 100%; height: 100%;
@@ -259,6 +265,108 @@
     display: block;
     background: #000;
   }
+  /* Status/error note, burned onto the picture (ported from tanzania, ron:
+     "get those error messages off my panel") instead of the audio panel's
+     .audionote line -- the only channel that worked on a phone, per that
+     element's own comment, and this works everywhere AND stays in view.
+     Styled to match the burned-in CV telemetry: FONT_HERSHEY_SIMPLEX -> a
+     thin single-stroke sans, ink (220,220,220), 1px black shadow.
+     CAVEAT: this node's OWN Python HUD (bin/cv_detect.py) still uses the
+     old fixed fontScale=0.42, not tanzania's e%-of-frame-height rule (a
+     separate, not-yet-done port) -- so this overlay's SIZE targets the e%
+     rule the rest of the fleet uses, and may not pixel-match Ariana's own
+     burned-in text exactly until that Python-side migration lands too.
+
+     GRID ABSTRACTION (ported from tanzania's second pass at this same
+     element, ron's later session): position/size were JS-computed
+     (sizeHud(), see the script) off wrap.clientHeight -- exactly the race
+     tanzania hit twice (JS ran at whatever moment happened to fire, no
+     forced recompute once text was showing). Replaced with pure CSS cqh
+     (container query height) math, which the browser recomputes on every
+     layout change automatically: --grid-row is one line's pitch (e%, the
+     same cap-height constant everything in this fleet uses); --grid-col is
+     the width axis, deliberately NOT a measured glyph width but grid-row
+     scaled by 1/sqrt(2) (ron's chosen constant, both nodes). Positioning is
+     `inset`, not `padding` -- padding doesn't stop overflowing content (a
+     bug found on tanzania: it just flows through and gets clipped at the
+     outer edge instead), inset genuinely shrinks this box by one unit on
+     every side so overflow:hidden clips at a boundary with the margin
+     already built in. --hud-cap-ratio is measured once by the script (see
+     the one-time IIFE near audioNote), written into this custom property
+     instead of into inline font-size/top/left math on every resize. */
+  .video-hud {
+    --hud-cap-ratio: 0.716;
+    --grid-row: 2.71828cqh;
+    --grid-col: calc(var(--grid-row) / 1.41421356);
+    --edge-padding-unit: calc(var(--grid-row) * 0.225);
+    --linespace-padding-unit: calc(var(--grid-row) * 0.225);
+    /* z-index 25, not 6: above .static-cover (12) and the CRT power-off dot
+       (15), so the note keeps reading through a switch/power-off transition
+       instead of vanishing under the snow -- same fix tanzania needed for
+       its own static overlay. */
+    position: absolute; z-index: 25; inset: var(--grid-col); overflow: hidden;
+    display: grid; grid-auto-rows: auto; row-gap: var(--linespace-padding-unit);
+    align-items: start;
+    max-width: 82%;
+    font-size: calc(2.71828cqh / var(--hud-cap-ratio));
+    font-family: Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif;
+    font-weight: 400; letter-spacing: .01em; text-transform: uppercase;
+    white-space: pre-wrap; color: rgb(220,220,220); text-shadow: 1px 1px 0 #000;
+    pointer-events: none; opacity: 0; transition: opacity 150ms ease;
+    line-height: normal;
+  }
+  .video-hud.show { opacity: 1; }
+  /* Warnings get the eye, not a corner (tanzania, ron: "centered
+     horizontally too, not just vertically") -- this node has one HUD
+     element doing double duty as both status line and warning (the .warn
+     class), unlike tanzania's separate #hudStatus/#hudError, so the
+     override lives on the SAME element: .warn breaks it out of the grid
+     entirely and centers it over the whole picture on both axes instead of
+     sitting top-left. */
+  .video-hud.warn {
+    color: var(--warn);
+    inset: 0; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center;
+  }
+  /* CV telemetry, bottom-left (ported from tanzania, ron: "bottom two lines
+     for CV status") -- the same corner the burned-in server HUD occupies.
+     A sibling of #videoHud, not nested in it (this node's HUD is a single
+     element, unlike tanzania's row grid), so its own copy of the grid
+     constants -- same values, same reasoning as .video-hud above. */
+  #hudCvBlock {
+    --grid-row: 2.71828cqh;
+    --linespace-padding-unit: calc(var(--grid-row) * 0.225);
+    position: absolute; z-index: 25;
+    left: calc(var(--grid-row) / 1.41421356);
+    bottom: calc(var(--grid-row) / 1.41421356);
+    display: flex; flex-direction: column;
+    gap: var(--linespace-padding-unit);
+    font-family: Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif;
+    font-weight: 400; letter-spacing: .01em; text-transform: uppercase;
+    font-size: calc(2.71828cqh / 0.716);
+    color: rgb(220,220,220); text-shadow: 1px 1px 0 #000;
+    white-space: pre-wrap; pointer-events: none;
+  }
+  #hudCvBlock .hud-line:empty { display: none; }
+  /* In-call control row (ported from tanzania, ron: "look out on the web for
+     examples of real-world products" -- Zoom/Meet/Discord all converge on
+     genuinely CIRCULAR icon buttons for an in-progress call, distinct from
+     the rectangular keys elsewhere on the panel). Present and disabled until
+     CALL is wired, the same precedent FOVEAL/CALL already set on this page. */
+  .callctl-row { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 10px 0 2px; }
+  .callctl { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; flex: 0 0 auto; border: 1px solid #34343a;
+    background: linear-gradient(180deg,#2c2c30,#232326);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); transition: all .15s; }
+  .callctl svg { width: 18px; height: 18px; stroke: #d6d6da; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .callctl.pressed { background: linear-gradient(180deg,#3a1414,#2a0f0f); border-color: #5a2020; }
+  .callctl.pressed svg { stroke: #ff8a8a; }
+  .callctl.end { background: linear-gradient(180deg,#b3392c,#8f2c22); border-color: #6e211a; }
+  .callctl.end svg { stroke: #fff; }
+  .callctl:disabled { cursor: not-allowed; opacity: .4; }
+  .callctl:disabled.end { background: linear-gradient(180deg,#2c2c30,#232326); border-color: #34343a; }
+  .callctl:disabled.end svg { stroke: #d6d6da; }
   .dark-overlay {
     position: absolute; inset: 0;
     display: none;
@@ -1052,10 +1160,37 @@
     box-shadow: inset 0 2px 3px rgba(0,0,0,.85), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
     display: flex; align-items: center; justify-content: center;
   }
-  .pinrow { display: flex; align-items: center; justify-content: flex-end;
+  .pinrow { display: flex; align-items: center; justify-content: flex-start;
             gap: 10px; margin: 9px 0 7px; }
   .pinrow .rstlab { font-size: 9px; letter-spacing: .07em; }
   .pinled:active, .pinled.pressed { box-shadow: inset 0 3px 4px rgba(0,0,0,.9); }
+  .pinled:disabled { opacity: .55; cursor: not-allowed; }
+  /* Notch filter bank, ported from Tanzania. Sunk-in subsection: reuses
+     the SAME inset box-shadow recipe .reset/.pinled already use for their
+     own recessed housings, rather than inventing a new one, so the whole
+     bank reads as one carved-in region under the disclosure toggle. */
+  #combMenu {
+    margin-top: 2px; padding: 8px;
+    background: rgba(0,0,0,.14);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: inset 0 2px 3px rgba(0,0,0,.85), inset 0 -1px 0 rgba(255,255,255,.05), 0 1px 0 rgba(255,255,255,.04);
+  }
+  html[data-theme="light"] #combMenu {
+    background: rgba(0,0,0,.04);
+    box-shadow: inset 0 2px 3px rgba(88,110,117,.35), inset 0 -1px 0 rgba(255,255,255,.9), 0 1px 0 rgba(255,255,255,.8);
+  }
+  .setrow { display: flex; align-items: center; gap: 8px; padding: 3px 2px; }
+  .setnum { width: 70px; text-align: right; font-size: 11px; padding: 3px 6px;
+            background: rgba(0,0,0,.18); color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 5px; }
+  .setnum:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .combrow { display: flex; align-items: center; gap: 8px; padding: 3px 2px; font-size: 10.5px; }
+  .combrow .pinled { margin: 0; }
+  .combrow.bypassed .combfreq, .combrow.bypassed .combnote { opacity: .4; text-decoration: line-through; }
+  .combrow .combfreq { color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .combrow .combnote { flex: 0 1 auto; max-width: 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+  .combrow .combx { flex: 0 0 auto; width: 18px; height: 18px; line-height: 16px; text-align: center; padding: 0;
+    border-radius: 4px; background: rgba(0,0,0,.18); color: var(--text-dim); border: 1px solid var(--border-strong); cursor: pointer; }
   html[data-theme="light"] .pinled {
     background: linear-gradient(180deg,#d5d3c8 0%,#e4e2d9 60%,#f2f1eb 100%);
     border-color: #c4c2b6;
@@ -1166,6 +1301,8 @@
        not need is width the slider loses. */
     width: auto; padding: 0 10px; white-space: nowrap;
   }
+  /* Greyed when the mic key is not actionable (outside a call). */
+  .mute-key:disabled { opacity: .45; cursor: default; }
   /* Type comes from the KEYS, not from the modem row. The modem legend is
      mono, small and letter-spaced -- right for BLUR and FOVEAL, which are
      terse switch labels, and wrong here: this key sits with Monitor, Silence
@@ -1372,7 +1509,7 @@
          render time from `git describe`; hovering gives the build stamp and
          commit, which is what distinguishes two installs of the same tag. -->
     <span class="hdr-vfd" title="mac-v1.8.0-15-g9b68592-dirty · dev · 9b68592">
-      <span class="vlit">mac-v1.8.0-15-g9b68592-dirty</span><span class="vlit hdr-host" id="hdrHost"></span>
+      <span class="vlit">mac-v1.8.0</span><span class="vlit hdr-host" id="hdrHost"></span>
     </span>
   </div>
   <div class="status-bar">
@@ -1383,6 +1520,18 @@
 <div class="main">
   <div class="video-wrap" id="videoContainer">
     <video id="video" autoplay muted playsinline webkit-playsinline></video>
+    <!-- Status/error note, burned onto the picture (see #videoHud CSS). -->
+    <div class="video-hud" id="videoHud" aria-live="polite"></div>
+    <!-- Bottom-left, same corner the burned-in server HUD uses (ported from
+         tanzania, ron: "bottom two lines for CV status"). #hudCv/#hudCvCap
+         are the SAME words as that banner/capability text (see broadcast-
+         api's /api/pipeline cv_text/cv_capability_text, sourced from
+         cv_detect.hud_banner_text so the two can never drift), shown only
+         while feedMode is 'cv'. -->
+    <div id="hudCvBlock">
+      <div class="hud-line" id="hudCv"></div>
+      <div class="hud-line" id="hudCvCap"></div>
+    </div>
     <!-- Snow, drawn rather than filmed. The noise field is 224x126, exactly
          16:9, and carries the video's own object-fit at each breakpoint so it
          occupies the identical rectangle -- a stand-in that letterboxes
@@ -1495,7 +1644,7 @@
         <div class="modemrow">
           <button type="button" class="reset" id="reconnectBtn"
                   onclick="reloadStream()" title="Reload the video stream" aria-label="Reload the video stream"><span class="pin"></span></button>
-          <span class="eng rstlab">Reset</span>
+          <span class="eng rstlab">Reload</span>
           <div class="modem-group">
             <button type="button" class="modem" id="blurBtn" onclick="toggleCvBlur()"
                     title="Block-art cloak — modifier on CV mode">
@@ -1563,12 +1712,16 @@
              time as Opus for the return leg. They still disable themselves
              off a secure context, because getUserMedia does. -->
         <div class="btnrow">
+          <!-- Renamed from Monitor/Two-way (ported from tanzania, ron): once
+               Mute mic covers the muting job on its own, HLS/RTC just need to
+               say what they ARE -- HLS has lag and no mic, RTC is live with
+               the mic. Monitor as a separate identity became redundant. -->
           <button type="button" class="btn" id="audioPlayBtn"
-                  title="Listen to the room">Monitor</button>
+                  title="Listen to the room over buffered HLS (a few seconds behind, no mic)">HLS</button>
           <button type="button" class="btn guarded" id="audioStopBtn"
                   title="Neither direction open">Silence</button>
           <button type="button" class="btn" id="talkButton"
-                  title="Two-way audio with the room">Two-way</button>
+                  title="Live two-way audio with the room over WebRTC">RTC</button>
         </div>
 
         <!-- Where the audio bank says what just happened. On a phone this is
@@ -1594,7 +1747,11 @@
              slider says at its left stop, so the right end read as a separate
              idea placed beside volume rather than the bottom of it. -->
         <div class="listen" id="roomAudio">
-          <button type="button" class="modem mute-key" id="muteAudio"
+          <!-- Same button family as HLS/Silence/RTC now (ported from tanzania,
+               ron), not the round modem key -- .mute-key already handles its
+               own width (auto, fits the label) and its aria-pressed[...] .bulb
+               lamp rule, both untouched, so only the base class moves. -->
+          <button type="button" class="btn mute-key" id="muteAudio"
                   aria-pressed="true" aria-label="Mute microphone"
                   title="Mute your microphone; the call stays up and the room keeps arriving">
             <span class="bulb"></span><span class="cap2">Mute mic</span>
@@ -1628,7 +1785,7 @@
           <button type="button" class="reset" id="audioReloadBtn"
                   title="Repair audio -- restarts the room audio stream"
                   aria-label="Repair audio"><span class="pin"></span></button>
-          <span class="eng rstlab">Reset</span>
+          <span class="eng rstlab">Reload</span>
           <div class="modem-group">
             <button class="modem calling" id="callBtn" disabled
                     title="Call a viewer -- not wired yet">
@@ -1641,17 +1798,77 @@
           </div>
         </div>
 
+        <!-- IN-CALL controls (ported from tanzania): present and disabled --
+             lights up once the video call (camera + self-view PiP) makes a
+             real call to control. -->
+        <div class="callctl-row">
+          <button type="button" class="callctl" id="callMicBtn" disabled
+                  aria-pressed="false" aria-label="Mute mic (in call)"
+                  title="Mute your mic for this call -- not wired yet">
+            <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/><path d="M19 11a7 7 0 0 1-14 0"/><path d="M12 18v3"/></svg>
+          </button>
+          <button type="button" class="callctl" id="callCamBtn" disabled
+                  aria-pressed="false" aria-label="Camera (in call)"
+                  title="Turn your camera off for this call -- not wired yet">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="2"/><path d="M21 8.5 15.5 12 21 15.5Z"/></svg>
+          </button>
+          <button type="button" class="callctl end" id="callEndBtn" disabled
+                  aria-label="End call" title="End the call -- not wired yet">
+            <svg viewBox="0 0 24 24"><path d="M4 14c4-3 12-3 16 0v3a1 1 0 0 1-1.2 1c-1.6-.3-3-.9-4-1.6-.5-.4-.6-1-.3-1.6l.6-1.1c-2-1-4.2-1-6.2 0l.6 1.1c.3.6.2 1.2-.3 1.6-1 .7-2.4 1.3-4 1.6A1 1 0 0 1 4 17Z"/></svg>
+          </button>
+        </div>
+
         <!-- The two mutes are one set: each silences the side of the panel
              above it, incoming and outgoing, so they sit together rather than
              one per sub-section. A pilot-light button, sized to its own lamp
              -- label lives outside it, the same way Reset's own label does. -->
+        <!-- Lamp left, label right (ported from tanzania, ron) -- matches
+             Lock message's own .modemrow order below, so both pilot lights
+             in this document now line up the same way. -->
         <div class="pinrow">
-          <span class="eng rstlab">Disable buzz</span>
           <button type="button" class="pinled" id="muteBuzzBtn" onclick="toggleMute()"
                   title="Opt out of buzz entirely -- neither sent nor received"
                   aria-label="Disable buzz">
             <span class="bulb" id="muteBuzzLamp"></span>
           </button>
+          <span class="eng rstlab">Disable buzz</span>
+        </div>
+        <!-- Notch filter bank, ported from Tanzania (ron: "build it -- the
+             design has stabilized"). Disclosure is a plain, unmodified
+             .reset clone -- no lamp/LED semantics on the disclosure control
+             itself, same reasoning as Tanzania's after several rounds of
+             back-and-forth there landed on "just clone Reload, nothing
+             bespoke". Per-entry rows use .pinled + .bulb, same as every
+             other simple pilot light on this page. -->
+        <div class="modemrow" style="padding-bottom: 8px;">
+          <button type="button" class="reset" id="combToggle" onclick="toggleCombMenu()"
+                  aria-expanded="false" aria-controls="combMenu" aria-label="Notch filters"><span class="pin"></span></button>
+          <span class="eng rstlab">Notch filters (<span id="combCount">0</span>)</span>
+        </div>
+        <div id="combMenu" hidden>
+          <!-- Bulk actions, not a sticky master switch (ron, on Tanzania:
+               "you should still be able to hand-select which ones you
+               want" -- a master that silenced everything AND blocked
+               editing individual entries while off was the bug there).
+               One-shot: click sets every entry's flag once, then individual
+               toggles below stay live always. -->
+          <div class="setrow" style="gap:6px; margin:2px 0 6px;">
+            <button type="button" class="btn" style="flex:1 1 0; padding:4px 6px; font-size:10.5px;"
+                    onclick="setAllNotches(true)" title="Turn on all notch filters">Turn on all</button>
+            <button type="button" class="btn" style="flex:1 1 0; padding:4px 6px; font-size:10.5px;"
+                    onclick="setAllNotches(false)" title="Turn off all notch filters">Turn off all</button>
+          </div>
+          <div class="setrow" style="gap:6px; margin:0 0 6px;">
+            <button type="button" class="btn" style="flex:1 1 0; padding:4px 6px; font-size:10.5px;"
+                    onclick="sortNotches()" title="Reorder the list by centre frequency, low to high">Sort by frequency</button>
+          </div>
+          <div id="combList"></div>
+          <div class="setrow" style="gap:4px;">
+            <input type="number" id="combFreq" class="setnum" placeholder="Hz" style="width:56px;" inputmode="numeric">
+            <input type="number" id="combWidth" class="setnum" placeholder="&plusmn;Hz" style="width:48px;" value="10" min="1" title="How far the tone roams either side of the centre frequency" inputmode="numeric">
+            <input type="text" id="combNote" placeholder="why (e.g. speaker whine)" style="flex:1 1 auto; min-width:0; font-size:10.5px; background:rgba(0,0,0,.18); color:var(--text-dim); border:1px solid var(--border-strong); border-radius:5px; padding:3px 6px;">
+            <button type="button" class="btn" style="flex:0 0 auto; padding:4px 8px; font-size:10.5px;" onclick="addNotch()">Add</button>
+          </div>
         </div>
 
         <!-- Was `hidden`, and nothing ever removed the attribute -- so every
@@ -1704,6 +1921,14 @@
        burned into the frame by the HUD code, so it comes from the picture and
        is the same for every viewer regardless of their machine's clock. When
        that lands the footer keeps the licence and drops the date. -->
+  <!-- Global reset. The pinhole keys above are RELOADs (re-pull the streams in
+       THIS browser). This restarts the whole server stack via /api/reset, which
+       briefly drops the feed for every viewer, so it is guarded by a confirm. -->
+  <div style="display:flex; justify-content:center; margin:8px 0 2px;">
+    <button type="button" class="btn guarded" id="globalResetBtn"
+            style="width:auto; padding:6px 22px;"
+            title="Full reset: restarts the server (mediamtx + broadcast-api). Briefly drops the stream for every viewer.">Reset</button>
+  </div>
   <div class="page-foot">
     HLS Livecam Server by The Fanged Deity — free software under the
     <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>
@@ -1795,7 +2020,7 @@
      window.location.hostname is only a fallback: over loopback it is
      127.0.0.1 and over tailscale it is an address, neither of which is the
      node's name. /api/info corrects it below. */
-  var BUILD_VERSION  = 'mac-v1.8.0-15-g9b68592-dirty';
+  var BUILD_VERSION  = 'mac-v1.8.0';
   var PRODUCT_SHORT  = 'HLSLS';        // corrected by /api/info; the node owns it
 
   function setTabTitle(host) {
@@ -2717,6 +2942,119 @@
   pollMsgLock();
   setInterval(pollMsgLock, 3000);
 
+  // ── Notch filters (ported from Tanzania) ──────────────────────────
+  function toggleCombMenu() {
+    var menu = document.getElementById('combMenu');
+    var btn = document.getElementById('combToggle');
+    if (!menu) return;
+    var open = menu.hidden;
+    menu.hidden = !open;
+    if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) loadNotches();
+  }
+
+  function _notchFreqLabel(n) {
+    if (n.range) {
+      var lo = n.range[0], hi = n.range[1];
+      return Math.round((lo + hi) / 2) + 'Hz ±' + Math.round((hi - lo) / 2);
+    }
+    return Math.round(n.center) + 'Hz ±' + Math.round(n.width || 20);
+  }
+  function _notchNoteLabel(note) {
+    note = note || '';
+    return note.length > 28 ? note.slice(0, 27) + '…' : note;
+  }
+
+  function renderNotches(data) {
+    var list = (data && data.notches) || [];
+    var box = document.getElementById('combList');
+    var cnt = document.getElementById('combCount');
+    if (cnt) cnt.textContent = list.length;
+    if (!box) return;
+    box.innerHTML = '';
+    list.forEach(function (n, i) {
+      var enabled = n.enabled !== false;   // absent key = enabled
+      var row = document.createElement('div'); row.className = 'combrow' + (enabled ? '' : ' bypassed');
+      var t = document.createElement('button'); t.type = 'button';
+      t.className = 'pinled';
+      t.title = enabled ? 'Filtering -- click to bypass' : 'Bypassed -- click to filter again';
+      t.onclick = function () { toggleNotchEnabled(i, !enabled); };
+      var tb = document.createElement('span'); tb.className = 'bulb' + (enabled ? ' on' : '');
+      t.appendChild(tb);
+      var f = document.createElement('span'); f.className = 'combfreq'; f.textContent = _notchFreqLabel(n);
+      var note = document.createElement('span'); note.className = 'combnote';
+      note.title = n.note || '';
+      note.textContent = _notchNoteLabel(n.note);
+      var x = document.createElement('button'); x.type = 'button'; x.className = 'combx';
+      x.textContent = '×'; x.title = 'Remove this notch';
+      x.onclick = function () { removeNotch(i); };
+      row.appendChild(t); row.appendChild(f); row.appendChild(note); row.appendChild(x);
+      box.appendChild(row);
+    });
+  }
+
+  function toggleNotchEnabled(i, enabled) {
+    fetch('/api/notches?i=' + encodeURIComponent(i), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+
+  // Bulk action ("Turn on all" / "Turn off all"): same PATCH endpoint, no
+  // ?i -- the server reads that as "every entry", sets them all once, and
+  // holds no state of its own.
+  function setAllNotches(enabled) {
+    fetch('/api/notches', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+
+  function sortNotches() {
+    fetch('/api/notches/sort', { method: 'POST' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+
+  function addNotch() {
+    var freq = parseFloat(document.getElementById('combFreq').value);
+    var width = parseFloat(document.getElementById('combWidth').value) || 10;
+    var note = document.getElementById('combNote').value || '';
+    if (!freq || freq < 20 || freq > 20000) { alert('Enter a frequency between 20 and 20000 Hz.'); return; }
+    fetch('/api/notches', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ center: freq, width: width, note: note })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data) { alert('Could not add that notch.'); return; }
+        document.getElementById('combFreq').value = '';
+        document.getElementById('combNote').value = '';
+        renderNotches(data);
+      })
+      .catch(function () {});
+  }
+
+  function removeNotch(i) {
+    fetch('/api/notches?i=' + encodeURIComponent(i), { method: 'DELETE' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderNotches(data); })
+      .catch(function () {});
+  }
+
+  function loadNotches() {
+    fetch('/api/notches', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(renderNotches).catch(function () {});
+  }
+
   function updateClearBtn() {
     var val = msgBox.value.trim();
     var changed = val !== currentMsg;
@@ -2899,11 +3237,56 @@
      say goes here as well as to `title`, because `title` needs a pointer to
      hover and the device that hits these failures hardest has none.
      `warn` is for a state the viewer has to act on; plain for progress. */
-  var audioNoteEl = document.getElementById('audioNote');
+  var audioNoteEl = document.getElementById('audioNote');   // kept in DOM, hidden; the HUD note below is what's shown now
+
+  // Universal picture HUD note (ported from tanzania's SECOND pass at this
+  // element). POSITION AND SIZE ARE NOW PURE CSS (cqh units on .video-wrap,
+  // a size container -- see its container-type). The old sizeHud() measured
+  // wrap.clientHeight and wrote inline top/left/fontSize by hand on resize +
+  // loadedmetadata -- the exact race tanzania hit twice on its own copy of
+  // this element (JS ran at whatever moment it happened to fire, nothing
+  // forced a recompute once text was already showing). CSS container query
+  // units have no such race: the browser recomputes them on every layout
+  // change, automatically, forever, with no JS in the loop at all.
+  //
+  // The one thing CSS genuinely cannot measure is a FONT's cap-height/em
+  // ratio (different platforms' "Arial" differ), so that -- and ONLY that --
+  // is still measured in JS, once, into --hud-cap-ratio for the CSS calc()
+  // in .video-hud to read. No video-dimension dependency, so no race either:
+  // font metrics are available the instant the font resolves.
+  var HUD_FONT_FAMILY = 'Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif';
+  (function () {
+    var ratio = 0.716;   // Arial's real ratio -- the fallback if measureText's advanced metrics are unavailable
+    try {
+      var c = document.createElement('canvas').getContext('2d');
+      var REF = 1000;
+      c.font = '400 ' + REF + 'px ' + HUD_FONT_FAMILY;
+      var asc = c.measureText('H').actualBoundingBoxAscent;
+      if (asc && asc > 0) ratio = asc / REF;
+    } catch (e) {}
+    var el = document.getElementById('videoHud');
+    if (el) el.style.setProperty('--hud-cap-ratio', ratio);
+  })();
+
   function audioNote(text, warn) {
-    if (!audioNoteEl) return;
-    audioNoteEl.textContent = text || '';
-    audioNoteEl.classList.toggle('warn', !!warn);
+    if (audioNoteEl) { audioNoteEl.textContent = text || ''; audioNoteEl.classList.toggle('warn', !!warn); }
+    var hud = document.getElementById('videoHud');
+    if (!hud) return;
+    hud.textContent = text || '';
+    hud.classList.toggle('warn', !!warn);
+    var on = !!(text && String(text).trim());
+    hud.classList.toggle('show', on);
+  }
+
+  // CV mode's own HUD rows, ported from tanzania -- the SAME words as the
+  // burned-in banner/capability lines (see broadcast-api's /api/pipeline
+  // cv_text/cv_capability_text), shown only while feedMode is 'cv'; empty
+  // (and hidden) otherwise. Called from applyPipeline, which already runs
+  // on every pipeline poll.
+  function setHudCv(text, capText) {
+    var a = document.getElementById('hudCv'), b = document.getElementById('hudCvCap');
+    if (a) a.textContent = (feedMode === 'cv') ? (text || '') : '';
+    if (b) b.textContent = (feedMode === 'cv') ? (capText || '') : '';
   }
 
   /*
@@ -3020,6 +3403,7 @@
     stage(ledFov,     p.cv_foveal === true ? 'ok' : 'pending');
     stage(ledScene2d, p.cv_scene === 'registered' ? 'ok' : 'pending');
     // ledScene3d is left untouched -- no field reports it, so it stays dark.
+    if (typeof setHudCv === 'function') setHudCv(p.cv_text, p.cv_capability_text);
 
     /* The server's own detail string is the useful thing to surface on hover:
        "capture hung opening the camera/microphone" beats a dark lamp. */
@@ -3193,7 +3577,14 @@
     indicator(document.getElementById('indStop'), audio.paused);
     indicator(document.getElementById('indMute'), audioMuted);
 
-    if (muteKey) muteKey.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
+    if (muteKey) {
+      // NOT gated on a live call any more (ported from tanzania, ron: "I
+      // don't see why Mute mic button has to be suppressed... I can want to
+      // remember to toggle it off without needing it to be live" -- the
+      // toggle should be armable ahead of a call, not just usable during
+      // one; "long as the wiring toggles, it's fine").
+      muteKey.setAttribute('aria-pressed', audioMuted ? 'true' : 'false');
+    }
     if (listenEl) {
       /* Muting dims the groove rather than dragging it to zero. */
       listenEl.classList.toggle('is-muted', audioMuted);
@@ -3412,7 +3803,7 @@
         self.live = true;
         twoWay.busy = false;
         twoWay.dir = 'two-way';
-        setAudioState('Two-way');
+        setAudioState('RTC');   // matches the HLS/RTC button rename
         /* Bounded by design. A page that crashes with the microphone open
            would otherwise leave this room live until somebody noticed, and
            nobody would be looking at the panel to see the lamp. */
@@ -4289,7 +4680,7 @@
     var outOn = !!(twoWay && twoWay.on);
 
     var txt;
-    if (outOn && (inOn || rtcIn))      txt = 'BIDIRECTIONAL';
+    if (outOn && (inOn || rtcIn))      txt = 'TWO-WAY';
     else if (outOn)                    txt = 'OUTBOUND';
     else if (inOn || rtcIn)            txt = 'INBOUND';
     else                               txt = 'NONE';
@@ -4380,6 +4771,35 @@
 
 
 })();
+</script>
+<script>
+  (function () {
+    var gr = document.getElementById('globalResetBtn');
+    if (!gr) return;
+    var armed = false, armTimer = null, label = gr.textContent;
+    gr.addEventListener('click', function () {
+      if (!armed) {
+        armed = true; gr.textContent = 'Confirm reset?'; gr.classList.add('pressed');
+        armTimer = setTimeout(function () {
+          armed = false; gr.textContent = label; gr.classList.remove('pressed');
+        }, 4000);
+        return;
+      }
+      if (armTimer) clearTimeout(armTimer);
+      armed = false; gr.disabled = true; gr.textContent = 'Restarting\u2026';
+      fetch('/api/reset', { method: 'POST' }).catch(function () {});
+      setTimeout(function () {
+        var tries = 0;
+        var iv = setInterval(function () {
+          tries++;
+          fetch('/api/info', { cache: 'no-store' })
+            .then(function (r) { if (r && r.ok) { clearInterval(iv); location.reload(); } })
+            .catch(function () {});
+          if (tries > 40) { clearInterval(iv); location.reload(); }
+        }, 500);
+      }, 2500);
+    });
+  })();
 </script>
 </body>
 </html>
