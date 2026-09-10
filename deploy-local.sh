@@ -30,7 +30,7 @@ echo "== installing =="
 install -D -m0644 "$REPO/pkg/usr/share/hls-livecam-server/vendor/hls.min.js" \
         /usr/share/hls-livecam-server/vendor/hls.min.js
 echo "  installed /usr/share/hls-livecam-server/vendor/hls.min.js"
-install -m0644 "$REPO/pkg/usr/share/hls-livecam-server/index.html" /usr/share/hls-livecam-server/index.html
+install -m0644 "$REPO/pkg/usr/share/hls-livecam-server/index.html" /var/www/hls-livecam/index.html
 echo "  installed index.html"
 install -m0755 "$REPO/pkg/usr/local/bin/broadcast-api" /usr/local/bin/broadcast-api
 echo "  installed broadcast-api"
