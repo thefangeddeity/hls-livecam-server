@@ -888,9 +888,26 @@ def _start_loopback_publisher(denv, mode='show'):
             # General high-pass: the vocal fundamental starts ~85 Hz, so cutting
             # below 80 Hz removes room rumble, HVAC and handling thumps with no
             # effect on speech. AUDIO_HIGHPASS_HZ tunes it; 'off' disables.
+            #
+            # CASCADED STAGES (ported from 7elwe, 2026-09-10): ffmpeg's highpass
+            # is a single 2nd-order Butterworth section, 12 dB/oct -- too gentle
+            # a shoulder for broadband road/traffic rumble. Measured there:
+            # dragging the corner from 200->300 Hz bought only -3.6 dB at
+            # 125-250 Hz while pulling the corner up into speech and (on that
+            # node) cat vocal fundamentals -- moving the corner is the wrong
+            # knob for this problem. Repeating the SAME filter cascades the
+            # slope (each stage +12 dB/oct) while leaving everything above the
+            # corner untouched, so the corner can stay speech-safe (~250-300 Hz)
+            # and the shoulder gets as steep as the room needs. Admin-only
+            # (device.env, not AUDIO_TUNABLES) for now -- a Settings-panel
+            # control can follow once someone other than 7elwe needs it.
             hp = str(denv.get('AUDIO_HIGHPASS_HZ', '80')).strip()
             if hp and hp.lower() not in ('0', 'off', 'none', 'false'):
-                parts.append(f'highpass=f={hp}')
+                try:
+                    hp_stages = max(1, min(4, int(denv.get('AUDIO_HIGHPASS_STAGES', '1'))))
+                except ValueError:
+                    hp_stages = 1
+                parts.extend([f'highpass=f={hp}'] * hp_stages)
             # General low-pass: speech tops out ~8 kHz and all intelligibility
             # is below ~4 kHz, so cutting above 14 kHz removes ultra-high hiss
             # and digital fizz without touching the voice or the room's "air".
