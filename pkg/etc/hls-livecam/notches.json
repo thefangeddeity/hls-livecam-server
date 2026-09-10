@@ -13,7 +13,7 @@
     "monitor exists to hear things, so each records WHY and WHEN.",
     "",
     "SEEDED FROM ARIANA (mac-hls-livecam state/notches.json). Ariana's users",
-    "found these by ear; ron has heard similar noise on this Linux box and",
+    "found these by ear; dev has heard similar noise on this Linux box and",
     "expects the same feedback loops, so they are carried over as a sane start.",
     "Provisional -- fine-tune later, or from a tuning module. The real fix is",
     "echo cancellation (PipeWire module-echo-cancel on Linux); when that lands,",

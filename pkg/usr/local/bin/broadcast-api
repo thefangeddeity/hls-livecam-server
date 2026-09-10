@@ -62,14 +62,14 @@ def _normalize_mode(val):
 
 MAX_LEN         = 120
 DEVICE_ENV      = '/etc/hls-livecam/device.env'
-# TWO TIERS, deliberately (ron: "one for things you should tweak, one for things
+# TWO TIERS, deliberately (dev: "one for things you should tweak, one for things
 # it's safe for a user to tweak"). device.env is the ADMIN tier: hardware and
 # plumbing -- devices, loopback, backend, notches, ECHO_DUCK -- root-owned, my
 # domain. The USER-SAFE tier below is the DSP knobs the Settings panel lets a
 # user tweak freely; they live in their OWN group-writable file, NEVER in
 # device.env, so there is one home per key and no override tangle.
 #
-# TALK_GAIN_DB (outbound, room speaker) moved INTO this tier on ron's explicit
+# TALK_GAIN_DB (outbound, room speaker) moved INTO this tier on dev's explicit
 # ask ("allow Settings to control inbound and outbound gain separately") --
 # it was admin-only because it can drive acoustic feedback if cranked too
 # high, so it keeps a TIGHTER clamp than inbound (see audio_settings_post) and
@@ -200,7 +200,7 @@ _talk_since  = 0.0       # session marker: set ONCE at true session start, uncha
 _talk_last_seen = 0.0     # last time the client proved the page is alive (a GET
                           # /api/talk poll, or session start). Heartbeat-driven
                           # liveness REPLACES the old fixed TALK_MAX_SECONDS cap
-                          # (ron: two-way was cutting out "for no reason" at 120s
+                          # (dev: two-way was cutting out "for no reason" at 120s
                           # -- that was a one-shot Timer, not a real fault). A
                           # session now runs indefinitely as long as the client
                           # keeps polling; it only ends when the page actually
@@ -313,7 +313,7 @@ def _talk_af(denv):
     gain = (denv.get('TALK_GAIN_DB', '') or '').strip() or '-15'
     if gain and gain != '0':
         parts.append(f'volume={gain}dB')
-    # TEST-ONLY server speaker mute (ron: "for RTC testing purposes, leaves
+    # TEST-ONLY server speaker mute (dev: "for RTC testing purposes, leaves
     # everything intact, just mutes server speaker"). Applied LAST, after
     # every other stage, so the whole real pipeline still runs -- capture,
     # notches, band-limit, gain, roomaudio publish, the RTC signaling itself
@@ -326,7 +326,7 @@ def _talk_af(denv):
 
 def _pulse_env(denv):
     """Env for ffmpeg legs that talk to PulseAudio (the AEC devices live there).
-    The service runs as http and cannot reach ron's per-user pulse socket, so
+    The service runs as http and cannot reach dev's per-user pulse socket, so
     broadcast-api points at a shared anonymous socket (module-native-protocol-
     unix, socket=PULSE_SERVER). Harmless on non-pulse legs -- they ignore it."""
     e = dict(os.environ)
@@ -1562,7 +1562,7 @@ def audio_settings_post():
     # safety net and is NOT reachable from here regardless of this value.
     tg = _num(body.get('TALK_GAIN_DB'))
     if tg is not None: out['TALK_GAIN_DB'] = str(round(max(-20.0, min(12.0, tg)), 1))
-    # TEST-ONLY server speaker mute (ron: "for RTC testing purposes, leaves
+    # TEST-ONLY server speaker mute (dev: "for RTC testing purposes, leaves
     # everything intact, just mutes server speaker"). A real boolean, not a
     # clamped number -- present in the body at all (even false) is a real
     # instruction, distinct from every other field's "absent = leave alone".
@@ -1584,7 +1584,7 @@ def audio_settings_post():
     # Only respawn the /cam ROOM publisher when a key it actually reads
     # changed. TALK_GAIN_DB and TALK_MUTE_SPEAKER feed the talk pipeline
     # (_talk_af) only -- setting _audio_reload_evt for those needlessly
-    # bounced HLS/room audio on every RTC-only tweak (ron: "Make sure none
+    # bounced HLS/room audio on every RTC-only tweak (dev: "Make sure none
     # of your muting wirings killed HLS audio" -- they did; this was why).
     if any(k in out for k in ('AUDIO_HIGHPASS_HZ', 'AUDIO_LOWPASS_HZ', 'AUDIO_GAIN_DB')):
         _audio_reload_evt.set()
@@ -1616,7 +1616,7 @@ def _write_notches(doc):
 def _notches_response(doc):
     # One envelope for every notch endpoint: the per-entry list, so the
     # client never has to make a second request to see the result of an
-    # edit. No master on/off any more (ron: "Logic of 'All notch filters'
+    # edit. No master on/off any more (dev: "Logic of 'All notch filters'
     # toggle is wrong... you should still be able to hand-select which ones
     # you want" -- a sticky master that blocked per-entry editing when off
     # was the bug). See notches_patch for the bulk on/off actions that
@@ -1626,7 +1626,7 @@ def _notches_response(doc):
 
 @app.route('/api/notches', methods=['GET'])
 def notches_get():
-    """The notch filter database, for the Settings submenu (ron: 'add comb
+    """The notch filter database, for the Settings submenu (dev: 'add comb
     filter to SETTINGS panel... maybe as a submenu'). Exposes the curated
     feedback-tone list for view/add/remove, on the SAME file broadcast-api
     already reads at every publisher (re)build."""
@@ -1694,11 +1694,11 @@ def notches_delete():
 def notches_patch():
     """Toggle a notch's enabled state, body {"enabled": bool}.
 
-    With ?i=N: one entry, bypass it without deleting it (ron: 'each notch
+    With ?i=N: one entry, bypass it without deleting it (dev: 'each notch
     could have its toggle'). WITHOUT ?i: a BULK action -- sets every entry
     to the same enabled value in one request ("Turn on/off all notch
     filters"). This replaced a sticky master switch that silenced every
-    notch independent of each one's own flag (ron: "Logic of 'All notch
+    notch independent of each one's own flag (dev: "Logic of 'All notch
     filters' toggle is wrong... you should still be able to hand-select
     which ones you want" -- the master blocked per-entry editing while off,
     which was the bug). A bulk action has no state of its own to fight: it
@@ -1740,7 +1740,7 @@ def _notch_center_hz(item):
 
 @app.route('/api/notches/sort', methods=['POST'])
 def notches_sort():
-    """Reorder the list by centre frequency (ron: 'Add button to order all
+    """Reorder the list by centre frequency (dev: 'Add button to order all
     by frequency'), restoring the file's own stated convention ('Ordered by
     frequency' -- see notches.json's _comment) after manual/API additions
     append to the end regardless of where they'd sort. Order has no effect
