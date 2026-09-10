@@ -1747,10 +1747,20 @@
           <input type="number" id="setHighpass" class="setnum" min="0" max="1000" step="10">
           <span class="setunit eng">Hz</span>
         </label>
+        <label class="setrow" title="How steep the high-pass cut is: each stage is another 12 dB/octave. Against broadband road noise this does far more than raising the corner, and it leaves everything above the corner alone.">
+          <span class="setlab eng">HP slope</span>
+          <input type="number" id="setHpStages" class="setnum" min="1" max="4" step="1">
+          <span class="setunit eng">&times;12dB</span>
+        </label>
         <label class="setrow" title="Cuts everything above this -- the main lever on broadband hiss">
           <span class="setlab eng">Low-pass</span>
           <input type="number" id="setLowpass" class="setnum" min="1000" max="24000" step="500">
           <span class="setunit eng">Hz</span>
+        </label>
+        <label class="setrow" title="How steep the low-pass cut is: each stage is another 12 dB/octave. The lever for broadband hiss above the corner.">
+          <span class="setlab eng">LP slope</span>
+          <input type="number" id="setLpStages" class="setnum" min="1" max="4" step="1">
+          <span class="setunit eng">&times;12dB</span>
         </label>
         <label class="setrow" title="Room -> viewer (HLS + RTC listen)">
           <span class="setlab eng">Inbound gain</span>
@@ -2070,7 +2080,9 @@
   // appearing to have been taken.
   var AUDIO_FIELDS = {
     setHighpass: 'AUDIO_HIGHPASS_HZ',
+    setHpStages: 'AUDIO_HIGHPASS_STAGES',
     setLowpass:  'AUDIO_LOWPASS_HZ',
+    setLpStages: 'AUDIO_LOWPASS_STAGES',
     setGainIn:   'AUDIO_GAIN_DB',
     setGainOut:  'TALK_GAIN_DB'
   };

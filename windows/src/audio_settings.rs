@@ -26,7 +26,19 @@ use std::sync::Mutex;
 /// away before it starts howling.
 const SPEC: &[(&str, f64, f64, f64)] = &[
     ("AUDIO_HIGHPASS_HZ", 0.0, 1000.0, 80.0),
+    // Cascaded highpass stages. ffmpeg's highpass is 2nd-order (12
+    // dB/oct), which is a gentle shoulder: against city road noise,
+    // raising the CORNER to chase it just eats speech and cat
+    // fundamentals, while each extra STAGE doubles the slope and leaves
+    // everything above the corner alone. Measured on 7elwe: 200 -> 300 Hz
+    // bought only -3.6 dB at 125-250, where a second stage is worth far
+    // more without moving the corner at all.
+    ("AUDIO_HIGHPASS_STAGES", 1.0, 4.0, 1.0),
     ("AUDIO_LOWPASS_HZ", 1000.0, 24000.0, 14000.0),
+    // Same story at the top end: `lowpass` is also 2nd-order, and HF
+    // hiss was this room's loudest octave before treatment. Symmetric
+    // with the high-pass so neither shoulder is the weak one.
+    ("AUDIO_LOWPASS_STAGES", 1.0, 4.0, 1.0),
     ("AUDIO_GAIN_DB", -20.0, 30.0, 12.0),
     ("TALK_GAIN_DB", -20.0, 12.0, 0.0),
 ];
@@ -105,18 +117,36 @@ impl AudioSettings {
     /// publisher for a talk-only tweak needlessly bounces HLS audio for
     /// every listener -- a real bug hit on Tanzania, avoided here by
     /// construction.
+    /// Every key that feeds build_af_chain belongs here. Missing one is
+    /// silent and confusing: the value persists and the API echoes it
+    /// back as accepted, but the chain is never rebuilt, so it simply
+    /// has no effect (hit exactly that with AUDIO_HIGHPASS_STAGES --
+    /// three cascade stages measured as doing nothing until a different
+    /// key forced a restart).
     pub fn affects_room(key: &str) -> bool {
         matches!(
             key,
-            "AUDIO_HIGHPASS_HZ" | "AUDIO_LOWPASS_HZ" | "AUDIO_GAIN_DB"
+            "AUDIO_HIGHPASS_HZ"
+                | "AUDIO_HIGHPASS_STAGES"
+                | "AUDIO_LOWPASS_HZ"
+                | "AUDIO_LOWPASS_STAGES"
+                | "AUDIO_GAIN_DB"
         )
     }
 
     pub fn highpass_hz(&self) -> f64 {
         self.num("AUDIO_HIGHPASS_HZ")
     }
+    /// How many times to cascade the high-pass. Each stage doubles the
+    /// slope (12 dB/oct per stage) -- see the SPEC comment.
+    pub fn highpass_stages(&self) -> u32 {
+        self.num("AUDIO_HIGHPASS_STAGES").round().clamp(1.0, 4.0) as u32
+    }
     pub fn lowpass_hz(&self) -> f64 {
         self.num("AUDIO_LOWPASS_HZ")
+    }
+    pub fn lowpass_stages(&self) -> u32 {
+        self.num("AUDIO_LOWPASS_STAGES").round().clamp(1.0, 4.0) as u32
     }
     pub fn gain_db(&self) -> f64 {
         self.num("AUDIO_GAIN_DB")

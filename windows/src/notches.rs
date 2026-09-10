@@ -145,11 +145,18 @@ impl Notches {
             .collect();
         let hp = audio.highpass_hz();
         if hp > 0.0 {
-            parts.push(format!("highpass=f={hp}"));
+            // Cascaded: ffmpeg's highpass is 12 dB/oct, too gentle to
+            // cut city road noise without dragging the corner up into
+            // speech. Repeating the stage steepens the shoulder instead.
+            for _ in 0..audio.highpass_stages() {
+                parts.push(format!("highpass=f={hp}"));
+            }
         }
         let lp = audio.lowpass_hz();
         if lp > 0.0 {
-            parts.push(format!("lowpass=f={lp}"));
+            for _ in 0..audio.lowpass_stages() {
+                parts.push(format!("lowpass=f={lp}"));
+            }
         }
         let gain = audio.gain_db();
         if gain != 0.0 {
