@@ -1,6 +1,11 @@
 [package]
 name = "hls-livecam-win"
-version = "0.1.0"
+# One product version across the fleet (ron): the nodes are functionally
+# equivalent, so the .deb, .dmg and .msi all carry the release version
+# rather than each platform keeping its own line. This feeds the MSI
+# filename, the installer's ProductVersion, and the viewer's
+# windows-v<version> build label via CARGO_PKG_VERSION.
+version = "7.0.0"
 edition = "2021"
 description = "Native Windows camera node for hls-livecam-server (control-plane, web assets, capture pipeline)"
 license = "GPL-3.0"

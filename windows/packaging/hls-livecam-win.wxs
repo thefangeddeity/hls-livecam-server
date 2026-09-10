@@ -62,6 +62,11 @@
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="hls-livecam-win">
           <Directory Id="BINFOLDER" Name="bin" />
+          <!-- models\ next to the exe — the first place cv.rs's
+               resolve_model looks. Without this the CV sidecar starts,
+               finds no weights and stays dark on a fresh machine, which
+               looks like a broken feature rather than a missing file. -->
+          <Directory Id="MODELSFOLDER" Name="models" />
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
@@ -107,12 +112,22 @@
       </Component>
     </DirectoryRef>
 
+    <!-- The CV detector's weights. The two Python files it runs are
+         embedded in the exe itself (include_str!), so they need no
+         component here; only the 12.8 MB model is a real file. -->
+    <DirectoryRef Id="MODELSFOLDER">
+      <Component Id="CvModel" Guid="*">
+        <File Id="yolov8n.onnx" Name="yolov8n.onnx" Source="$(var.ModelPath)" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
     <Feature Id="Main" Title="HLS Livecam" Level="1">
       <ComponentRef Id="MainExe" />
       <ComponentRef Id="AppIconFile" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="Ffmpeg" />
       <ComponentRef Id="Mediamtx" />
+      <ComponentRef Id="CvModel" />
     </Feature>
 
     <!-- =====================================================================

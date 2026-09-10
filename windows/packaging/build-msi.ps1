@@ -14,7 +14,11 @@
   Usage:  powershell -ExecutionPolicy Bypass -File build-msi.ps1 [-Version 1.0.0]
 #>
 param(
-  [string]$Version = "1.0.0"
+  # One product version across the fleet -- the .deb, .dmg and .msi all
+  # carry the release version rather than each platform keeping its own
+  # line. Keep this in step with windows\Cargo.toml, which feeds the
+  # viewer's own windows-v<version> build label.
+  [string]$Version = "7.0.0"
 )
 $ErrorActionPreference = "Stop"
 $pkg   = $PSScriptRoot
@@ -40,7 +44,11 @@ $exe      = Join-Path $win "target\release\camdash.exe"
 $ffmpeg   = Join-Path $win "target\release\bin\ffmpeg.exe"
 $mediamtx = Join-Path $win "target\release\bin\mediamtx.exe"
 $ico      = Join-Path $win "assets\icon.ico"
-foreach ($f in @($exe,$ffmpeg,$mediamtx,$ico)) {
+# The CV detector's weights (tracked in git, unlike ffmpeg/mediamtx).
+# cv.rs looks in <exe>\models first, so this is where it has to land or
+# CV stays dark on a fresh machine.
+$model    = Join-Path (Split-Path $win -Parent) "models\yolov8n.onnx"
+foreach ($f in @($exe,$ffmpeg,$mediamtx,$ico,$model)) {
   if (-not (Test-Path $f)) {
     throw "Missing build input: $f`n" +
           "  camdash.exe : run ``cargo build --release`` in windows\`n" +
@@ -58,7 +66,7 @@ $msi    = Join-Path $build "hls-livecam-win-$Version.msi"
 
 & $candle -nologo -arch x64 -ext WixUtilExtension `
   "-dProductVersion=$Version" "-dExePath=$exe" "-dFfmpegPath=$ffmpeg" `
-  "-dMediamtxPath=$mediamtx" "-dIcoPath=$ico" `
+  "-dMediamtxPath=$mediamtx" "-dIcoPath=$ico" "-dModelPath=$model" `
   -out $wixobj $wxs
 if ($LASTEXITCODE -ne 0) { throw "candle failed ($LASTEXITCODE)" }
 
