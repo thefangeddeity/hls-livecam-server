@@ -91,6 +91,16 @@ pub struct Pipeline {
     mediamtx_child: Mutex<Option<Child>>,
     target: StdMutex<Source>,
     device: StdMutex<String>,
+    /// None when audio is off (default -- see load_or_pick_audio_device)
+    /// or no dshow audio device could be found. A node with no microphone
+    /// publishes exactly what it did before, same as broadcast-api's
+    /// AUDIO_ENABLED gate.
+    audio_device: StdMutex<Option<String>>,
+    /// Set once at startup from HLS_AUDIO_ENABLED -- kept separately from
+    /// audio_device because both "disabled" and "enabled but no device
+    /// found" collapse to None there, and /api/pipeline's mic lamp needs
+    /// to tell those apart (dark vs red -- see audio_status).
+    audio_enabled: bool,
     running: AtomicBool,
     /// Operator-controlled on/off (the SERVER: ON/OFF control). Distinct
     /// from `running`, which only ever goes false once, at real process
@@ -113,6 +123,7 @@ impl Pipeline {
         state: Arc<AppState>,
     ) -> Arc<Self> {
         let device = load_or_pick_device(&ffmpeg, &state).await;
+        let (audio_enabled, audio_device) = load_or_pick_audio_device(&ffmpeg, &state).await;
         let initial = source_for_mode(&state.feed_mode.lock().unwrap().clone());
 
         let p = Arc::new(Self {
@@ -123,6 +134,8 @@ impl Pipeline {
             mediamtx_child: Mutex::new(None),
             target: StdMutex::new(initial),
             device: StdMutex::new(device),
+            audio_device: StdMutex::new(audio_device),
+            audio_enabled,
             running: AtomicBool::new(true),
             enabled: AtomicBool::new(true),
             capture_alive: AtomicBool::new(false),
@@ -167,6 +180,31 @@ impl Pipeline {
     /// needs it to function.
     pub async fn manual_repair(&self) {
         self.restart_capture().await;
+    }
+
+    /// Re-applies the current notch/audio filter chain by restarting
+    /// capture on whatever source is active -- notches+gain apply in
+    /// every mode, hide included (mirrors broadcast-api's unconditional
+    /// a_filter). Called after any /api/notches write that changes what's
+    /// audible, so the change is heard immediately rather than waiting for
+    /// an unrelated restart. Sort doesn't call this -- order has no
+    /// audible effect.
+    pub async fn reload_audio(&self) {
+        self.restart_capture().await;
+    }
+
+    /// Three-state mic lamp for /api/pipeline -- "disabled" (dark, not a
+    /// fault) is a genuinely different state from "down" (enabled but no
+    /// device found, a real fault) even though audio_device alone can't
+    /// tell them apart (both are None there).
+    pub fn audio_status(&self) -> &'static str {
+        if !self.audio_enabled {
+            "disabled"
+        } else if self.audio_device.lock().unwrap().is_some() {
+            "ok"
+        } else {
+            "down"
+        }
     }
 
     /// Cheap synchronous read for the GUI -- see PipelineStatus docs.
@@ -252,13 +290,24 @@ impl Pipeline {
         let target = *self.target.lock().unwrap();
         let device = self.device.lock().unwrap().clone();
 
+        // (audio device name, -af chain) -- None when audio is off/absent,
+        // in which case every command below falls back to its original
+        // video-only shape (no regression for a node with no mic).
+        let audio_owned: Option<(String, String)> = self
+            .audio_device
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|d| (d, self.state.notches.build_af_chain()));
+        let audio = audio_owned.as_ref().map(|(d, f)| (d.as_str(), f.as_str()));
+
         let cmd = match target {
-            Source::Show => capture_command(&self.ffmpeg, &device),
+            Source::Show => capture_command(&self.ffmpeg, &device, audio),
             Source::Cloak => {
                 let bw = *self.state.bw_mode.lock().unwrap();
-                cloak_command(&self.ffmpeg, &device, bw)
+                cloak_command(&self.ffmpeg, &device, bw, audio)
             }
-            Source::Hidden => hide_command(&self.ffmpeg),
+            Source::Hidden => hide_command(&self.ffmpeg, audio),
         };
         match spawn(cmd) {
             Ok(child) => {
@@ -268,6 +317,7 @@ impl Pipeline {
             }
             Err(e) => {
                 eprintln!("pipeline: failed to start capture ({target:?}): {e}");
+                crate::launch_log(&format!("pipeline: failed to start capture ({target:?}): {e}"));
                 self.capture_alive.store(false, Ordering::Relaxed);
             }
         }
@@ -344,7 +394,10 @@ fn spawn_mediamtx_supervisor(p: Arc<Pipeline>) {
                     // `enabled` next iteration) or it crashed (outer loop
                     // respawns after the backoff below, `enabled` still true)
                 }
-                Err(e) => eprintln!("pipeline: failed to start mediamtx: {e}"),
+                Err(e) => {
+                    eprintln!("pipeline: failed to start mediamtx: {e}");
+                    crate::launch_log(&format!("pipeline: failed to start mediamtx: {e}"));
+                }
             }
             tokio::time::sleep(RESTART_BACKOFF).await;
         }
@@ -383,6 +436,7 @@ fn spawn_stall_supervisor(p: Arc<Pipeline>) {
             if exited {
                 p.capture_alive.store(false, Ordering::Relaxed);
                 eprintln!("pipeline: capture process gone, restarting");
+                crate::launch_log("pipeline: capture process gone, restarting");
                 p.restart_capture().await;
                 last_body = None;
                 unchanged_since = None;
@@ -482,10 +536,18 @@ async fn http_get_local(path: &str) -> Option<String> {
 /// even by construction.
 pub const CAPTURE_FPS: u32 = 15;
 
-fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
+/// AAC encode parameters -- matches broadcast-api's _audio_conf defaults
+/// (AUDIO_BITRATE=96k, AUDIO_SAMPLE_RATE=48000, AUDIO_CHANNELS=2) exactly,
+/// so a room sounds the same bitrate/rate/channel-count regardless of
+/// which node published it.
+const AUDIO_BITRATE: &str = "96k";
+const AUDIO_SAMPLE_RATE: &str = "48000";
+const AUDIO_CHANNELS: &str = "2";
+
+fn capture_command(ffmpeg: &PathBuf, device_name: &str, audio: Option<(&str, &str)>) -> Command {
     // Show: the real camera, unaltered beyond the fps/pixfmt normalisation
     // every source shares.
-    dshow_capture(ffmpeg, device_name, &format!("fps={CAPTURE_FPS},format=yuv420p"))
+    dshow_capture(ffmpeg, device_name, &format!("fps={CAPTURE_FPS},format=yuv420p"), audio)
 }
 
 /// Blur/"cloak" (run 6): the SAME real dshow capture as Show, but with an
@@ -501,21 +563,31 @@ fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
 /// shape Show and Hide already use. `boxblur=20:2` = radius-20, 2-pass
 /// (≈gaussian) heavy blur. The B&W modifier appends `hue=s=0`
 /// (full desaturation) before the pixfmt convert.
-fn cloak_command(ffmpeg: &PathBuf, device_name: &str, bw: bool) -> Command {
+fn cloak_command(ffmpeg: &PathBuf, device_name: &str, bw: bool, audio: Option<(&str, &str)>) -> Command {
     let vf = if bw {
         format!("fps={CAPTURE_FPS},boxblur=20:2,hue=s=0,format=yuv420p")
     } else {
         format!("fps={CAPTURE_FPS},boxblur=20:2,format=yuv420p")
     };
-    dshow_capture(ffmpeg, device_name, &vf)
+    dshow_capture(ffmpeg, device_name, &vf, audio)
 }
 
 /// Shared dshow-capture command shape (input side + x264 output side);
 /// only the `-vf` filter chain differs between Show and Blur. Encode
 /// params are anchored on broadcast-api's _writer_loop -- see the module
 /// history; unchanged from run 2.
-fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str) -> Command {
+///
+/// Audio, when present, rides the SAME dshow input as video
+/// (`video=X:audio=Y`, ffmpeg's own combined-capture syntax) rather than a
+/// second `-i` -- one process, one input, video and audio inherently in
+/// sync, same shape broadcast-api's single ffmpeg process already uses on
+/// Linux (camera + ALSA device, one -af chain, one rtsp push).
+fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str, audio: Option<(&str, &str)>) -> Command {
     let mut cmd = Command::new(ffmpeg);
+    let input = match audio {
+        Some((adev, _)) => format!("video={device_name}:audio={adev}"),
+        None => format!("video={device_name}"),
+    };
     cmd.args([
         "-hide_banner",
         "-loglevel",
@@ -530,7 +602,7 @@ fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str) -> Command {
         "30",
         "-i",
     ])
-    .arg(format!("video={device_name}"))
+    .arg(input)
     .args([
         "-c:v",
         "libx264",
@@ -548,12 +620,11 @@ fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str) -> Command {
         "1500k",
         "-g",
         "60",
-        "-rtsp_transport",
-        "tcp",
-        "-f",
-        "rtsp",
-        RTSP_URL,
     ]);
+    if let Some((_, af)) = audio {
+        cmd.args(["-af", af, "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE, "-ac", AUDIO_CHANNELS]);
+    }
+    cmd.args(["-rtsp_transport", "tcp", "-f", "rtsp", RTSP_URL]);
     cmd
 }
 
@@ -575,7 +646,13 @@ fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str) -> Command {
 /// this is the actual fix, not a cosmetic one. Flagged here because it's
 /// a divergence from "port verbatim" instructions, not because the
 /// change itself is in doubt.
-fn hide_command(ffmpeg: &PathBuf) -> Command {
+/// Video source here is synthetic (`lavfi`), so audio -- when present --
+/// rides a SECOND, genuinely separate dshow input rather than the combined
+/// `video=X:audio=Y` syntax `dshow_capture` uses; explicit `-map` picks
+/// video off input 0 and audio off input 1. Real mic audio still plays
+/// under Hide (broadcast-api: "notches+gain apply in every mode, hide
+/// included") -- Hide switches off the PICTURE, not the room.
+fn hide_command(ffmpeg: &PathBuf, audio: Option<(&str, &str)>) -> Command {
     let mut cmd = Command::new(ffmpeg);
     cmd.args([
         "-hide_banner",
@@ -586,6 +663,11 @@ fn hide_command(ffmpeg: &PathBuf) -> Command {
         "lavfi",
         "-i",
         "color=black:s=1280x720:r=30",
+    ]);
+    if let Some((adev, _)) = audio {
+        cmd.args(["-f", "dshow", "-i"]).arg(format!("audio={adev}"));
+    }
+    cmd.args([
         "-c:v",
         "libx264",
         "-preset",
@@ -602,12 +684,14 @@ fn hide_command(ffmpeg: &PathBuf) -> Command {
         "500k",
         "-g",
         "60",
-        "-rtsp_transport",
-        "tcp",
-        "-f",
-        "rtsp",
-        RTSP_URL,
     ]);
+    if let Some((_, af)) = audio {
+        cmd.args([
+            "-map", "0:v", "-map", "1:a", "-af", af, "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE,
+            "-ac", AUDIO_CHANNELS,
+        ]);
+    }
+    cmd.args(["-rtsp_transport", "tcp", "-f", "rtsp", RTSP_URL]);
     cmd
 }
 
@@ -684,6 +768,82 @@ async fn load_or_pick_device(ffmpeg: &PathBuf, state: &AppState) -> String {
         None => {
             eprintln!("pipeline: no dshow video devices found");
             String::new()
+        }
+    }
+}
+
+/// Same enumeration trick as list_dshow_video_devices, filtering "(audio)"
+/// lines instead of "(video)" ones.
+async fn list_dshow_audio_devices(ffmpeg: &PathBuf) -> Vec<String> {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(crate::winproc::CREATE_NO_WINDOW);
+    let output = cmd.output().await;
+
+    let Ok(output) = output else { return Vec::new() };
+    let text = String::from_utf8_lossy(&output.stderr);
+
+    text.lines()
+        .filter(|l| l.trim_end().ends_with("(audio)"))
+        .filter_map(|l| {
+            let start = l.find('"')?;
+            let rest = &l[start + 1..];
+            let end = rest.find('"')?;
+            Some(rest[..end].to_string())
+        })
+        .collect()
+}
+
+/// Off by default -- mirrors broadcast-api's AUDIO_ENABLED gate ("a node
+/// with no microphone publishes exactly what it did before"). Set
+/// HLS_AUDIO_ENABLED=1 to turn a mic on for this node; HLS_AUDIO_DEVICE
+/// optionally names it (persisted friendly name otherwise, same
+/// re-enumerate-every-restart policy as load_or_pick_device).
+async fn load_or_pick_audio_device(ffmpeg: &PathBuf, state: &AppState) -> (bool, Option<String>) {
+    let enabled = std::env::var("HLS_AUDIO_ENABLED")
+        .map(|v| !matches!(v.trim(), "" | "0" | "false" | "no"))
+        .unwrap_or(false);
+    if !enabled {
+        return (false, None);
+    }
+
+    if let Ok(forced) = std::env::var("HLS_AUDIO_DEVICE") {
+        let forced = forced.trim();
+        if !forced.is_empty() {
+            return (true, Some(forced.to_string()));
+        }
+    }
+
+    let persisted = std::fs::read_to_string(state.dir().join("audio_device.txt"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let devices = list_dshow_audio_devices(ffmpeg).await;
+
+    if let Some(name) = persisted {
+        if devices.iter().any(|d| d == &name) {
+            return (true, Some(name));
+        }
+        eprintln!(
+            "pipeline: configured audio device {name:?} not currently present; devices seen: {devices:?}"
+        );
+        return (true, Some(name)); // still try it -- ffmpeg's own error is the honest signal
+    }
+
+    match devices.first() {
+        Some(first) => {
+            let _ = std::fs::write(state.dir().join("audio_device.txt"), first);
+            println!("pipeline: HLS_AUDIO_ENABLED=1, no device configured, selected first found: {first:?}");
+            (true, Some(first.clone()))
+        }
+        None => {
+            eprintln!("pipeline: HLS_AUDIO_ENABLED=1 but no dshow audio devices found; publishing video-only");
+            (true, None)
         }
     }
 }

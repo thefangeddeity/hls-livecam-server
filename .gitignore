@@ -1,2 +1,5 @@
 *.deb
 pkg/usr/local/etc/mediamtx.yml.default
+
+# Build/deploy log written by windows/deploy.ps1 on every run.
+windows/deploy.log

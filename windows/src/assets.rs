@@ -13,6 +13,14 @@ use std::sync::OnceLock;
 const INDEX_RAW: &str = include_str!("../../pkg/usr/share/hls-livecam-server/index.html");
 const CAMS_RAW: &str = include_str!("../../pkg/usr/share/hls-livecam-server/cams/cams.html");
 
+/// The fleet's actual brand mark (pulled 2026-09-09 from
+/// `origin/main:pkg/usr/share/hls-livecam-server/brand.png` -- same file
+/// Tanzania serves at this path, already cropped/sized for exactly this
+/// use: a small header logo and browser tab icon, not the wider crop
+/// windows/assets/icon-256.png uses for the desktop app's window/taskbar
+/// icon at a different scale).
+pub const BRAND_PNG: &[u8] = include_bytes!("../../pkg/usr/share/hls-livecam-server/brand.png");
+
 /// Line endings are normalised to LF before serving.
 ///
 /// git's core.autocrlf is true on a stock Windows checkout, which rewrites

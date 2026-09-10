@@ -23,24 +23,29 @@
 //!     /cams/ deliberately lacks it.
 
 use axum::{
-    body::Body,
-    extract::State,
-    http::{header, StatusCode},
+    body::{Body, Bytes},
+    extract::{OriginalUri, Query, State},
+    http::{header, HeaderMap, Method, StatusCode},
     response::Response,
-    routing::{get, post},
+    routing::{any, get, post},
     Router,
 };
-use std::sync::Arc;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use crate::assets;
+use crate::notches::NotchError;
 use crate::pipeline::Pipeline;
 use crate::state::{is_valid_mode, AppState};
+use crate::talk::Talk;
 
 /// Bundles the two things a handler might need. Most only touch state;
 /// only feed-mode also has to reach the pipeline to actually drive a swap.
 pub struct Ctx {
     pub state: Arc<AppState>,
     pub pipeline: Arc<Pipeline>,
+    pub talk: Arc<Talk>,
 }
 
 /// Flask's content type for a bare `return "text", 200`.
@@ -63,6 +68,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/broadcast.txt", get(broadcast_txt))
         .route("/buzz.txt", get(buzz_txt))
         .route("/dark.png", get(dark_png))
+        .route("/brand.png", get(brand_png))
         .route("/cams", get(cams_redirect))
         .route("/cams/", get(cams_html))
         .route("/cams/cams.html", get(cams_html))
@@ -75,6 +81,21 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/msg-lock", get(msg_lock_get).post(msg_lock_post))
         .route("/api/bw-mode", get(bw_mode_get).post(bw_mode_post))
         .route("/api/dark", get(dark_get).post(dark_post))
+        .route(
+            "/api/notches",
+            get(notches_get).post(notches_post).delete(notches_delete).patch(notches_patch),
+        )
+        .route("/api/notches/sort", post(notches_sort))
+        .route("/api/talk", get(talk_get).post(talk_post))
+        .route("/api/pipeline", get(api_pipeline))
+        // Same-origin reverse proxy to mediamtx -- see the proxy module
+        // docs above proxy_hls. /hls mirrors broadcast-api's nginx
+        // location verbatim; /talk and /cam are 7elwe's own WHIP/WHEP
+        // paths (cam, not roomaudio -- see talk.rs's device-contention
+        // note) proxied the same way for the same reason.
+        .route("/hls/{*rest}", get(proxy_hls))
+        .route("/talk/{*rest}", any(proxy_talk))
+        .route("/cam/{*rest}", any(proxy_cam))
         // An unknown /api/ path reaches Flask and gets Flask's 404 page;
         // anything else is refused by nginx itself. Different bodies.
         .route("/api/{*rest}", get(flask_not_found).post(flask_not_found))
@@ -170,6 +191,12 @@ async fn dark_png(State(ctx): State<Arc<Ctx>>) -> Response {
     }
 }
 
+/// The header logo + browser tab icon -- see assets::BRAND_PNG docs.
+/// Static/embedded, unlike dark_png's on-disk file, so no None case.
+async fn brand_png() -> Response {
+    build(StatusCode::OK, "image/png", assets::BRAND_PNG.to_vec(), false, true)
+}
+
 // ------------------------------------------------------------------- api
 
 async fn api_broadcast(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
@@ -262,16 +289,181 @@ async fn dark_post(State(ctx): State<Arc<Ctx>>) -> Response {
     bool_text(ctx.state.toggle_dark())
 }
 
+// ----------------------------------------------------------------- talk
+//
+// See talk.rs module docs. GET doubles as the client's 4s heartbeat poll;
+// POST's body is the app-level signal ("two-way" starts/refreshes a call,
+// anything else -- including the explicit "false" hangup -- ends it).
+// Both directions of the actual audio (WHIP publish, WHEP subscribe) talk
+// straight to mediamtx and never reach this route.
+
+async fn talk_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    bool_text(ctx.talk.poll())
+}
+
+async fn talk_post(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
+    bool_text(ctx.talk.set(&body))
+}
+
+// -------------------------------------------------------------- pipeline
+//
+// Per-stage health for the video/audio panel LED banks (paintLamps() /
+// paintAudioModes() in index.html). Every lamp there reads from a real
+// measurement, never a decorative default -- 'ok'/'down' are genuinely
+// distinct from an absent field (dark, unmeasured/not-applicable), so
+// this only ever reports a stage as 'ok' or 'down', never invents a
+// third value the client would have to special-case.
+
+async fn api_pipeline(State(ctx): State<Arc<Ctx>>) -> Response {
+    let p = ctx.pipeline.status();
+    let hide = ctx.state.feed_mode.lock().unwrap().as_str() == "hide";
+    let camera = if hide {
+        "off"
+    } else if p.capture_alive {
+        "ok"
+    } else {
+        "down"
+    };
+    let mediamtx = if p.mediamtx_alive { "ok" } else { "down" };
+    // No separate RTSP-connection probe on this node (unlike broadcast-
+    // api's _tcp_established_to) -- capture_alive already means our own
+    // encoder has an open RTSP push to mediamtx, so both alive together
+    // is the honest signal an actual connection exists.
+    let rtsp = if p.capture_alive && p.mediamtx_alive { "ok" } else { "down" };
+    let mic = ctx.pipeline.audio_status();
+
+    let body = json!({
+        "camera": camera,
+        "mediamtx": mediamtx,
+        "rtsp": rtsp,
+        "mic": mic,
+    });
+    build(
+        StatusCode::OK,
+        "application/json",
+        serde_json::to_vec(&body).unwrap_or_default(),
+        false,
+        false,
+    )
+}
+
+// ------------------------------------------------------------- notches
+//
+// Mirrors broadcast-api's /api/notches* exactly -- see notches.rs module
+// docs. `application/json`, not FLASK_TEXT: broadcast-api sets that
+// Content-Type explicitly on this envelope, unlike its bare-string routes.
+
+fn notches_response(entries: Vec<Value>) -> Response {
+    let body = serde_json::to_vec(&json!({ "notches": entries })).unwrap_or_default();
+    build(StatusCode::OK, "application/json", body, false, false)
+}
+
+fn notch_err_response(e: NotchError) -> Response {
+    match e {
+        NotchError::Invalid => build(StatusCode::BAD_REQUEST, FLASK_TEXT, FLASK_400.as_bytes().to_vec(), false, false),
+        NotchError::NotFound => build(StatusCode::NOT_FOUND, FLASK_TEXT, FLASK_404.as_bytes().to_vec(), false, false),
+        NotchError::Io => build(StatusCode::INTERNAL_SERVER_ERROR, FLASK_TEXT, Vec::new(), false, false),
+    }
+}
+
+fn bad_request() -> Response {
+    build(StatusCode::BAD_REQUEST, FLASK_TEXT, FLASK_400.as_bytes().to_vec(), false, false)
+}
+
+/// body or empty-string fallback to `{}`, matching broadcast-api's
+/// `_json.loads(request.get_data(as_text=True) or '{}')`.
+fn parse_json_body(body: &str) -> Option<Value> {
+    if body.trim().is_empty() {
+        Some(json!({}))
+    } else {
+        serde_json::from_str(body).ok()
+    }
+}
+
+async fn notches_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    notches_response(ctx.state.notches.list())
+}
+
+async fn notches_post(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
+    let Some(body) = parse_json_body(&body) else {
+        return bad_request();
+    };
+    match ctx.state.notches.add(&body) {
+        Ok(entries) => {
+            ctx.pipeline.reload_audio().await;
+            notches_response(entries)
+        }
+        Err(e) => notch_err_response(e),
+    }
+}
+
+async fn notches_delete(State(ctx): State<Arc<Ctx>>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let Some(raw) = q.get("i") else {
+        return bad_request();
+    };
+    let Ok(i) = raw.parse::<i64>() else {
+        return bad_request();
+    };
+    match ctx.state.notches.delete(i) {
+        Ok(entries) => {
+            ctx.pipeline.reload_audio().await;
+            notches_response(entries)
+        }
+        Err(e) => notch_err_response(e),
+    }
+}
+
+async fn notches_patch(
+    State(ctx): State<Arc<Ctx>>,
+    Query(q): Query<HashMap<String, String>>,
+    body: String,
+) -> Response {
+    let Some(body) = parse_json_body(&body) else {
+        return bad_request();
+    };
+    let Some(enabled) = body.get("enabled").and_then(Value::as_bool) else {
+        return bad_request();
+    };
+
+    let outcome = match q.get("i") {
+        None => ctx.state.notches.set_enabled_all(enabled),
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(i) => ctx.state.notches.set_enabled_one(i, enabled),
+            Err(_) => return bad_request(),
+        },
+    };
+    match outcome {
+        Ok(entries) => {
+            ctx.pipeline.reload_audio().await;
+            notches_response(entries)
+        }
+        Err(e) => notch_err_response(e),
+    }
+}
+
+async fn notches_sort(State(ctx): State<Arc<Ctx>>) -> Response {
+    // No reload_audio -- order doesn't change what's audible.
+    match ctx.state.notches.sort() {
+        Ok(entries) => notches_response(entries),
+        Err(e) => notch_err_response(e),
+    }
+}
+
 async fn api_info() -> Response {
     let (host, ts) = tokio::task::spawn_blocking(|| (hostname(), tailscale_ip()))
         .await
         .unwrap_or_else(|_| (String::new(), String::new()));
 
-    // Flask's jsonify spacing, trailing newline included.
+    // Flask's jsonify spacing, trailing newline included. `version` feeds
+    // the viewer's header/tab build label (windows-v<version>) -- see
+    // index.html's buildLabel wiring; CARGO_PKG_VERSION so this can never
+    // drift from what actually got built (Cargo.toml is the one place
+    // the version is written down).
     let body = format!(
-        "{{\"hostname\": \"{}\", \"tailscale\": \"{}\"}}\n",
+        "{{\"hostname\": \"{}\", \"tailscale\": \"{}\", \"version\": \"{}\"}}\n",
         json_escape(&host),
-        json_escape(&ts)
+        json_escape(&ts),
+        env!("CARGO_PKG_VERSION"),
     );
     build(
         StatusCode::OK,
@@ -280,6 +472,122 @@ async fn api_info() -> Response {
         false,
         false,
     )
+}
+
+// ------------------------------------------------------------- proxy
+//
+// Same-origin reverse proxy to mediamtx (:8888 HLS, :8889 WHIP/WHEP),
+// mirroring broadcast-api's nginx config verbatim (pkg/etc/nginx/conf.d/
+// hls-livecam.conf: proxy_http_version 1.1, Host passed through,
+// proxy_buffering off). Exists because this server is reachable over
+// HTTPS (Tailscale serve terminates TLS on 443 -> this process's :80);
+// a browser refuses a plain-http fetch to another port from an https
+// page as mixed content, which broke both video playback and two-way
+// calls under the tailnet HTTPS URL (found live, 2026-09-09, from an
+// actual "NetworkError when attempting to fetch resource" on a real
+// WHIP POST). /hls strips its prefix (nginx's trailing-slash
+// proxy_pass behavior); /talk and /cam keep theirs (mediamtx's own
+// paths already include them). /cam, not /roomaudio -- 7elwe's WHEP
+// return leg reuses the cam path rather than a dedicated roomaudio
+// publish (see talk.rs's device-contention note), so it needs its own
+// proxy prefix nginx's config doesn't have.
+//
+// Confirmed empirically before writing this (not assumed): mediamtx's
+// own WHIP response already returns a relative Location header
+// (`/talk/whip/<id>`, no host:port baked in), so this proxy is
+// deliberately transparent -- no Location-rewrite step, headers/status/
+// body pass through as received.
+
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+async fn proxy(method: Method, upstream_url: String, headers: HeaderMap, body: Bytes) -> Response {
+    let mut req = http_client().request(method, &upstream_url);
+    // Forward headers verbatim except Host (reqwest sets its own for the
+    // upstream target) and hop-by-hop ones a proxy must not pass as-is.
+    for (name, value) in headers.iter() {
+        let n = name.as_str();
+        if n.eq_ignore_ascii_case("host")
+            || n.eq_ignore_ascii_case("content-length")
+            || n.eq_ignore_ascii_case("connection")
+        {
+            continue;
+        }
+        req = req.header(name, value);
+    }
+    if !body.is_empty() {
+        req = req.body(body);
+    }
+
+    let upstream = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("proxy: upstream request to {upstream_url} failed: {e}");
+            return build(StatusCode::BAD_GATEWAY, FLASK_TEXT, Vec::new(), false, false);
+        }
+    };
+
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut resp_headers = HeaderMap::new();
+    for (name, value) in upstream.headers().iter() {
+        let n = name.as_str();
+        if n.eq_ignore_ascii_case("connection")
+            || n.eq_ignore_ascii_case("transfer-encoding")
+            || n.eq_ignore_ascii_case("content-length")
+        {
+            continue; // hop-by-hop / let axum recompute framing itself
+        }
+        resp_headers.insert(name.clone(), value.clone());
+    }
+
+    // Streamed through, not buffered into memory first -- matches nginx's
+    // proxy_buffering off (load-bearing for live HLS segments and
+    // WHIP/WHEP's low-latency SDP/ICE exchange, not a stylistic choice).
+    let body = Body::from_stream(upstream.bytes_stream());
+
+    let mut builder = Response::builder().status(status);
+    if let Some(h) = builder.headers_mut() {
+        *h = resp_headers;
+    }
+    builder
+        .body(body)
+        .unwrap_or_else(|_| build(StatusCode::BAD_GATEWAY, FLASK_TEXT, Vec::new(), false, false))
+}
+
+fn upstream_url(port: u16, prefix: &str, uri: &axum::http::Uri) -> String {
+    let rest = uri.path().strip_prefix(prefix).unwrap_or("");
+    match uri.query() {
+        Some(q) => format!("http://127.0.0.1:{port}/{rest}?{q}"),
+        None => format!("http://127.0.0.1:{port}/{rest}"),
+    }
+}
+
+async fn proxy_hls(method: Method, OriginalUri(uri): OriginalUri, headers: HeaderMap, body: Bytes) -> Response {
+    proxy(method, upstream_url(8888, "/hls/", &uri), headers, body).await
+}
+
+async fn proxy_talk(method: Method, OriginalUri(uri): OriginalUri, headers: HeaderMap, body: Bytes) -> Response {
+    // Keeps the /talk prefix (unlike /hls) -- mediamtx's own WHIP path is
+    // already /talk/whip, matching nginx's proxy_pass .../talk/ target.
+    let rest = uri.path().strip_prefix('/').unwrap_or(uri.path());
+    let url = match uri.query() {
+        Some(q) => format!("http://127.0.0.1:8889/{rest}?{q}"),
+        None => format!("http://127.0.0.1:8889/{rest}"),
+    };
+    proxy(method, url, headers, body).await
+}
+
+async fn proxy_cam(method: Method, OriginalUri(uri): OriginalUri, headers: HeaderMap, body: Bytes) -> Response {
+    // Same shape as proxy_talk -- keeps the /cam prefix (mediamtx's own
+    // WHEP path is /cam/whep).
+    let rest = uri.path().strip_prefix('/').unwrap_or(uri.path());
+    let url = match uri.query() {
+        Some(q) => format!("http://127.0.0.1:8889/{rest}?{q}"),
+        None => format!("http://127.0.0.1:8889/{rest}"),
+    };
+    proxy(method, url, headers, body).await
 }
 
 // --------------------------------------------------------------- 404s

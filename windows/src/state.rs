@@ -16,6 +16,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::notches::Notches;
+
 pub struct AppState {
     dir: PathBuf,
     pub message: Mutex<String>,
@@ -25,6 +27,10 @@ pub struct AppState {
     pub dark: Mutex<bool>,
     /// In-memory only, by design. See module docs.
     pub bw_mode: Mutex<bool>,
+    /// The notch-filter comb applied to the room-audio leg. Its own
+    /// persistence (notches.json in this same state dir) -- see
+    /// notches.rs module docs.
+    pub notches: Notches,
 }
 
 impl AppState {
@@ -32,6 +38,7 @@ impl AppState {
         let dir = state_dir();
         let _ = std::fs::create_dir_all(&dir);
 
+        let notches = Notches::load(&dir);
         let message = read(&dir, "broadcast.txt").unwrap_or_default();
         let buzz = read(&dir, "buzz.txt").unwrap_or_default();
 
@@ -56,6 +63,7 @@ impl AppState {
             msg_lock: Mutex::new(msg_lock),
             dark: Mutex::new(dark),
             bw_mode: Mutex::new(false),
+            notches,
         }
     }
 

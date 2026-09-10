@@ -41,9 +41,11 @@ mod cams;
 mod diskhealth;
 mod gui;
 mod metrics;
+mod notches;
 mod pipeline;
 mod routes;
 mod state;
+mod talk;
 mod tray;
 mod video_preview;
 mod winproc;
@@ -56,6 +58,21 @@ use std::sync::Arc;
 const APP_ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");
 
 fn main() {
+    // A release build has no console (windows_subsystem = "windows" above)
+    // and nothing installed a panic hook before this, so a panic on ANY
+    // thread -- including a tokio-spawned supervisor task, like
+    // spawn_mediamtx_supervisor -- unwound and vanished with zero trace:
+    // the task just stops existing, nothing restarts it, and there was no
+    // record anywhere that it ever happened. Found live (2026-09-09):
+    // mediamtx died sometime after a clean startup and never came back:
+    // manual `mediamtx.exe mediamtx.yml` bound every listener fine, so it
+    // wasn't an environment problem -- the supervisor loop itself must have
+    // panicked. This hook is the fix for "must have" staying a guess next
+    // time.
+    std::panic::set_hook(Box::new(|info| {
+        launch_log(&format!("PANIC: {info}"));
+    }));
+
     let ffmpeg = match binaries::resolve_ffmpeg() {
         Ok(p) => p,
         Err(e) => {
@@ -83,6 +100,7 @@ fn main() {
     // state/pipeline/a runtime handle, once the async bootstrap completes.
     let (tx, rx) = std::sync::mpsc::channel();
     let ffmpeg_for_video = ffmpeg.clone();
+    let ffmpeg_for_talk = ffmpeg.clone();
 
     // Deferred egui-context handle for the preview tap's event-driven
     // repaint: the tap thread starts here (server thread) before eframe
@@ -100,6 +118,7 @@ fn main() {
             let pipeline = pipeline::Pipeline::start(ffmpeg, mediamtx, state.clone()).await;
             let (video_frame, preview_ctl) =
                 video_preview::spawn(ffmpeg_for_video, repaint_for_reader);
+            let talk = talk::Talk::new(ffmpeg_for_talk);
 
             let handle = tokio::runtime::Handle::current();
             if tx
@@ -109,7 +128,7 @@ fn main() {
                 return; // GUI thread gone before we finished booting
             }
 
-            let ctx = Arc::new(routes::Ctx { state, pipeline });
+            let ctx = Arc::new(routes::Ctx { state, pipeline, talk });
             let bind = std::env::var("HLS_BIND").unwrap_or_else(|_| "0.0.0.0:80".to_string());
             launch_log(&format!("binding   : {bind}"));
 

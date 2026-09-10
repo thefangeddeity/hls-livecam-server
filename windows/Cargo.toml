@@ -31,6 +31,22 @@ raw-window-handle = "0.6"
 # fleet roster as JSON and must preserve any fields the manager doesn't
 # itself edit (pinned, stream_path, ...).
 serde_json = "1"
+# Two-way talk playback (talk.rs): WASAPI output for the incoming caller's
+# voice. Mirrors broadcast-api's "ffmpeg -f alsa" sink -- there's no
+# Windows equivalent muxer in the bundled ffmpeg build (checked: `ffmpeg
+# -devices` lists zero audio output devices), so ffmpeg only decodes
+# (stdout raw PCM) and cpal owns the actual device write, same
+# spawn-ffmpeg-consume-raw-output shape video_preview.rs already uses.
+cpal = "0.15"
+# Same-origin reverse proxy for mediamtx's HLS (:8888) and WHIP/WHEP
+# (:8889) -- see routes.rs's proxy module docs. Needed because this
+# server is reachable over HTTPS (Tailscale serve terminates TLS on 443
+# -> this process's :80); a browser blocks a plain-http fetch to another
+# port from an https page as mixed content, which broke both video
+# playback and two-way calls under the tailnet HTTPS URL (found live,
+# 2026-09-09). No TLS feature needed -- this client only ever talks to
+# 127.0.0.1.
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 
 [build-dependencies]
 embed-manifest = "1"

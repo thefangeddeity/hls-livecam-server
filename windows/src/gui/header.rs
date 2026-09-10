@@ -89,7 +89,9 @@ impl App {
         let height = 28.0;
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
-        let left_text = format!("Webcam Server Stack  \u{2022}  uptime {up_h}h {up_m}m");
+        // No app name here (Ron: Windows 11 already puts it on the window
+        // border/title bar) -- just uptime, not a redundant second title.
+        let left_text = format!("uptime {up_h}h {up_m}m");
         let right_text = format!("\"{}\"   {}", self.hostname, chrono_like_timestamp());
 
         let pill_w = components::status_pill_width(ui, pill_label);

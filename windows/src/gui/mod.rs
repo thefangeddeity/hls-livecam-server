@@ -415,6 +415,17 @@ impl eframe::App for App {
         // surface at ~95% CPU regardless of the repaint schedule, starving
         // the capture -- minimizing is what fixed it.) The tray menu runs on
         // its own thread, so nothing interactive is lost here.
+        // Self-correct against the OS's own idea of minimized state, not
+        // just the tray thread's Show handler: a taskbar-button restore (or
+        // Alt-Tab, Win+Tab, ...) un-minimizes the window entirely outside
+        // tray.rs, which never clears window_hidden -- update() then kept
+        // hitting the gate below forever, rendering nothing, i.e. exactly
+        // the "restores blank" bug this fixes. egui still delivers this
+        // one frame's input even while window_hidden is stale, so this
+        // check runs before the gate has a chance to bail.
+        if ctx.input(|i| i.viewport().minimized) == Some(false) {
+            self.window_hidden.store(false, Ordering::Relaxed);
+        }
         if self.window_hidden.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(100));
             return;
