@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::audio_settings::AudioSettings;
+
 pub enum NotchError {
     /// Malformed request -- Flask's abort(400).
     Invalid,
@@ -129,23 +131,27 @@ impl Notches {
     /// on this node as on any Linux one. A malformed entry is skipped, not
     /// fatal -- see broadcast-api's own comment: a bad filter list must
     /// never cost the room its audio.
-    pub fn build_af_chain(&self) -> String {
+    /// The tail (highpass/lowpass/gain/limiter) now comes from
+    /// AudioSettings rather than the environment, so the Settings panel
+    /// can move it live -- see audio_settings.rs. A 0 for either corner
+    /// frequency means "no filter at that end", matching the old env
+    /// behaviour where an empty/0/off value skipped the stage.
+    pub fn build_af_chain(&self, audio: &AudioSettings) -> String {
         let g = self.entries.lock().unwrap();
         let mut parts: Vec<String> = g
             .iter()
             .filter(|e| e.get("enabled").and_then(Value::as_bool).unwrap_or(true))
             .filter_map(entry_ffmpeg_filter)
             .collect();
-        if let Some(f) = af_optional("HLS_AUDIO_HIGHPASS_HZ", "80", |v| format!("highpass=f={v}")) {
-            parts.push(f);
+        let hp = audio.highpass_hz();
+        if hp > 0.0 {
+            parts.push(format!("highpass=f={hp}"));
         }
-        if let Some(f) = af_optional("HLS_AUDIO_LOWPASS_HZ", "14000", |v| format!("lowpass=f={v}")) {
-            parts.push(f);
+        let lp = audio.lowpass_hz();
+        if lp > 0.0 {
+            parts.push(format!("lowpass=f={lp}"));
         }
-        let gain: f64 = std::env::var("HLS_AUDIO_GAIN_DB")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(12.0);
+        let gain = audio.gain_db();
         if gain != 0.0 {
             parts.push(format!("volume={gain}dB"));
         }
@@ -212,16 +218,6 @@ fn validate_and_normalize(body: &Value) -> Option<Value> {
         entry["width"] = json!(w);
     }
     Some(entry)
-}
-
-fn af_optional(env_var: &str, default: &str, template: impl Fn(&str) -> String) -> Option<String> {
-    let v = std::env::var(env_var).unwrap_or_else(|_| default.to_string());
-    let v = v.trim();
-    if v.is_empty() || matches!(v.to_lowercase().as_str(), "0" | "off" | "none" | "false") {
-        None
-    } else {
-        Some(template(v))
-    }
 }
 
 /// UTC calendar date as YYYY-MM-DD, no chrono/time crate needed for one

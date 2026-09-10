@@ -51,14 +51,20 @@ const HEARTBEAT_GRACE: Duration = Duration::from_secs(15);
 
 pub struct Talk {
     ffmpeg: PathBuf,
+    /// For the operator-tunable outbound gain and the test-only speaker
+    /// mute -- see audio_settings.rs. Read live on each (re)spawn and in
+    /// the audio callback, so a Settings change takes effect without
+    /// restarting anything here.
+    state: Arc<crate::state::AppState>,
     two_way: AtomicBool,
     last_heartbeat: StdMutex<Option<Instant>>,
 }
 
 impl Talk {
-    pub fn new(ffmpeg: PathBuf) -> Arc<Self> {
+    pub fn new(ffmpeg: PathBuf, state: Arc<crate::state::AppState>) -> Arc<Self> {
         let t = Arc::new(Self {
             ffmpeg,
+            state,
             two_way: AtomicBool::new(false),
             last_heartbeat: StdMutex::new(None),
         });
@@ -137,6 +143,16 @@ fn run_playback_once(t: &Talk) -> Result<(), String> {
         "tcp",
         "-i",
         TALK_RTSP_URL,
+    ]);
+    // Operator-tunable outbound gain (viewer -> room speaker). Its
+    // ceiling is deliberately lower than the inbound gain's: this is the
+    // acoustic-feedback direction. Read at spawn, so a Settings change
+    // lands on the next respawn rather than needing a restart here.
+    let gain = t.state.audio.talk_gain_db();
+    if gain != 0.0 {
+        cmd.args(["-af", &format!("volume={gain}dB")]);
+    }
+    cmd.args([
         "-f",
         "s16le",
         "-ar",
@@ -160,7 +176,7 @@ fn run_playback_once(t: &Talk) -> Result<(), String> {
     // reader rather than this thread buffering an unbounded amount of
     // stale audio in memory.
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(64);
-    let stream = build_output_stream(rx)?;
+    let stream = build_output_stream(rx, t.state.clone())?;
     stream.play().map_err(|e| format!("cpal play: {e}"))?;
 
     // Carries any trailing partial frame across read() calls -- read()
@@ -195,7 +211,10 @@ fn run_playback_once(t: &Talk) -> Result<(), String> {
     Ok(())
 }
 
-fn build_output_stream(rx: std::sync::mpsc::Receiver<Vec<i16>>) -> Result<cpal::Stream, String> {
+fn build_output_stream(
+    rx: std::sync::mpsc::Receiver<Vec<i16>>,
+    state: Arc<crate::state::AppState>,
+) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -220,8 +239,15 @@ fn build_output_stream(rx: std::sync::mpsc::Receiver<Vec<i16>>) -> Result<cpal::
                         Err(_) => break,
                     }
                 }
+                // Test-only speaker mute: keep draining the ring so the
+                // stream stays in sync and the call keeps running --
+                // only the physical output goes silent, which is the
+                // whole point (verify a call end to end without the
+                // room hearing it).
+                let muted = state.audio.talk_mute_speaker();
                 for sample in data.iter_mut() {
-                    *sample = ring.pop_front().unwrap_or(0); // underrun: silence, not garbage
+                    let s = ring.pop_front().unwrap_or(0); // underrun: silence, not garbage
+                    *sample = if muted { 0 } else { s };
                 }
             },
             |err| eprintln!("talk: cpal stream error: {err}"),

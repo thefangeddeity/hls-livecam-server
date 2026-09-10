@@ -1726,14 +1726,42 @@
           </button>
           <span class="eng rstlab">Light theme</span>
         </div>
-        <!-- 7elwe port note: dropped -- both the "Mute server
-             speaker/headset in RTC" test toggle and the whole Audio
-             filters block (High-pass/Low-pass/Inbound gain/Outbound gain)
-             are backed by /api/audio-settings on Tanzania, which 7elwe's
-             routes.rs has no equivalent of. Leaving numeric fields in the
-             DOM that silently never save was worse than omitting the
-             block -- see the port report. Notch filters below are
-             untouched: /api/notches is real and already working. -->
+        <div class="pinrow">
+          <button class="pinled" id="muteSpkBtn" onclick="toggleMuteSpeaker()"
+                  aria-pressed="false" aria-label="Mute server speaker/headset in RTC"
+                  title="Test only: cuts the room's speaker during a call. Mic, room audio and signalling keep running, so a call can be verified end to end without the room hearing it.">
+            <span class="bulb" id="muteSpkLamp"></span>
+          </button>
+          <span class="eng rstlab">Mute server speaker/headset in RTC</span>
+        </div>
+        <!-- Audio filters: one exclusive unit (ron), backed by
+             /api/audio-settings. Every value is clamped server-side and
+             the ACCEPTED value echoed back, so overshooting a bound
+             snaps the field visibly rather than silently doing nothing.
+             Outbound's range is deliberately tighter than inbound's --
+             it is the acoustic-feedback direction (room speaker into
+             room mic), so there is less headroom to give away. -->
+        <div class="setgrp eng">Audio filters</div>
+        <label class="setrow" title="Cuts everything below this -- rumble, handling noise, HVAC thud">
+          <span class="setlab eng">High-pass</span>
+          <input type="number" id="setHighpass" class="setnum" min="0" max="1000" step="10">
+          <span class="setunit eng">Hz</span>
+        </label>
+        <label class="setrow" title="Cuts everything above this -- the main lever on broadband hiss">
+          <span class="setlab eng">Low-pass</span>
+          <input type="number" id="setLowpass" class="setnum" min="1000" max="24000" step="500">
+          <span class="setunit eng">Hz</span>
+        </label>
+        <label class="setrow" title="Room -> viewer (HLS + RTC listen)">
+          <span class="setlab eng">Inbound gain</span>
+          <input type="number" id="setGainIn" class="setnum" min="-20" max="30" step="1">
+          <span class="setunit eng">dB</span>
+        </label>
+        <label class="setrow" title="Viewer -> room speaker (RTC talk). Ceiling is lower on purpose: this is the feedback direction.">
+          <span class="setlab eng">Outbound gain</span>
+          <input type="number" id="setGainOut" class="setnum" min="-20" max="12" step="1">
+          <span class="setunit eng">dB</span>
+        </label>
         <!-- Notch filters submenu: the curated notch database (see notches.json /
              /api/notches), collapsed by default -- this is a deeper tool than
              the filters above, for the specific whine/resonance case. Labelled
@@ -2032,12 +2060,76 @@
     var open = p.hasAttribute('hidden');
     if (open) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
     if (b) { b.classList.toggle('pressed', open); b.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+    if (open) loadAudioSettings();
   }
 
-  // 7elwe port note: Tanzania's user-safe audio tunables (_applyAudioSettings
-  // / toggleTalkMuteSpeaker / loadAudioSettings / postAudioSetting, all
-  // against /api/audio-settings) dropped -- see the Settings panel HTML
-  // comment. No such endpoint on 7elwe.
+  // ── AUDIO SETTINGS ──
+  // /api/audio-settings clamps server-side and echoes back the ACCEPTED
+  // value, so we always paint from the response rather than from what was
+  // typed -- an out-of-range entry visibly snaps to the bound instead of
+  // appearing to have been taken.
+  var AUDIO_FIELDS = {
+    setHighpass: 'AUDIO_HIGHPASS_HZ',
+    setLowpass:  'AUDIO_LOWPASS_HZ',
+    setGainIn:   'AUDIO_GAIN_DB',
+    setGainOut:  'TALK_GAIN_DB'
+  };
+  var _audioPost = {};
+
+  function _applyAudioSettings(s) {
+    if (!s) return;
+    for (var id in AUDIO_FIELDS) {
+      var el = document.getElementById(id);
+      var v = s[AUDIO_FIELDS[id]];
+      if (el && v !== undefined && document.activeElement !== el) el.value = v;
+    }
+    if (s.TALK_MUTE_SPEAKER !== undefined) paintMuteSpeaker(!!s.TALK_MUTE_SPEAKER);
+  }
+
+  function loadAudioSettings() {
+    fetch('/api/audio-settings', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(_applyAudioSettings);
+  }
+
+  function postAudioSetting(key, value) {
+    var body = {}; body[key] = value;
+    fetch('/api/audio-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(_applyAudioSettings);
+  }
+
+  // Debounced: these are number spinners, and firing a capture restart on
+  // every arrow-key tick would bounce the room's audio repeatedly.
+  Object.keys(AUDIO_FIELDS).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', function () {
+      clearTimeout(_audioPost[id]);
+      _audioPost[id] = setTimeout(function () {
+        var n = parseFloat(el.value);
+        if (!isNaN(n)) postAudioSetting(AUDIO_FIELDS[id], n);
+      }, 400);
+    });
+  });
+
+  var _muteSpk = false;
+  function paintMuteSpeaker(on) {
+    _muteSpk = on;
+    var b = document.getElementById('muteSpkBtn');
+    var l = document.getElementById('muteSpkLamp');
+    if (b) { b.classList.toggle('pressed', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+    // Plain .bulb.on, never .bulb.alarm -- a mute toggle is engaged/not
+    // engaged, not an alarm state (ron).
+    if (l) l.className = 'bulb' + (on ? ' on' : '');
+  }
+  function toggleMuteSpeaker() { postAudioSetting('TALK_MUTE_SPEAKER', !_muteSpk); }
+
+  loadAudioSettings();
 
   // Comb filter submenu: the curated notch database, view/add/remove. The
   // count loads immediately (cheap) so the collapsed toggle reads correctly

@@ -88,6 +88,10 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/notches/sort", post(notches_sort))
         .route("/api/talk", get(talk_get).post(talk_post))
         .route("/api/pipeline", get(api_pipeline))
+        .route(
+            "/api/audio-settings",
+            get(audio_settings_get).post(audio_settings_post),
+        )
         // Same-origin reverse proxy to mediamtx -- see the proxy module
         // docs above proxy_hls. /hls mirrors broadcast-api's nginx
         // location verbatim; /talk and /cam are 7elwe's own WHIP/WHEP
@@ -303,6 +307,48 @@ async fn talk_get(State(ctx): State<Arc<Ctx>>) -> Response {
 
 async fn talk_post(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
     bool_text(ctx.talk.set(&body))
+}
+
+// -------------------------------------------------- audio settings
+//
+// High-pass / low-pass / gain, the Settings panel's "Audio filters"
+// block. Values are clamped server-side and the ACCEPTED value is
+// echoed back, so overshooting a bound snaps visibly in the field
+// rather than silently doing nothing. See audio_settings.rs for the
+// per-key bounds and why the outbound gain's ceiling is lower.
+
+async fn audio_settings_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    let body = serde_json::to_vec(&ctx.state.audio.all()).unwrap_or_default();
+    build(StatusCode::OK, "application/json", body, false, false)
+}
+
+async fn audio_settings_post(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
+    let Some(obj) = parse_json_body(&body).and_then(|v| v.as_object().cloned()) else {
+        return bad_request();
+    };
+
+    let mut accepted = serde_json::Map::new();
+    let mut room_dirty = false;
+    for (key, value) in obj.iter() {
+        match ctx.state.audio.set(key, value) {
+            Ok(v) => {
+                accepted.insert(key.clone(), v);
+                room_dirty |= crate::audio_settings::AudioSettings::affects_room(key);
+            }
+            Err(()) => return bad_request(),
+        }
+    }
+
+    // Only the room/HLS-facing keys need the publisher restarted. A
+    // talk-only tweak (outbound gain, speaker mute) restarting it too
+    // would bounce HLS audio for every listener for no reason -- a real
+    // bug hit on Tanzania, avoided here by scoping the trigger.
+    if room_dirty {
+        ctx.pipeline.reload_audio().await;
+    }
+
+    let body = serde_json::to_vec(&Value::Object(accepted)).unwrap_or_default();
+    build(StatusCode::OK, "application/json", body, false, false)
 }
 
 // -------------------------------------------------------------- pipeline

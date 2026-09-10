@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::audio_settings::AudioSettings;
 use crate::notches::Notches;
 
 pub struct AppState {
@@ -31,6 +32,9 @@ pub struct AppState {
     /// persistence (notches.json in this same state dir) -- see
     /// notches.rs module docs.
     pub notches: Notches,
+    /// High-pass/low-pass/gain, persisted alongside the notches
+    /// (audio.json) -- see audio_settings.rs module docs.
+    pub audio: AudioSettings,
 }
 
 impl AppState {
@@ -39,6 +43,7 @@ impl AppState {
         let _ = std::fs::create_dir_all(&dir);
 
         let notches = Notches::load(&dir);
+        let audio = AudioSettings::load(&dir);
         let message = read(&dir, "broadcast.txt").unwrap_or_default();
         let buzz = read(&dir, "buzz.txt").unwrap_or_default();
 
@@ -64,6 +69,7 @@ impl AppState {
             dark: Mutex::new(dark),
             bw_mode: Mutex::new(false),
             notches,
+            audio,
         }
     }
 

@@ -298,7 +298,7 @@ impl Pipeline {
             .lock()
             .unwrap()
             .clone()
-            .map(|d| (d, self.state.notches.build_af_chain()));
+            .map(|d| (d, self.state.notches.build_af_chain(&self.state.audio)));
         let audio = audio_owned.as_ref().map(|(d, f)| (d.as_str(), f.as_str()));
 
         let cmd = match target {

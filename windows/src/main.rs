@@ -35,6 +35,7 @@
 //! doesn't.
 
 mod assets;
+mod audio_settings;
 mod autostart;
 mod binaries;
 mod cams;
@@ -118,7 +119,7 @@ fn main() {
             let pipeline = pipeline::Pipeline::start(ffmpeg, mediamtx, state.clone()).await;
             let (video_frame, preview_ctl) =
                 video_preview::spawn(ffmpeg_for_video, repaint_for_reader);
-            let talk = talk::Talk::new(ffmpeg_for_talk);
+            let talk = talk::Talk::new(ffmpeg_for_talk, state.clone());
 
             let handle = tokio::runtime::Handle::current();
             if tx

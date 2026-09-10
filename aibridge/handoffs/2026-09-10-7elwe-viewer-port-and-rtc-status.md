@@ -51,6 +51,61 @@ Everything below is verified against actual running state, not assumed.
   (was too tight, then too sparse with big gaps — settled on 16px
   matching `.main`'s own padding, panels justified to top).
 
+## Audio tuning — measured, not guessed (2026-09-10, ~00:30 local)
+
+**Settings "Audio filters" block now exists**: `/api/audio-settings`
+(audio_settings.rs), clamped server-side per key, accepted value echoed
+back so overshoot snaps visibly. High-pass / Low-pass / Inbound gain /
+Outbound gain + the test-only "Mute server speaker/headset in RTC"
+toggle. Reload is scoped: only the room-facing keys respawn the
+publisher; talk-only keys don't bounce HLS audio for listeners.
+
+**What the room actually sounds like.** Recorded 60 s and 90 s off the
+RTSP loopback and ran Welch-averaged FFT with local-prominence peak
+finding, then a per-slice ridge track. Findings:
+
+- **No discrete tones.** Spectral flatness 0.72 / 0.51 (1.0 = white
+  noise, <0.1 = strongly tonal). Max prominence 11–13 dB where a real
+  fan blade-pass tone is 20–40 dB. No harmonic series.
+- **The peaks don't reproduce between takes** — 691 Hz was the strongest
+  feature in the 60 s sample (11.2 dB) and just 3.3 dB in the 90 s one.
+  That instability is the strongest single piece of evidence.
+- Ridge tracking **disproved a drifting-tone hypothesis**: the
+  per-slice strongest peak jumps a median of 691 Hz between adjacent
+  85 ms slices, and even in its single best slice the 1090 Hz feature is
+  70 Hz wide (a real tone would be 1–2 bins). It is genuinely broadband.
+- **None of Tanzania's 12 notch frequencies apply here** — measured
+  against 7elwe's own room they sit at 1.4–7.1 dB, at or under the
+  3.3 dB ripple floor. Do not copy them.
+
+**Seven notches were still added**, at Ron's explicit direction ("I
+don't care if you neutralize the hump, it's a small slice of the
+spectrogram, don't be so shy") — placed at the bands where two
+independent methods agreed: 120, 346, 392, 691, 1090, 1570, 2740 Hz,
+each 50 Hz wide (the width that actually works — see the bandreject
+lesson in the earlier handoff).
+
+**Verified by difference spectrum** (before vs after, same room minutes
+apart). Baseline drift in untouched bands was only −0.1 to −0.3 dB, so
+the rest is real: every notch shows −4.9 to −7.5 dB against its own
+shoulders; low-pass 14000→10000 gave −5.4 dB at 12–16 kHz; high-pass
+80→120 gave −7.2 dB at 90–120 Hz. By octave: −6.2 dB at 63–125 Hz,
+−4.2 dB at 250–500 Hz, −5.4 dB at 12–16 kHz.
+
+**Caveat to set expectations**: 2–4 kHz moved only −0.3 dB. The
+broadband fan whirr is reduced, not removed — a notch bank cannot flatten
+broadband noise, and the band-limit is doing most of the audible work.
+Further improvement needs a gain-reduction EQ (`equalizer`/
+`firequalizer`), which no node in the fleet has yet.
+
+**Recording hygiene**: all three .wav captures were deleted after
+analysis. They were room audio from Ron's home; only spectra were ever
+examined, never content.
+
+**Re-run in daylight.** This is a quiet-hours profile. Daytime sources
+(HVAC, traffic, appliances) will differ; the scripts to repeat it are in
+the session scratchpad pattern described above.
+
 ## Genuinely NOT done, and why
 
 - **RTC video for calls** — does not exist anywhere in the fleet to port.
