@@ -343,7 +343,17 @@ def _mic_chain(for_rtc=False):
     # energy we were going to discard anyway.
     hp = str(_cfg.get('AUDIO_HIGHPASS_HZ', '')).strip()
     if hp:
-        chain.append(f'highpass=f={hp}')
+        # CASCADED STAGES (ported from Tanzania <- originally 7elwe, 2026-09-10):
+        # ffmpeg's highpass is a single 2nd-order Butterworth section, 12 dB/oct --
+        # too gentle a shoulder for broadband road/traffic rumble. Repeating the
+        # SAME filter cascades the slope (each stage +12 dB/oct) while leaving
+        # everything above the corner untouched, so the corner can stay
+        # speech-safe and the shoulder gets as steep as the room needs.
+        try:
+            hp_stages = max(1, min(4, int(_cfg.get('AUDIO_HIGHPASS_STAGES', '1'))))
+        except ValueError:
+            hp_stages = 1
+        chain.extend([f'highpass=f={hp}'] * hp_stages)
 
     # NEURAL DENOISE (RNNoise, via ffmpeg's arnndn).
     #
@@ -1388,7 +1398,14 @@ def _mic_capture_cmd(mode):
     # thing that can put a rhythm into the sound.
     hp = str(_cfg.get('AUDIO_HIGHPASS_HZ', '')).strip()
     if hp:
-        cmd += ['highpass', hp]
+        # CASCADED STAGES -- same reasoning as the ffmpeg leg above, SoX form.
+        # SoX's highpass defaults to a single-pole (6 dB/oct) section, gentler
+        # still than ffmpeg's, so this matters at least as much here.
+        try:
+            hp_stages = max(1, min(4, int(_cfg.get('AUDIO_HIGHPASS_STAGES', '1'))))
+        except ValueError:
+            hp_stages = 1
+        cmd += ['highpass', hp] * hp_stages
 
     # NOTCHES, for narrowband tones that are not in the room.
     #
