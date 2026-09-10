@@ -355,6 +355,22 @@ def _mic_chain(for_rtc=False):
             hp_stages = 1
         chain.extend([f'highpass=f={hp}'] * hp_stages)
 
+    # Ceiling cut (ron: "LP slope should also be there" -- Tanzania parity).
+    # Ariana never had a low-pass at all until now: HF hiss was this room's
+    # loudest octave before any treatment, so the top shoulder had exactly
+    # the same single-section weakness the bottom one did before cascading.
+    # Same 14000 Hz default as Tanzania (speech tops out ~8 kHz, all
+    # intelligibility below ~4 kHz -- 14k removes ultra-high hiss/fizz with
+    # no effect on voice or room "air"). AUDIO_LOWPASS_STAGES cascades it the
+    # same way as the highpass above.
+    lp = str(_cfg.get('AUDIO_LOWPASS_HZ', '14000')).strip()
+    if lp:
+        try:
+            lp_stages = max(1, min(4, int(_cfg.get('AUDIO_LOWPASS_STAGES', '1'))))
+        except ValueError:
+            lp_stages = 1
+        chain.extend([f'lowpass=f={lp}'] * lp_stages)
+
     # NEURAL DENOISE (RNNoise, via ffmpeg's arnndn).
     #
     # A recurrent network trained on speech-vs-noise; it suppresses broadband
@@ -1406,6 +1422,17 @@ def _mic_capture_cmd(mode):
         except ValueError:
             hp_stages = 1
         cmd += ['highpass', hp] * hp_stages
+
+    # Ceiling cut, SoX form -- same reasoning and default (14000 Hz) as the
+    # ffmpeg leg above. SoX's lowpass also defaults to a single-pole
+    # (6 dB/oct) section, so AUDIO_LOWPASS_STAGES matters here too.
+    lp = str(_cfg.get('AUDIO_LOWPASS_HZ', '14000')).strip()
+    if lp:
+        try:
+            lp_stages = max(1, min(4, int(_cfg.get('AUDIO_LOWPASS_STAGES', '1'))))
+        except ValueError:
+            lp_stages = 1
+        cmd += ['lowpass', lp] * lp_stages
 
     # NOTCHES, for narrowband tones that are not in the room.
     #
