@@ -7,3 +7,14 @@
 #
 # Add one line per platform subdir as it lands:
 windows/ export-ignore
+
+# Minified vendor JS, embedded raw via include_bytes! (windows/src/assets.rs)
+# and compared byte-for-byte against what nginx serves on a Linux node.
+# Without -text, a checkout with core.autocrlf=true (stock on Windows)
+# rewrites this to CRLF on disk -- silent corruption at the SOURCE, before
+# Rust even reads it, the same class of bug assets.rs's own lf() function
+# exists to correct for index.html/cams.html (its doc comment: a checkout
+# served 973 bytes larger than tina's, one \r per line, for no reason).
+# text files get normalised in code; this one is marked binary instead,
+# since include_bytes! has no equivalent runtime normalisation step to lf().
+*.min.js -text

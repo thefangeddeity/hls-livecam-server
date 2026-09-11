@@ -79,6 +79,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/buzz.txt", get(buzz_txt))
         .route("/dark.png", get(dark_png))
         .route("/brand.png", get(brand_png))
+        .route("/vendor/hls.min.js", get(hls_min_js))
         .route("/cams", get(cams_redirect))
         .route("/cams/", get(cams_html))
         .route("/cams/cams.html", get(cams_html))
@@ -211,6 +212,13 @@ async fn dark_png(State(ctx): State<Arc<Ctx>>) -> Response {
 /// Static/embedded, unlike dark_png's on-disk file, so no None case.
 async fn brand_png() -> Response {
     build(StatusCode::OK, "image/png", assets::BRAND_PNG.to_vec(), false, true)
+}
+
+async fn hls_min_js() -> Response {
+    // "text/javascript", verified against a live Tanzania node rather than
+    // assumed -- nginx's mime.types maps .js there, not
+    // application/javascript, which was this function's first guess.
+    build(StatusCode::OK, "text/javascript", assets::HLS_MIN_JS.to_vec(), false, true)
 }
 
 // ------------------------------------------------------------------- api
