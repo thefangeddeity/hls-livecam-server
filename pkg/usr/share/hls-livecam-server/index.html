@@ -2444,35 +2444,38 @@
   // rather than for a fixed count. The old 16s countdown was chosen when
   // segments were 4s; it both outlasted the real switch and told every
   // viewer to stare at a number.
-  // 9000 -> 11000 (run-18 §1) -> 13000 (run-20 aside) -> 17000 (PM, this
-  // run: still cutting the cover short). The 9s figure was itself a
-  // recalibration: the original 16s was chosen when segments were 4s, and
-  // run-6 replaced it with a bounded fallback sized to the measured switch.
+  //
+  // PER-NODE, NOT A FLEET CONSTANT (see PENDING.md) -- these two used to
+  // just be Tanzania's own 17000/16000, cloned wholesale during the port
+  // rather than measured. dev: "check static transition times; maybe
+  // Windows 11 doesn't need as long as Linux" -- it doesn't. Measured
+  // directly against this node's own /api/feed-mode + HLS manifest
+  // recovery (two rounds, POST the mode change, poll /cam/index.m3u8
+  // until it answers again): show->hide 6.4s and 5.3s, hide->show 9.6s
+  // both times. Windows' dshow capture + mediamtx muxer rebuild is
+  // genuinely faster than Linux's v4l2 publisher restart, not just
+  // "shorter because nobody measured it" -- the worst of four samples was
+  // 9.65s, well under Tanzania's ~16s.
+  //
   // In practice the cover clears on the video's own 'playing' event, so
-  // this only matters when that event never arrives -- but it also bounds
-  // how long showError() stays suppressed, so it is not free to raise
-  // without limit.
-  var TRANSITION_MAX_MS = 17000;
+  // this bound only matters when that event never arrives -- but it also
+  // bounds how long showError() stays suppressed, so it is not free to
+  // raise without limit.
+  var TRANSITION_MAX_MS = 12000;
 
-  // MINIMUM, and this is the number that actually matters on Linux.
+  // MINIMUM. The cover used to clear on the video's own 'playing' event,
+  // which sounds right and is wrong here: hls.js fires 'playing' as soon
+  // as it has ANY buffered media, which on a mode change is the tail of
+  // the old feed. So the snow vanished in well under a second and the
+  // operator watched the stale picture, then a freeze, then the new one --
+  // exactly the mess the cover exists to hide.
   //
-  // The cover used to clear on the video's own 'playing' event, which sounds
-  // right and is wrong here: hls.js fires 'playing' as soon as it has ANY
-  // buffered media, which on a mode change is the tail of the old feed. So
-  // the snow vanished in well under a second and the operator watched the
-  // stale picture, then a freeze, then the new one -- exactly the mess the
-  // cover exists to hide.
-  //
-  // A Linux switch takes about 16 seconds end to end: the publisher restarts
-  // to open or close the microphone, mediamtx tears down and rebuilds the
-  // HLS muxer, and the player has to fetch enough new segments to start.
-  // 'playing' is not evidence that any of that finished. So the cover is
-  // held for the full duration regardless, and 'playing' only decides
-  // whether we needed the fallback.
-  //
-  // Per-node, NOT a fleet constant: macOS switches in under 10 seconds and
-  // must not clone this. See PENDING.md.
-  var TRANSITION_MIN_MS = 16000;
+  // Set from this node's own measured switch (see TRANSITION_MAX_MS above),
+  // a little above the worst observed 9.65s rather than the ~16s this line
+  // held before the port was actually timed. 'playing' is not evidence the
+  // real switch finished, so the cover is held for the full duration
+  // regardless, and 'playing' only decides whether the fallback was needed.
+  var TRANSITION_MIN_MS = 10000;
 
   function fadeOut() {
     video.style.opacity = '0';
