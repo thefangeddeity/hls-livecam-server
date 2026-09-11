@@ -811,6 +811,19 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
     # placement/collision system at all -- it has no text to place.
     plain_boxes = []
 
+    # Same filter hud_banner_text applies to its own 'visible' (line ~613) --
+    # re-derived here, not imported from that function's local scope (Python
+    # doesn't leak locals across functions; this loop reading an undefined
+    # 'visible' was a NameError the instant draw_hud reached it, left behind
+    # when hud_banner_text was extracted out. Deriving it the same way here
+    # keeps the boxes and the banner reading from the same rule rather than
+    # sharing a name that was never actually shared).
+    visible = [
+        tr for tr in tracks
+        if tr.state != 'departed'
+        and LABEL_ALIAS.get(tr.cls, tr.cls).upper() != 'MOTION'
+    ]
+
     for tr in visible:
         if not getattr(tr, 'promoted', True):
             bx, by, bw, bh = tr.box
