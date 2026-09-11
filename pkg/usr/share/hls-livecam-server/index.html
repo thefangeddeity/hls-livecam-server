@@ -1583,6 +1583,16 @@
                     title="Desaturate the picture -- only takes effect while Blur is active">
               <span class="bulb" id="bwLamp"></span><span class="cap2">B&amp;W</span>
             </button>
+            <!-- Foveal: was stubbed out here ("Foveal has no 7elwe backend
+                 either", see the comment above this row) before CV Mode
+                 was actually running detection. It is now -- ported the
+                 same way Tanzania wires it: disabled/hidden outside CV
+                 mode (paintPicture() below), a live toggle on
+                 /api/foveal-mode while inside it. -->
+            <button class="modem" id="fovealBtn" onclick="clickFoveal()"
+                    title="Foveal layer -- detection gated to the moving region">
+              <span class="bulb" id="fovealLamp"></span><span class="cap2">FOVEAL</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1914,6 +1924,7 @@
   var darkOverlay  = document.getElementById('darkOverlay');
   var showBtn      = document.getElementById('showBtn');
   var blurBtn      = document.getElementById('blurBtn');
+  var fovealBtn    = document.getElementById('fovealBtn');
   var hideBtn      = document.getElementById('hideBtn');
   var buzzBtn      = document.getElementById('buzzBtn');
   var muteBuzzBtn  = document.getElementById('muteBuzzBtn');
@@ -2590,6 +2601,15 @@
     hideBtn.className = 'pbtn guarded' + (feedMode === 'hide' ? ' pressed' : '');
     var cvBtn = document.getElementById('cvBtn');
     if (cvBtn) cvBtn.className = 'pbtn' + (feedMode === 'cv' ? ' pressed' : '');
+    // Foveal: unlike the setHudCv note below (stale -- CV Mode has since
+    // landed, this file just never caught up there), this gate is exactly
+    // Tanzania's own rule and correct here now: Foveal only means anything
+    // while CVProcessor's enhancement path is actually running a frame
+    // through it, which is feedMode === 'cv' specifically, same as Tanzania.
+    if (fovealBtn) {
+      fovealBtn.disabled = (feedMode !== 'cv');
+      fovealBtn.hidden = fovealBtn.disabled;
+    }
     // Hide publishes static, which on its own is indistinguishable from a
     // dead stream -- deliberately so, since that is what it is imitating.
     // This notice is the only thing that separates the two, now that a
@@ -2773,6 +2793,46 @@
   }
   pollBWMode();
   setInterval(pollBWMode, 5000);
+
+  // Foveal Layer -- ported from Tanzania once CV Mode was actually running
+  // detection here rather than just telemetry (dev: "Foveal button isn't
+  // active in 7elwe"). Same shape as Tanzania's own clickFoveal/paintFoveal:
+  // disabled+hidden outside CV mode (see updateFeedButtons above), a plain
+  // POST while inside it. Backend: routes.rs's /api/foveal-mode ->
+  // Cv::set_foveal(), which writes a line of JSON to the running sidecar's
+  // stdin so the toggle takes effect on the NEXT frame, no respawn needed.
+  var fovealOn = false;
+  function paintFoveal() {
+    if (!fovealBtn) return;
+    fovealBtn.classList.toggle('pressed', fovealOn);
+    var lamp = document.getElementById('fovealLamp');
+    if (lamp) lamp.classList.toggle('on', fovealOn);
+    fovealBtn.hidden = fovealBtn.disabled;
+  }
+  function applyFoveal(enabled) {
+    fovealOn = enabled;
+    paintFoveal();
+  }
+  function toggleFoveal() {
+    if (fovealBtn.disabled) return;
+    fetch('/api/foveal-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: (!fovealOn) ? 'true' : 'false'
+    })
+    .then(function(r) { return r.ok ? r.text() : null; })
+    .catch(function() { return null; })
+    .then(function(v) { if (v !== null) applyFoveal(v.trim() === 'true'); });
+  }
+  function clickFoveal() { toggleFoveal(); }
+  function pollFoveal() {
+    fetch('/api/foveal-mode', { cache: 'no-store' })
+      .then(function(r) { return r.ok ? r.text() : null; })
+      .catch(function() { return null; })
+      .then(function(v) { if (v !== null) applyFoveal(v.trim() === 'true'); });
+  }
+  pollFoveal();
+  setInterval(pollFoveal, 5000);
 
   // Show/Hide come through here -- a straight delegate to setFeedMode.
   // Blur also ends up in setFeedMode, but via toggleBlur() above, not this

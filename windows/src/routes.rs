@@ -21,11 +21,20 @@
 //!   * POST /api/broadcast answers 204 with an empty body, not 200.
 //!   * The no-cache header block is only on the locations nginx puts it on;
 //!     /cams/ deliberately lacks it.
+//!   * /hls/ carries an EXTRA `Cache-Control: no-store` alongside whatever
+//!     mediamtx's own header already says (nginx's `add_header ... always`
+//!     ADDS rather than replaces, so the wire shape genuinely is two
+//!     Cache-Control lines -- see proxy_hls). This one wasn't in the repo's
+//!     conf.d file's intent either, it was just never carried into this
+//!     proxy at all until "Unable to hear inbound audio from iOS" traced
+//!     back to iOS Safari's HTTP cache serving a stale audio-only rendition
+//!     without it. Verified against a live node the same way as the rest
+//!     of this file's fidelity notes.
 
 use axum::{
     body::{Body, Bytes},
     extract::{OriginalUri, Query, State},
-    http::{header, HeaderMap, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
     routing::{any, get, post},
     Router,
@@ -81,6 +90,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/feed-mode", get(feed_mode_get).post(feed_mode_post))
         .route("/api/msg-lock", get(msg_lock_get).post(msg_lock_post))
         .route("/api/bw-mode", get(bw_mode_get).post(bw_mode_post))
+        .route("/api/foveal-mode", get(foveal_mode_get).post(foveal_mode_post))
         .route("/api/dark", get(dark_get).post(dark_post))
         .route(
             "/api/notches",
@@ -284,6 +294,16 @@ async fn bw_mode_post(State(ctx): State<Arc<Ctx>>) -> Response {
     // unchanged -- contract preserved.
     ctx.pipeline.refresh_cloak().await;
     bool_text(v)
+}
+
+async fn foveal_mode_get(State(ctx): State<Arc<Ctx>>) -> Response {
+    bool_text(ctx.cv.get_foveal())
+}
+
+async fn foveal_mode_post(State(ctx): State<Arc<Ctx>>, body: String) -> Response {
+    let enabled = body.trim() == "true";
+    ctx.cv.set_foveal(enabled);
+    bool_text(enabled)
 }
 
 async fn dark_get(State(ctx): State<Arc<Ctx>>) -> Response {
@@ -627,7 +647,25 @@ fn upstream_url(port: u16, prefix: &str, uri: &axum::http::Uri) -> String {
 }
 
 async fn proxy_hls(method: Method, OriginalUri(uri): OriginalUri, headers: HeaderMap, body: Bytes) -> Response {
-    proxy(method, upstream_url(8888, "/hls/", &uri), headers, body).await
+    let mut resp = proxy(method, upstream_url(8888, "/hls/", &uri), headers, body).await;
+    // Matches Tanzania's nginx `/hls/` location, which adds this via
+    // `add_header Cache-Control "no-store" always` -- ADDS, does not
+    // replace, so the wire behaviour there is genuinely two Cache-Control
+    // header lines (mediamtx's own max-age/no-cache, plus this). Confirmed
+    // empirically (not assumed) by diffing this proxy's headers against
+    // Tanzania's real ones: this route was passing mediamtx's header
+    // through unchanged with no no-store at all, which iOS Safari's HTTP
+    // cache is known to treat more aggressively than desktop/Android --
+    // dev: "Unable to hear inbound audio from iOS" on 7elwe traced to
+    // exactly this gap (video kept working because its own rendition
+    // fetch cycle happened to revalidate anyway; the audio-only rendition
+    // is what iOS was serving stale). append(), not insert(), to match
+    // nginx's own two-header wire shape rather than guess at a "cleaner"
+    // single-header alternative that hasn't actually been proven to work
+    // on real iOS hardware the way this exact shape has.
+    resp.headers_mut()
+        .append(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
 }
 
 async fn proxy_talk(method: Method, OriginalUri(uri): OriginalUri, headers: HeaderMap, body: Bytes) -> Response {

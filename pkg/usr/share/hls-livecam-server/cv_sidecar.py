@@ -32,6 +32,14 @@ source the burned-in banner uses.
 
 Output: one compact JSON object per line on stdout, flushed. stderr is
 for diagnostics only. The reader is windows/src/cv.rs.
+
+Input (CV Mode only): the same shape in reverse -- one JSON object per
+line on stdin, read by CommandReader on a background thread. Today the
+only key is "foveal" (bool), written by Cv::set_foveal whenever the
+Settings panel toggles it and once more on every fresh spawn so a
+respawned child starts in step rather than always defaulting to off.
+Telemetry mode (no --publish) never reads this: it has no CVProcessor
+to apply it to.
 """
 
 import argparse
@@ -137,6 +145,50 @@ class FrameTap:
 
 def _warn(msg):
     print(f"cv_sidecar: {msg}", file=sys.stderr, flush=True)
+
+
+# --------------------------------------------------------------- commands
+
+class CommandReader:
+    """Reads line-delimited JSON commands off stdin in the background.
+
+    The write half of the same IPC shape this file's own stdout already
+    speaks (one JSON object per line) -- cv.rs's Cv::set_foveal writes
+    {"foveal": true/false}\\n whenever the Settings panel toggles it, and
+    on every fresh spawn (so a respawned sidecar starts in step with
+    whatever was last set, not always false). A daemon thread rather than
+    checked inline in the main loop: stdin.readline() blocks, and the main
+    loop must not stall waiting on a command that may never arrive.
+
+    Only 'foveal' exists today; the shape is a dict specifically so a
+    later command does not need a second channel -- add a key, add a
+    getter, done.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._foveal = False
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def foveal(self):
+        with self._lock:
+            return self._foveal
+
+    def _loop(self):
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                cmd = json.loads(line)
+            except Exception:
+                continue
+            if 'foveal' in cmd:
+                with self._lock:
+                    self._foveal = bool(cmd['foveal'])
+        # stdin closed (parent exited or is tearing this child down) --
+        # nothing to do; the main loop's own frame/pipe checks are what
+        # actually end the process.
 
 
 # ------------------------------------------------------------- publisher
@@ -410,6 +462,10 @@ def _run_publish(args):
     proc = _cvp.CVProcessor(denv)
     tap = FrameTap(args.url).start()
     pub = Publisher(args.ffmpeg, args.publish_url, args.publish_rate)
+    # Foveal only means anything here: telemetry mode (the non-publish
+    # branch, above in main()) runs OnnxDetector directly and has no
+    # CVProcessor to set it on at all.
+    cmds = CommandReader()
     _warn(f"CV Mode: width={args.width or 'native'} rate={args.publish_rate}/s "
           f"model={os.path.basename(args.model)}")
 
@@ -444,6 +500,13 @@ def _run_publish(args):
                 # ffmpeg would refuse the stream outright.
                 frame = cv2.resize(frame, (args.width, h - (h & 1)),
                                    interpolation=cv2.INTER_AREA)
+
+            # Cheap (an atomic-ish bool read behind a lock) -- same "set it
+            # every frame, let the processor decide whether anything
+            # actually changed" shape as Tanzania's own writer loop
+            # (cv_proc.set_foveal(_foveal_enabled) ahead of every
+            # cv_proc.process() call there too).
+            proc.set_foveal(cmds.foveal())
 
             t0 = time.time()
             # CVProcessor's contract is RGB in, RGB out. VideoCapture hands

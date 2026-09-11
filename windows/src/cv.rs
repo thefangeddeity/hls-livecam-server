@@ -35,7 +35,7 @@
 //! job, not CV's, so that is acceptable -- but it is a real difference,
 //! not an implementation detail.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -86,6 +86,24 @@ pub struct Cv {
     /// leaves CV mode, rather than lingering for the staleness window
     /// while the child is still winding down.
     state: StdMutex<Option<Arc<crate::state::AppState>>>,
+    /// Foveal Layer toggle (Tanzania's AUDIO_TUNABLES-style live modifier
+    /// on CV Mode, ported here once CV Mode itself was actually running
+    /// detection rather than just telemetry -- dev: "Foveal button isn't
+    /// active in 7elwe" caught that this was still stubbed out). The
+    /// AUTHORITY for the value: survives a sidecar restart (mode toggled
+    /// off and back on) and is what a freshly-spawned child gets told on
+    /// its first line of stdin, so the setting doesn't reset silently
+    /// every time the child respawns.
+    foveal: AtomicBool,
+    /// The currently-running child's stdin, if any -- the write half of a
+    /// second line-delimited-JSON channel alongside the stdout one cv_sidecar
+    /// already speaks (module doc: "IPC is line-delimited JSON on the
+    /// child's stdout... One mechanism, not two." -- this is the other
+    /// direction of that SAME mechanism, not a new one). None whenever no
+    /// child is alive (CV Mode not engaged, or between a respawn's kill and
+    /// its next spawn) -- set_foveal degrades to updating the atomic only
+    /// in that window, and the freshly-spawned child gets synced on start.
+    child_stdin: StdMutex<Option<std::process::ChildStdin>>,
 }
 
 impl Cv {
@@ -101,6 +119,8 @@ impl Cv {
             at: StdMutex::new(None),
             enabled: AtomicBool::new(false),
             state: StdMutex::new(Some(state.clone())),
+            foveal: AtomicBool::new(false),
+            child_stdin: StdMutex::new(None),
         });
 
         let python = match resolve_python() {
@@ -180,6 +200,42 @@ impl Cv {
             "capability_text": "",
         })
     }
+
+    /// The /api/foveal-mode body -- current desired state, not necessarily
+    /// what the child has actually applied yet (there is no ack; Tanzania's
+    /// own contract is the same, it echoes the accepted VALUE, not proof of
+    /// effect).
+    pub fn get_foveal(&self) -> bool {
+        self.foveal.load(Ordering::Relaxed)
+    }
+
+    /// Sets the authoritative value and, if a child is alive right now,
+    /// tells it immediately -- same "kick the live session" shape as
+    /// Tanzania's _kick_talk/_kick_roomaudio, just a write instead of a
+    /// process restart, because the sidecar already reads new frames every
+    /// loop iteration and does not need a respawn to pick anything up.
+    pub fn set_foveal(&self, enabled: bool) {
+        self.foveal.store(enabled, Ordering::Relaxed);
+        let mut guard = self.child_stdin.lock().unwrap();
+        if let Some(stdin) = guard.as_mut() {
+            // A write failing means the child is dead or dying (broken
+            // pipe) -- drop the handle so the NEXT set_foveal does not keep
+            // trying it, and so the field reads honestly as "no child" until
+            // spawn_supervisor installs a fresh one.
+            if send_foveal_cmd(stdin, enabled).is_err() {
+                *guard = None;
+            }
+        }
+    }
+}
+
+/// One line of line-delimited JSON on the child's stdin -- the write half
+/// of the same IPC shape cv_sidecar's stdout already speaks. `\n`-flushed
+/// immediately; cv_sidecar's reader thread is line-buffered on its end.
+fn send_foveal_cmd(stdin: &mut std::process::ChildStdin, enabled: bool) -> std::io::Result<()> {
+    let line = format!("{{\"foveal\":{}}}\n", enabled);
+    stdin.write_all(line.as_bytes())?;
+    stdin.flush()
 }
 
 fn spawn_supervisor(
@@ -205,7 +261,7 @@ fn spawn_supervisor(
             .arg("--publish")
             .arg("--ffmpeg")
             .arg(&ffmpeg);
-        cmd.stdin(Stdio::null())
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // The sidecar's stderr is diagnostics (connect/reconnect
             // notices); it would otherwise land in a console this
@@ -219,6 +275,24 @@ fn spawn_supervisor(
 
         match cmd.spawn() {
             Ok(mut child) => {
+                // Sync the fresh child with whatever foveal was last set to
+                // (a toggle made while CV mode was off, or a prior child's
+                // last-known value survives here, in the atomic -- see
+                // Cv::foveal's own doc) BEFORE installing the handle, so
+                // set_foveal calls arriving concurrently write to a handle
+                // that is either fully absent (queued as the atomic only,
+                // picked up here on the NEXT spawn) or fully installed,
+                // never a half-registered one.
+                if let Some(mut stdin) = child.stdin.take() {
+                    let want = cv.foveal.load(Ordering::Relaxed);
+                    if send_foveal_cmd(&mut stdin, want).is_ok() {
+                        *cv.child_stdin.lock().unwrap() = Some(stdin);
+                    }
+                    // A failed initial write means this child's stdin is
+                    // already broken -- leave child_stdin at None rather
+                    // than install a handle set_foveal would just fail on
+                    // again; the respawn loop will try a fresh child soon.
+                }
                 // Watchdog: ends the child when the feed mode stops
                 // matching what it was started for. The read loop below
                 // blocks on stdout, so the flip cannot be noticed there;
@@ -262,6 +336,10 @@ fn spawn_supervisor(
                         }
                     }
                 }
+                // This child is going away one way or another -- drop its
+                // stdin handle now so a set_foveal racing the respawn never
+                // writes to a pipe whose reader just stopped existing.
+                *cv.child_stdin.lock().unwrap() = None;
                 let _ = child.kill();
                 let _ = child.wait();
                 finished.store(true, Ordering::Relaxed);
