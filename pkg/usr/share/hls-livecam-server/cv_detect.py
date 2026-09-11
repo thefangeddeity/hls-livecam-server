@@ -707,14 +707,35 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
         cv2.putText(out, txt, pos, hud_font, scale,
                     ink_, hud_thickness, cv2.LINE_AA)
 
-    _put_line(text, (tx, primary_y), primary_scale, primary_ink)
-
-    if capabilities:
-        cap = str(capabilities)
+    # NOT burned into the picture any more: the banner/capability text is
+    # now drawn client-side, over the SAME corner, by the universal HUD
+    # renderer (.video-hud / setHudCv, sourced from this same hud_banner_text
+    # function via cv_processor.state()'s text/capability_text -- see that
+    # function's own docstring). Baking it into the pixels too meant every
+    # browser viewer showed both at once, unconditionally, since the client
+    # overlay has no way to know the picture already has its own copy.
+    # Found via a duplicate-text report on 7elwe's port; verified it was
+    # never 7elwe's mistake -- Tanzania's own burned frame checked clean,
+    # but its own browser view has carried the same double-render since the
+    # client HUD work landed, just never actually looked at with both
+    # pieces live simultaneously. draw_hud keeps everything else: the
+    # keep-out geometry below still reserves this corner (hud_clear) so
+    # target tags don't drift under where the client's overlay now sits,
+    # and the box-drawing loop is untouched.
+    #
+    # Kept, not deleted, in case a non-browser consumer of this stream ever
+    # needs the text actually IN the picture (raw RTSP tap, recording,
+    # anything that isn't the web viewer) -- uncomment to restore:
+    #   _put_line(text, (tx, primary_y), primary_scale, primary_ink)
+    cap = str(capabilities) if capabilities else ''
+    if cap:
         avail = w - 2 * tx
         # Trim at a separator rather than mid-word: a strip that ends in
         # "FOVEA" is worse than one that stops at the last whole tool it had
-        # room to name.
+        # room to name. Trimming is kept even though the text no longer
+        # draws: _hud_w below still measures it for the keep-out rect, and
+        # an untrimmed string would reserve more width than the client's
+        # own HUD actually uses.
         while cap and cv2.getTextSize(cap, hud_font, secondary_scale,
                                       hud_thickness)[0][0] > avail:
             cut = max(cap.rfind(', '), cap.rfind(' / '))
@@ -722,8 +743,8 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
                 cap = cap[:max(0, len(cap) - 2)]
             else:
                 cap = cap[:cut]
-        if cap:
-            _put_line(cap, (tx, secondary_y), secondary_scale, secondary_ink)
+        # if cap:
+        #     _put_line(cap, (tx, secondary_y), secondary_scale, secondary_ink)
 
     tag_font = cv2.FONT_HERSHEY_SIMPLEX
     tag_scale = 0.52
