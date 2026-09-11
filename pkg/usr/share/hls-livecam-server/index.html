@@ -1515,6 +1515,14 @@
           <button class="pbtn" id="showBtn" onclick="setPicture('show')">Show</button>
           <button class="pbtn guarded" id="hideBtn" onclick="setPicture('hide')"
                   title="Switch the camera off -- publishes nothing but the notice">Hide</button>
+          <!-- A fourth value the same exclusive bank can hold, not a
+               separate mechanism: it POSTs to /api/feed-mode like the
+               others. What changes is which path the player pulls -- the
+               CV sidecar renders to /cv while the raw camera keeps
+               publishing to /cam underneath (it is the sidecar's own
+               input, so it cannot be switched off). -->
+          <button class="pbtn" id="cvBtn" onclick="setPicture('cv')"
+                  title="Computer-vision render -- the room redrawn, not photographed">CV</button>
         </div>
         <!-- Diagnosis beside the remedy: the trace is what tells you the
              feed has stopped, and the key that fixes it is immediately to
@@ -1538,10 +1546,9 @@
              ("depth -- not implemented on this branch"). A dark socket
              names the gap; inventing a green one would hide it. -->
         <div class="ledstrip">
-          <div class="led" id="ledDetect" title="Detection sidecar producing fresh readings"><span class="bulb"></span><span class="n">DETECT</span></div>
-          <div class="led" id="ledMog2" title="Background model producing a foreground mask (CV Mode -- not running)"><span class="bulb"></span><span class="n">MOG2</span></div>
-          <div class="led" id="ledFov" title="Detection gated to the moving region (CV Mode -- not running)"><span class="bulb"></span><span class="n">FOV</span></div>
-          <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary (CV Mode -- not running)"><span class="bulb"></span><span class="n">2D</span></div>
+          <div class="led" id="ledMog2" title="Background model producing a foreground mask (CV Mode only)"><span class="bulb"></span><span class="n">MOG2</span></div>
+          <div class="led" id="ledFov" title="Detection gated to the moving region (CV Mode only)"><span class="bulb"></span><span class="n">FOV</span></div>
+          <div class="led" id="ledScene2d" title="Flat scene model: homography and region dictionary (CV Mode only)"><span class="bulb"></span><span class="n">2D</span></div>
           <div class="led" id="ledScene3d" title="Depth -- not implemented on this branch"><span class="bulb"></span><span class="n">3D</span></div>
         </div>
         <div class="pdiv"></div>
@@ -1876,6 +1883,15 @@
   // 2026-09-09, video stuck at 0fps/CONNECTING forever with no console
   // error a casual glance would catch).
   var HLS_URL = '/hls/cam/index.m3u8';
+  /// CV Mode renders to its own mediamtx path. Only the PICTURE moves:
+  /// the CV render is video-only, and the room's audio keeps coming from
+  /// /cam, which is still publishing (it is the sidecar's input). So the
+  /// audio side deliberately goes on using HLS_URL -- switching it here
+  /// too would silence the room the moment CV was selected.
+  var HLS_CV_URL = '/hls/cv/index.m3u8';
+  function videoHlsUrl() {
+    return (feedModeKnown && feedMode === 'cv') ? HLS_CV_URL : HLS_URL;
+  }
   var video        = document.getElementById('video');
   // SINGLE feed-dimensions reference (ron: "one single 'feed dimensions'
   // reference that all these anchor to, provided by cam or empirically").
@@ -2569,6 +2585,8 @@
     // paintBlur() below, since it's a toggle now, not a bank member.
     showBtn.className = 'pbtn' + (feedMode === 'show' ? ' pressed' : '');
     hideBtn.className = 'pbtn guarded' + (feedMode === 'hide' ? ' pressed' : '');
+    var cvBtn = document.getElementById('cvBtn');
+    if (cvBtn) cvBtn.className = 'pbtn' + (feedMode === 'cv' ? ' pressed' : '');
     // Hide publishes static, which on its own is indistinguishable from a
     // dead stream -- deliberately so, since that is what it is imitating.
     // This notice is the only thing that separates the two, now that a
@@ -2616,8 +2634,19 @@
 
   // CV telemetry (Phase 1): detection only, from the Python sidecar via
   // /api/cv-state. Read-only -- it never touches the published picture.
-  var cvState = { mog2: false, gated: false };
+  var CV_DARK = { mog2: false, gated: false, scene_registered: false,
+                  scene_stale: false, text: '', capability_text: '' };
+  var cvState = CV_DARK;
+  // Only while the picture is in CV mode. Telemetry here is a side
+  // effect of the render, not an independent service -- outside CV mode
+  // nothing is looking, so there is nothing to ask about and nothing to
+  // show. (The server agrees and reports dark regardless; this just
+  // avoids asking it twice a second for an answer we already know.)
   function pollCvState() {
+    if (!(feedModeKnown && feedMode === 'cv')) {
+      if (cvState !== CV_DARK) { cvState = CV_DARK; paintAnalysis(); }
+      return;
+    }
     fetch('/api/cv-state', { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; })
@@ -2634,15 +2663,18 @@
       var el = document.getElementById(id);
       if (el) el.className = 'led' + (state === 'ok' ? ' on' : state === 'down' ? ' down' : '');
     }
-    // DETECT is the one Phase 1 can actually light. The server returns
-    // capability_text only while the sidecar is producing fresh readings
-    // (cv.rs blanks it once they go stale), so this is measured, not a
-    // proxy for "configured".
-    set('ledDetect', cvState.capability_text ? 'ok' : '');
-    // MOG2/FOV/2D are CVProcessor faculties -- Phase 2. They report false
-    // and stay dark. Dark is "not running", which is true; red would be
-    // "measured and failed", which would be a lie. 3D is dark on tanzania
-    // too: depth is not implemented on that branch either.
+    // There is deliberately no DETECT lamp. CV is not one of these
+    // lamps: it is the mode that switches seeing on, and the CV key one
+    // row up already says so by being pressed. A lamp repeating it would
+    // dilute what this column means and duplicate state the panel
+    // already carries. (tanzania's rule, and its strip is exactly these
+    // four.)
+    //
+    // Every lamp is measured: the server reports nothing at all outside
+    // CV mode, so they go out on their own when seeing stops. Dark is
+    // "not running", which is true; red would be "measured and failed",
+    // which would be a lie. 3D is dark on tanzania too -- depth is not
+    // implemented on that branch either.
     set('ledMog2',    cvState.mog2  ? 'ok' : '');
     set('ledFov',     cvState.gated ? 'ok' : '');
     set('ledScene2d', cvState.scene_registered ? 'ok'
@@ -2944,7 +2976,7 @@
        emulate puts every Apple device back on its own decoder, and leaves
        hls.js doing the job it exists for: browsers with no native HLS. */
     if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = HLS_URL;
+      video.src = videoHlsUrl();
       video.load();
       video.play().catch(function() {
         video.addEventListener('click', function handler() {
@@ -2974,7 +3006,7 @@
       levelLoadingMaxRetry: 8, fragLoadingRetryDelay: 1000,
       levelLoadingRetryDelay: 1000, debug: false,
     });
-    hls.loadSource(HLS_URL);
+    hls.loadSource(videoHlsUrl());
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function() { setStatus('BUFFERING'); video.play().catch(function(){}); });
     hls.on(Hls.Events.FRAG_LOADED, function() { if (liveInd.textContent !== 'LIVE') setStatus('LIVE', 'live');; });

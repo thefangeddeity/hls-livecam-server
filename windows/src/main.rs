@@ -103,6 +103,8 @@ fn main() {
     let (tx, rx) = std::sync::mpsc::channel();
     let ffmpeg_for_video = ffmpeg.clone();
     let ffmpeg_for_talk = ffmpeg.clone();
+    // CV Mode pipes its render into ffmpeg to publish /cv (see cv.rs).
+    let ffmpeg_for_cv = ffmpeg.clone();
 
     // Deferred egui-context handle for the preview tap's event-driven
     // repaint: the tap thread starts here (server thread) before eframe
@@ -123,7 +125,7 @@ fn main() {
             let talk = talk::Talk::new(ffmpeg_for_talk, state.clone());
             // Optional by construction -- returns a dark Cv rather than
             // failing if Python or the model is absent (see cv.rs).
-            let cv = cv::Cv::start(state.dir().to_path_buf());
+            let cv = cv::Cv::start(state.dir().to_path_buf(), state.clone(), ffmpeg_for_cv);
 
             let handle = tokio::runtime::Handle::current();
             if tx

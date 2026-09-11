@@ -17,11 +17,23 @@
 //! video_preview.rs already established for talking to a child (it reads
 //! raw frames the same way). One mechanism, not two.
 //!
-//! Phase 2 -- CV Mode, where CV processes the published picture -- is
-//! deliberately NOT here. That needs the frame path rebuilt and costs
-//! ~122 ms/frame against a 66.7 ms budget on a node stronger than this
-//! one; detection alone is a few frames a second and buys the telemetry
-//! without touching what viewers see.
+//! CV exists ONLY while the picture is in CV mode, matching Tanzania:
+//! there, detection and the HUD are side effects of the render, not an
+//! independent service. So the sidecar is spawned on entering `cv` and
+//! killed on leaving it, and telemetry reads dark the rest of the time.
+//! An earlier build ran detection continuously in the background; that
+//! was a local invention, and it also paid ~130% of a core permanently
+//! for readings nobody was looking at.
+//!
+//! One unavoidable divergence from Tanzania, worth stating plainly: its
+//! Python owns the camera device directly and mutates frames in-process,
+//! so CV Mode simply changes what the single publisher emits. Here
+//! ffmpeg owns the device and publishes to RTSP, so the sidecar has to
+//! read from somewhere -- it consumes /cam and publishes its render to a
+//! SECOND path, /cv, which the viewer plays instead. The raw camera
+//! therefore keeps publishing throughout CV Mode. Concealment is Hide's
+//! job, not CV's, so that is acceptable -- but it is a real difference,
+//! not an implementation detail.
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -41,6 +53,21 @@ const CV_DETECT_PY: &str =
     include_str!("../../pkg/usr/share/hls-livecam-server/cv_detect.py");
 const CV_SIDECAR_PY: &str =
     include_str!("../../pkg/usr/share/hls-livecam-server/cv_sidecar.py");
+/// CV Mode's enhancement stack. cv_processor imports the rest, each in
+/// its own try/except, so a missing one disables that faculty instead of
+/// breaking the pipeline -- but they are all shipped, because a silently
+/// degraded renderer is worse than an absent one. cv_scene_register is
+/// deliberately absent: it is a standalone CLI, not part of the loop.
+const CV_PROCESSOR_PY: &str =
+    include_str!("../../pkg/usr/share/hls-livecam-server/cv_processor.py");
+const CV_SCENE_PY: &str =
+    include_str!("../../pkg/usr/share/hls-livecam-server/cv_scene.py");
+const CV_PERSIST_PY: &str =
+    include_str!("../../pkg/usr/share/hls-livecam-server/cv_persist.py");
+const CV_OCCUPANCY_PY: &str =
+    include_str!("../../pkg/usr/share/hls-livecam-server/cv_occupancy.py");
+const CV_NOTIFY_PY: &str =
+    include_str!("../../pkg/usr/share/hls-livecam-server/cv_notify.py");
 
 /// A reading older than this counts as stale and the lamps go dark --
 /// same idea as CVProcessor.state(fresh=2.0): a wedged sidecar must not
@@ -55,16 +82,25 @@ pub struct Cv {
     /// False when the sidecar could not be started at all (no Python, no
     /// model). Distinct from "running but reporting nothing".
     enabled: AtomicBool,
+    /// Read in state() so telemetry goes dark the INSTANT the picture
+    /// leaves CV mode, rather than lingering for the staleness window
+    /// while the child is still winding down.
+    state: StdMutex<Option<Arc<crate::state::AppState>>>,
 }
 
 impl Cv {
     /// Never fails: a node that cannot run CV is a node with CV dark,
     /// not a node that fails to boot.
-    pub fn start(state_dir: PathBuf) -> Arc<Self> {
+    pub fn start(
+        state_dir: PathBuf,
+        state: Arc<crate::state::AppState>,
+        ffmpeg: PathBuf,
+    ) -> Arc<Self> {
         let cv = Arc::new(Self {
             latest: StdMutex::new(None),
             at: StdMutex::new(None),
             enabled: AtomicBool::new(false),
+            state: StdMutex::new(Some(state.clone())),
         });
 
         let python = match resolve_python() {
@@ -101,7 +137,7 @@ impl Cv {
             model.display()
         ));
         cv.enabled.store(true, Ordering::Relaxed);
-        spawn_supervisor(cv.clone(), python, script, model);
+        spawn_supervisor(cv.clone(), python, script, model, state, ffmpeg);
         cv
     }
 
@@ -112,7 +148,17 @@ impl Cv {
     /// Absent or stale telemetry reports everything off, never
     /// unknown-but-probably-fine (broadcast-api's words, same rule).
     pub fn state(&self) -> Value {
-        if self.enabled.load(Ordering::Relaxed) {
+        // Not in CV mode means not seeing, so report nothing rather than
+        // the last thing seen. Matches Tanzania, where the telemetry does
+        // not exist outside the render.
+        let in_cv = self
+            .state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.feed_mode.lock().unwrap().as_str() == "cv")
+            .unwrap_or(false);
+        if in_cv && self.enabled.load(Ordering::Relaxed) {
             let fresh = self
                 .at
                 .lock()
@@ -136,13 +182,30 @@ impl Cv {
     }
 }
 
-fn spawn_supervisor(cv: Arc<Cv>, python: PathBuf, script: PathBuf, model: PathBuf) {
+fn spawn_supervisor(
+    cv: Arc<Cv>,
+    python: PathBuf,
+    script: PathBuf,
+    model: PathBuf,
+    state: Arc<crate::state::AppState>,
+    ffmpeg: PathBuf,
+) {
     std::thread::spawn(move || loop {
+        // CV runs only while the picture is in CV mode. Outside it there
+        // is no child at all -- no detector, no encoder, no cost.
+        if state.feed_mode.lock().unwrap().as_str() != "cv" {
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+
         let mut cmd = Command::new(&python);
         cmd.arg(&script)
             .arg("--model")
             .arg(&model)
-            .stdin(Stdio::null())
+            .arg("--publish")
+            .arg("--ffmpeg")
+            .arg(&ffmpeg);
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             // The sidecar's stderr is diagnostics (connect/reconnect
             // notices); it would otherwise land in a console this
@@ -156,6 +219,32 @@ fn spawn_supervisor(cv: Arc<Cv>, python: PathBuf, script: PathBuf, model: PathBu
 
         match cmd.spawn() {
             Ok(mut child) => {
+                // Watchdog: ends the child when the feed mode stops
+                // matching what it was started for. The read loop below
+                // blocks on stdout, so the flip cannot be noticed there;
+                // killing the child breaks that read and the outer loop
+                // respawns with the right argv. Polls rather than being
+                // pushed to, because a mode change is rare and a second
+                // of latency on it is imperceptible.
+                // `finished` is set by THIS thread once the child is
+                // reaped, so the watchdog exits with it. Without that
+                // shared flag a normally-exiting child would leave its
+                // watchdog polling forever -- one leaked thread per
+                // restart, which over a long uptime is not nothing.
+                let finished = Arc::new(AtomicBool::new(false));
+                let killer = Killer { pid: child.id(), done: finished.clone() };
+                let st = state.clone();
+                let watch = std::thread::spawn(move || loop {
+                    std::thread::sleep(Duration::from_millis(500));
+                    if killer.done() {
+                        return;
+                    }
+                    if st.feed_mode.lock().unwrap().as_str() != "cv" {
+                        killer.kill();
+                        return;
+                    }
+                });
+
                 if let Some(out) = child.stdout.take() {
                     for line in BufReader::new(out).lines() {
                         let Ok(line) = line else { break };
@@ -175,6 +264,8 @@ fn spawn_supervisor(cv: Arc<Cv>, python: PathBuf, script: PathBuf, model: PathBu
                 }
                 let _ = child.kill();
                 let _ = child.wait();
+                finished.store(true, Ordering::Relaxed);
+                let _ = watch.join();
             }
             Err(e) => {
                 crate::launch_log(&format!("cv: failed to start sidecar: {e}"));
@@ -184,6 +275,37 @@ fn spawn_supervisor(cv: Arc<Cv>, python: PathBuf, script: PathBuf, model: PathBu
         // FRESH on their own, so there is nothing to clear here.
         std::thread::sleep(RESTART_BACKOFF);
     });
+}
+
+/// A kill handle for a spawned child, usable from the watchdog thread.
+///
+/// std's Child cannot be shared across threads for killing, so this holds
+/// the raw OS pid and shells out to the same mechanism the rest of the
+/// codebase uses. Crude, but it keeps ownership of the Child (and its
+/// stdout) firmly in the reading thread.
+struct Killer {
+    pid: u32,
+    done: Arc<AtomicBool>,
+}
+
+impl Killer {
+    fn kill(&self) {
+        self.done.store(true, Ordering::Relaxed);
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &self.pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(crate::winproc::CREATE_NO_WINDOW);
+        }
+        let _ = cmd.status();
+    }
+    fn done(&self) -> bool {
+        self.done.load(Ordering::Relaxed)
+    }
 }
 
 /// Resolves the real interpreter, deliberately NOT the `py.exe` launcher.
@@ -249,7 +371,16 @@ fn resolve_model(state_dir: &PathBuf) -> Option<PathBuf> {
 fn extract_scripts(state_dir: &PathBuf) -> std::io::Result<PathBuf> {
     let dir = state_dir.join("cv");
     std::fs::create_dir_all(&dir)?;
-    std::fs::write(dir.join("cv_detect.py"), CV_DETECT_PY)?;
+    for (name, body) in [
+        ("cv_detect.py", CV_DETECT_PY),
+        ("cv_processor.py", CV_PROCESSOR_PY),
+        ("cv_scene.py", CV_SCENE_PY),
+        ("cv_persist.py", CV_PERSIST_PY),
+        ("cv_occupancy.py", CV_OCCUPANCY_PY),
+        ("cv_notify.py", CV_NOTIFY_PY),
+    ] {
+        std::fs::write(dir.join(name), body)?;
+    }
     let sidecar = dir.join("cv_sidecar.py");
     std::fs::write(&sidecar, CV_SIDECAR_PY)?;
     Ok(sidecar)

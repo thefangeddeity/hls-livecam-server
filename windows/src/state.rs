@@ -144,7 +144,7 @@ impl AppState {
 }
 
 pub fn is_valid_mode(m: &str) -> bool {
-    matches!(m, "show" | "cloak" | "hide")
+    matches!(m, "show" | "cloak" | "hide" | "cv")
 }
 
 fn read(dir: &Path, name: &str) -> Option<String> {

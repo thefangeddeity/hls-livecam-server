@@ -804,6 +804,18 @@ def draw_hud(canvas, tracks, ink=(220, 220, 220), capabilities=None):
             return x2, cy
         return x1, cy
 
+    # UPSTREAM FIX (7elwe, 2026-09-10): draw_hud referenced `visible`
+    # without ever defining it -- the name is a local of
+    # hud_banner_text(), so every call raising NameError the moment there
+    # was anything to draw. Derived here exactly as that function does,
+    # so the boxes and the banner can never disagree about which tracks
+    # count. Belongs back upstream.
+    active = [tr for tr in tracks if tr.state != 'departed']
+    visible = [
+        tr for tr in active
+        if LABEL_ALIAS.get(tr.cls, tr.cls).upper() != 'MOTION'
+    ]
+
     targets = []
     # Evidence accumulated but not yet past promote_threshold: trackable,
     # not yet labelled -- motion-detector behaviour, already useful on its

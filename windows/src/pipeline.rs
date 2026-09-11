@@ -79,6 +79,17 @@ fn source_for_mode(mode: &str) -> Source {
     match mode {
         "show" => Source::Show,
         "cloak" => Source::Cloak,
+        // CV deliberately has NO Source of its own. The CV sidecar reads
+        // its input from this very publisher (rtsp://.../cam), so a
+        // Source::Cv that replaced the capture would starve the thing it
+        // exists to feed. CV Mode is therefore "keep publishing the real
+        // camera, and let the sidecar publish its processed render to a
+        // SECOND path (/cv) that the viewer plays instead" -- see cv.rs.
+        //
+        // Consequence worth stating: raw /cam stays published throughout
+        // CV Mode, so CV does not conceal the picture. That is Hide's
+        // job, not CV's.
+        "cv" => Source::Show,
         _ => Source::Hidden, // "hide" (and any unknown, fail-safe)
     }
 }
