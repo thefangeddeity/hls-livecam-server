@@ -1101,17 +1101,6 @@
       overflow-y: visible; flex-shrink: unset;
     }
     .sidebar-scroll { overflow-y: visible; }
-    /* Level graph, mobile only: the meter this feeds (levelGlass/levelGraph)
-       depends on Web Audio's createMediaElementSource actually seeing
-       decoded samples, which iOS Safari's native HLS pipeline does not
-       reliably deliver for an <audio> element (see roomHls's own comment
-       on that WebKit limitation) -- so on the platform this rule targets,
-       the graph was liable to read flat regardless of whether audio itself
-       was actually playing, which is worse than not showing a meter at
-       all: a dead graph reads as "audio is broken" even when it is not.
-       Desktop keeps it; this is scoped to the same breakpoint the rest of
-       the mobile layout already uses, not a separate iOS-specific check. */
-    #levelGlass { display: none; }
     /* WHY THE PILL IS DESKTOP-ONLY, before anyone tidies this away.
        On a desktop the header is a status bar: the feed and the whole panel
        are on screen at once, so a pill tracking the player belongs at the
