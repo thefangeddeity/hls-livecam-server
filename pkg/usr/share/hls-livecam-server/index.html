@@ -3290,8 +3290,16 @@
     }
     // HUD line 1 = the live A/V status, mirroring the mode.
     if (typeof setHudStatus === 'function') {
+      // roomAudio falls back to native <audio src> whenever hls.js can't
+      // engage (no MSE, or -- on current iOS -- Hls.isSupported() itself
+      // unreliably reporting false despite ManagedMediaSource genuinely
+      // working: https://github.com/video-dev/hls.js/issues/6161).
+      // Native playback is fine, but createMediaElementSource never sees
+      // its decoded samples on iOS, so the level meter reads flat -- a
+      // real platform limitation, not a bug here. Flagging it in the HUD
+      // rather than silently showing a dead meter with no explanation.
       setHudStatus(audioMode === 'two-way' ? 'RTC AUDIO LIVE'
-                 : audioMode === 'play' ? 'HLS AUDIO LIVE'
+                 : audioMode === 'play' ? ((roomHls ? '' : 'NATIVE ') + 'HLS AUDIO LIVE')
                  : audioMode === 'talk' ? 'TALK LIVE' : '');
     }
     // Keep the Mute-mic key's enabled/greyed state in step with the call.
