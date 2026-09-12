@@ -4102,6 +4102,15 @@
       el.muted = false;                // the gain node owns silence now
       levelSrcEl = el;
       applyAudioSilence();
+      // iOS Safari creates a fresh AudioContext 'suspended' unless resumed
+      // from within a user gesture; the resolveAudioSrc() fetch that leads
+      // here runs async, so the gesture that started Monitor is long gone
+      // by the time this fires. levelSample() gates the HLS meter on
+      // ctx.state === 'running', so without this the graph reads flat
+      // forever on iOS while playback itself works fine -- same fix
+      // levelAttachStream already applies for the RTC tap, which is why
+      // RTC's meter has always worked there and this one hadn't.
+      if (levelCtx.state === 'suspended') { try { levelCtx.resume(); } catch (e) {} }
     } catch (e) { /* already attached, or the element is not analysable */ }
   }
 
