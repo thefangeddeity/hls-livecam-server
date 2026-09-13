@@ -1,6 +1,6 @@
-# hls-livecam-server
+# laptop-livecam
 
-Turns an old laptop or a USB webcam into a live HLS stream with a browser-based family presence system — message board, dark mode cloak, buzz notifications, and a terminal monitor.
+Turns an old laptop or a USB webcam into a live camera appliance — HLS video, two-way audio, computer-vision presence detection, and a browser-based family presence system — message board, dark mode cloak, buzz notifications, and a terminal monitor.
 
 ![camstack TUI monitor](screenshots/camstack.jpg)
 
@@ -161,16 +161,18 @@ cutting it off at the bottom on any window shorter than 16:9.
 ## Feed modes
 
 Three modes, set from the viewer, the Qt dashboard or camdash, and persisted
-across restarts in `/var/lib/hls-livecam/feed_mode`. When that file is missing
-or unreadable the node falls back to **`cv`** — never to `show`. A privacy
-control on a camera pointed at a family's living space does not get to fail
-open.
+across restarts in `/var/lib/hls-livecam/feed_mode`.
+
+**Privacy fails closed.** If the persisted feed-mode file is missing,
+unreadable, invalid, or otherwise cannot be trusted, the node falls back to
+**`hide`** — never `show` and never `cv`. A camera pointed at a private space
+must not become visible merely because its privacy state cannot be read.
 
 | mode | what is published |
 |---|---|
 | `show` | the camera |
 | `cv` | the camera, processed (see CV Mode) |
-| `hide` | **VHS static**, plus silence |
+| `hide` | privacy/static output, plus silence |
 
 `cloak` is accepted as a permanent alias for `cv` on `/api/feed-mode`. Not a
 transition window — every node in the fleet talks to every other node's
