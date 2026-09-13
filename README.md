@@ -2,7 +2,7 @@
 
 Turns an old laptop or a USB webcam into a live camera appliance — HLS video, two-way audio, computer-vision presence detection, and a browser-based family presence system — message board, dark mode cloak, buzz notifications, and a terminal monitor.
 
-![camstack TUI monitor](screenshots/camstack.jpg)
+![camdash TUI monitor](screenshots/camstack.jpg)
 
 ---
 
@@ -10,10 +10,11 @@ Turns an old laptop or a USB webcam into a live camera appliance — HLS video, 
 
 - **Streams** a USB webcam via HLS (H.264, MediaMTX + ffmpeg) to any browser — Chrome, Firefox, Safari, mobile
 - **Web viewer** with live status indicator, uptime counter, freeze-frame on signal loss, and fullscreen
-- **Message board** — type a message from `camstack` or the sidebar; it persists until cleared
+- **Message board** — type a message from `camdash` or the sidebar; it persists until cleared
 - **Dark mode** — cloaks the feed with a black overlay; the stream keeps running underneath
 - **Buzz** — MSN-style screen shake + sawtooth tone, triggered from the viewer sidebar or API
-- **`camstack`** — curses TUI showing full pipeline health (ffmpeg → RTSP → mediamtx → HLS → nginx → API), system resources, SMART disk status, and service controls
+- **`camdash`** — SSH-friendly curses TUI showing full pipeline health (ffmpeg → RTSP → mediamtx → HLS → nginx → API), system resources, SMART disk status, and service controls
+- **`camdash-gui`** — the same operator picture in a PySide6/Qt window, for when you're at the machine instead of SSH'd in
 - **Auto-repair** — detects stream down for 8s and triggers repair automatically
 
 ![Web viewer in dark mode](screenshots/viewer-dark.png)
@@ -70,7 +71,8 @@ The setup wizard auto-detects your webcam, downloads MediaMTX, writes all config
 | Web viewer | `http://<your-ip>` |
 | HLS stream | `http://<your-ip>:8888/cam/index.m3u8` |
 | RTSP (VLC) | `rtsp://<your-ip>:8554/cam` |
-| Terminal monitor | `camstack` |
+| Terminal monitor | `camdash` |
+| GUI dashboard | `camdash-gui` |
 
 ---
 
@@ -78,12 +80,13 @@ The setup wizard auto-detects your webcam, downloads MediaMTX, writes all config
 
 | Command | What it does |
 |---------|-------------|
-| `camstack` | Launch the TUI monitor |
+| `camdash` | Launch the TUI monitor (SSH-friendly) |
+| `camdash-gui` | Launch the windowed operator dashboard |
 | `sudo hls-livecam-setup` | Reconfigure / change webcam or framerate |
 | `sudo hls-livecam-repair` | Fix a broken stream |
 | `sudo hls-livecam-dark` | Toggle dark mode cloak |
 
-### camstack keys
+### camdash keys
 
 | Key | Action |
 |-----|--------|
@@ -160,7 +163,7 @@ cutting it off at the bottom on any window shorter than 16:9.
 
 ## Feed modes
 
-Three modes, set from the viewer, the Qt dashboard or camdash, and persisted
+Three modes, set from the viewer, `camdash-gui` or `camdash`, and persisted
 across restarts in `/var/lib/hls-livecam/feed_mode`.
 
 **Privacy fails closed.** If the persisted feed-mode file is missing,
@@ -246,7 +249,7 @@ DC ~0.34, real audio reads flat factor 0.000 and DC ~0. Persist with
 
 ## SMART note
 
-If `camstack` reports `REALLOC > 500` in the DISK/SMART panel, your drive has significant sector reallocation. Back up your data. The stream will continue running but the drive should be replaced soon.
+If `camdash` reports `REALLOC > 500` in the DISK/SMART panel, your drive has significant sector reallocation. Back up your data. The stream will continue running but the drive should be replaced soon.
 
 ---
 
