@@ -113,6 +113,11 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/hls/{*rest}", get(proxy_hls))
         .route("/talk/{*rest}", any(proxy_talk))
         .route("/cam/{*rest}", any(proxy_cam))
+        // roomaudio.rs republishes /cam's audio as Opus for the two-way
+        // WHEP inbound leg; proxy_cam's logic is already path-generic
+        // (recomputes est from the real URI each call), so the same
+        // handler proxies this path too without any change to it.
+        .route("/roomaudio/{*rest}", any(proxy_cam))
         // An unknown /api/ path reaches Flask and gets Flask's 404 page;
         // anything else is refused by nginx itself. Different bodies.
         .route("/api/{*rest}", get(flask_not_found).post(flask_not_found))

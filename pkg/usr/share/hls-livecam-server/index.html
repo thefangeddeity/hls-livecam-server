@@ -1558,18 +1558,15 @@
              act, and it had been sitting at the size of a primary control
              for no better reason than that there was room.
 
-             7elwe port note: B&W here is a REAL 7elwe feature with no
-             Tanzania equivalent to port (Tanzania has no such modifier --
-             its Blur/CV/Night direction superseded it) -- routes.rs's
-             /api/bw-mode desaturates Blur, same as this file's own
-             predecessor had as a plain checkbox. Skinned with the same
-             modem+bulb language Blur/Foveal used to wear here rather than
-             dropped, since it is working functionality this port would
-             otherwise silently regress. Blur itself now sits alongside it
-             (moved out of the primary bank, see the comment above the
-             btnrow) -- same modem+bulb pairing Tanzania uses for
-             Blur+Foveal, just Blur+B&W here since Foveal has no 7elwe
-             backend either. -->
+             7elwe port note: B&W's button lived here as a real, working
+             modifier (routes.rs's /api/bw-mode desaturates Blur) with no
+             Tanzania equivalent -- until Foveal became real too (CV Mode
+             actually running detection, see the comment below) and the
+             group had no room for three. Dropped in favor of matching
+             Tanzania's own Blur+Foveal pairing exactly (ron: "remove B&W
+             button, put FOVEAL in its place"); /api/bw-mode itself is
+             untouched server-side, just no longer reachable from this
+             panel. -->
         <div class="modemrow">
           <button class="reset" id="reloadBtn" onclick="manualReload()"
                   title="Repair feed -- restarts the stream" aria-label="Repair feed"><span class="pin"></span></button>
@@ -1579,16 +1576,10 @@
                     title="Mosaic the picture -- the room is there but not legible">
               <span class="bulb" id="blurLamp"></span><span class="cap2">BLUR</span>
             </button>
-            <button class="modem" id="bwBtn" onclick="toggleBW()"
-                    title="Desaturate the picture -- only takes effect while Blur is active">
-              <span class="bulb" id="bwLamp"></span><span class="cap2">B&amp;W</span>
-            </button>
-            <!-- Foveal: was stubbed out here ("Foveal has no 7elwe backend
-                 either", see the comment above this row) before CV Mode
-                 was actually running detection. It is now -- ported the
-                 same way Tanzania wires it: disabled/hidden outside CV
-                 mode (paintPicture() below), a live toggle on
-                 /api/foveal-mode while inside it. -->
+            <!-- Foveal: ported from Tanzania once CV Mode was actually
+                 running detection here rather than just telemetry --
+                 disabled/hidden outside CV mode (paintPicture() below), a
+                 live toggle on /api/foveal-mode while inside it. -->
             <button class="modem" id="fovealBtn" onclick="clickFoveal()"
                     title="Foveal layer -- detection gated to the moving region">
               <span class="bulb" id="fovealLamp"></span><span class="cap2">FOVEAL</span>
@@ -2633,7 +2624,6 @@
       hideOverlay.classList.add('visible');
     }
     paintBlur();
-    paintBW();
     paintLamps();
   }
 
@@ -2764,35 +2754,6 @@
     setFeedMode(feedMode === 'cloak' ? 'show' : 'cloak');
   }
 
-  // 7elwe port note: B&W (routes.rs's /api/bw-mode) has no Tanzania
-  // equivalent to port -- Tanzania's own B&W predecessor was superseded by
-  // its Blur/CV/Night direction before this session. Behavior ported from
-  // THIS file's own pre-port version (toggleBW / pollBWMode), restyled
-  // with the modem+bulb language Blur/Foveal used to wear in this exact
-  // panel slot on Tanzania.
-  var bwMode = false;
-  function paintBW() {
-    var btn = document.getElementById('bwBtn');
-    if (!btn) return;
-    btn.disabled = (feedMode !== 'cloak');
-    btn.classList.toggle('pressed', bwMode);
-    var lamp = document.getElementById('bwLamp');
-    if (lamp) lamp.classList.toggle('on', bwMode);
-  }
-  function toggleBW() {
-    fetch('/api/bw-mode', { method: 'POST' })
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .catch(function() { return null; })
-      .then(function(v) { if (v !== null) { bwMode = v.trim() === 'true'; paintBW(); } });
-  }
-  function pollBWMode() {
-    fetch('/api/bw-mode', { cache: 'no-store' })
-      .then(function(r) { return r.ok ? r.text() : null; })
-      .catch(function() { return null; })
-      .then(function(v) { if (v !== null) { bwMode = v.trim() === 'true'; paintBW(); } });
-  }
-  pollBWMode();
-  setInterval(pollBWMode, 5000);
 
   // Foveal Layer -- ported from Tanzania once CV Mode was actually running
   // detection here rather than just telemetry (dev: "Foveal button isn't
@@ -3731,13 +3692,14 @@
   var twoWayBtn = document.getElementById('twoWayBtn');
 
   // 7elwe port note: this now DOES reverse-proxy mediamtx's WHIP/WHEP HTTP
-  // API under the same origin (/talk/whip, /cam/whep -- routes.rs's
-  // proxy_talk/proxy_cam), matching Tanzania's nginx in spirit (7elwe uses
-  // /cam, not /roomaudio, for the WHEP return leg -- see talk.rs's
-  // device-contention note). Originally hit :8889 directly, which is what
-  // produced the real "NetworkError when attempting to fetch resource" on
-  // the WHIP POST under the tailnet HTTPS URL -- same mixed-content cause
-  // as the HLS_URL fix above.
+  // API under the same origin (/talk/whip, /cam/whep, /roomaudio/whep --
+  // routes.rs's proxy_talk/proxy_cam), matching Tanzania's nginx in
+  // spirit -- roomaudio.rs republishes /cam's audio as Opus specifically
+  // for the WHEP return leg now, so this node uses /roomaudio there too.
+  // Originally hit :8889 directly, which is what produced the real
+  // "NetworkError when attempting to fetch resource" on the WHIP POST
+  // under the tailnet HTTPS URL -- same mixed-content cause as the
+  // HLS_URL fix above.
   function mediamtxEndpoint(path) {
     return '/' + path;
   }
@@ -3970,21 +3932,17 @@
       .then(function (o) { return twoWayRxPc.setLocalDescription(o); })
       .then(function () { return talkIceReady(twoWayRxPc); })   // mediamtx is non-trickle
       .then(function () {
-        // 7elwe port note (real adaptation, not a rename): Tanzania
-        // publishes the room's mic to its own dedicated "roomaudio"
-        // mediamtx path, separate from "cam" (video+audio). 7elwe's
-        // pipeline muxes mic audio into the SAME dshow capture as video
-        // (see pipeline.rs's dshow_capture -- one ffmpeg process, one
-        // combined publish to rtsp://127.0.0.1:8554/cam) and has no
-        // second, audio-only publish. A dedicated roomaudio republish
-        // would mean a second concurrent open of the same physical mic
-        // device, which Windows dshow audio capture cannot reliably do
-        // (unlike ALSA's dmix) -- a real device-contention risk, not
-        // just unbuilt. So this WHEP subscription targets "cam" instead:
-        // the transceiver above is recvonly *audio*, so mediamtx answers
-        // with only the audio track off the existing combined publish,
-        // never the video.
-        return fetch(mediamtxEndpoint('cam/whep'), {
+        // roomaudio.rs republishes /cam's audio as Opus on its own
+        // dedicated mediamtx path (matching Tanzania's broadcast-api),
+        // derived from /cam over the RTSP loopback rather than a second
+        // dshow open of the physical mic -- the device-contention worry
+        // this comment used to raise doesn't apply, since mediamtx is
+        // re-serving its own already-published stream, not opening the
+        // capture device again. WHEP needs Opus and /cam itself stays
+        // AAC (for HLS), so this is what makes two-way inbound audio
+        // exist at all rather than silently offering an AAC track no
+        // WHEP subscriber can decode.
+        return fetch(mediamtxEndpoint('roomaudio/whep'), {
           method: 'POST', headers: { 'Content-Type': 'application/sdp' },
           body: twoWayRxPc.localDescription.sdp
         });

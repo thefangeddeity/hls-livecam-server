@@ -1,6 +1,17 @@
-//! Capture pipeline: mediamtx + a swappable ffmpeg source, both supervised.
+//! Capture pipeline: mediamtx + a swappable ffmpeg VIDEO source, both
+//! supervised.
 //!
-//! dshow camera --[ffmpeg capture]--> rtsp://127.0.0.1:8554/cam --[mediamtx]--> :8888/cam/index.m3u8
+//! dshow camera --[ffmpeg capture]--> rtsp://127.0.0.1:8554/camvideo
+//!
+//! Audio is a fully separate, independently supervised process now (see
+//! audio_capture.rs, publishing `micaudio`) -- the two used to share one
+//! combined dshow line and one ffmpeg process, which meant any audio-side
+//! problem forced this module's own stall/crash supervisor to restart a
+//! perfectly healthy video feed too (confirmed live 2026-09-12: the
+//! combined process was cycling every ~25-30s over an audio-only issue).
+//! cam_mux.rs remuxes camvideo + micaudio back into the legacy `/cam`
+//! path for HLS/preview consumers that want both tracks together; this
+//! module never touches audio at all anymore.
 //!
 //! "Show" and "Hide" are two different ffmpeg command lines pushing to the
 //! *same* RTSP path; swapping between them just means killing one child and
@@ -54,8 +65,12 @@ pub struct PipelineStatus {
     pub switch_seq: u64,
 }
 
-const RTSP_URL: &str = "rtsp://127.0.0.1:8554/cam";
-const HLS_MASTER_PATH: &str = "/cam/index.m3u8";
+const RTSP_URL: &str = "rtsp://127.0.0.1:8554/camvideo";
+// Watches camvideo's own manifest, not /cam's -- /cam is cam_mux.rs's
+// remux of camvideo+micaudio, and staleness there could just as easily
+// mean a micaudio/mux problem as a video one. Watching camvideo directly
+// keeps this supervisor's restart decision genuinely video-only.
+const HLS_MASTER_PATH: &str = "/camvideo/index.m3u8";
 const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 const STALL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Two full mediamtx HLS segments (TARGETDURATION=4s) with no manifest
@@ -112,6 +127,10 @@ pub struct Pipeline {
     /// found" collapse to None there, and /api/pipeline's mic lamp needs
     /// to tell those apart (dark vs red -- see audio_status).
     audio_enabled: bool,
+    /// The independent audio-only leg (audio_capture.rs). reload_audio()
+    /// reaches through here to restart JUST audio when notches/gain
+    /// change -- video is never touched by anything audio does.
+    audio_capture: Arc<crate::audio_capture::AudioCapture>,
     running: AtomicBool,
     /// Operator-controlled on/off (the SERVER: ON/OFF control). Distinct
     /// from `running`, which only ever goes false once, at real process
@@ -137,6 +156,13 @@ impl Pipeline {
         let (audio_enabled, audio_device) = load_or_pick_audio_device(&ffmpeg, &state).await;
         let initial = source_for_mode(&state.feed_mode.lock().unwrap().clone());
 
+        // Independent legs, spawned before the struct that ties them
+        // together -- audio_capture and cam_mux never go through
+        // restart_capture/self.capture at all, by construction.
+        let audio_capture =
+            crate::audio_capture::spawn_supervisor(ffmpeg.clone(), state.clone(), audio_device.clone());
+        crate::cam_mux::spawn_supervisor(ffmpeg.clone(), audio_device.is_some());
+
         let p = Arc::new(Self {
             ffmpeg,
             mediamtx,
@@ -147,6 +173,7 @@ impl Pipeline {
             device: StdMutex::new(device),
             audio_device: StdMutex::new(audio_device),
             audio_enabled,
+            audio_capture,
             running: AtomicBool::new(true),
             enabled: AtomicBool::new(true),
             capture_alive: AtomicBool::new(false),
@@ -193,15 +220,16 @@ impl Pipeline {
         self.restart_capture().await;
     }
 
-    /// Re-applies the current notch/audio filter chain by restarting
-    /// capture on whatever source is active -- notches+gain apply in
-    /// every mode, hide included (mirrors broadcast-api's unconditional
-    /// a_filter). Called after any /api/notches write that changes what's
-    /// audible, so the change is heard immediately rather than waiting for
-    /// an unrelated restart. Sort doesn't call this -- order has no
-    /// audible effect.
+    /// Re-applies the current notch/audio filter chain by restarting the
+    /// independent audio leg alone -- notches+gain apply regardless of
+    /// picture mode (mirrors broadcast-api's unconditional a_filter), and
+    /// now that audio has its own process (audio_capture.rs), reloading
+    /// it never touches video. Called after any /api/notches write that
+    /// changes what's audible, so the change is heard immediately rather
+    /// than waiting for an unrelated restart. Sort doesn't call this --
+    /// order has no audible effect.
     pub async fn reload_audio(&self) {
-        self.restart_capture().await;
+        self.audio_capture.reload().await;
     }
 
     /// Three-state mic lamp for /api/pipeline -- "disabled" (dark, not a
@@ -301,24 +329,13 @@ impl Pipeline {
         let target = *self.target.lock().unwrap();
         let device = self.device.lock().unwrap().clone();
 
-        // (audio device name, -af chain) -- None when audio is off/absent,
-        // in which case every command below falls back to its original
-        // video-only shape (no regression for a node with no mic).
-        let audio_owned: Option<(String, String)> = self
-            .audio_device
-            .lock()
-            .unwrap()
-            .clone()
-            .map(|d| (d, self.state.notches.build_af_chain(&self.state.audio)));
-        let audio = audio_owned.as_ref().map(|(d, f)| (d.as_str(), f.as_str()));
-
         let cmd = match target {
-            Source::Show => capture_command(&self.ffmpeg, &device, audio),
+            Source::Show => capture_command(&self.ffmpeg, &device),
             Source::Cloak => {
                 let bw = *self.state.bw_mode.lock().unwrap();
-                cloak_command(&self.ffmpeg, &device, bw, audio)
+                cloak_command(&self.ffmpeg, &device, bw)
             }
-            Source::Hidden => hide_command(&self.ffmpeg, audio),
+            Source::Hidden => hide_command(&self.ffmpeg),
         };
         match spawn(cmd) {
             Ok(child) => {
@@ -345,7 +362,10 @@ fn spawn_mediamtx_supervisor(p: Arc<Pipeline>) {
         // plus-appended-paths-block file. mediamtx fills in every omitted
         // key from its own built-in defaults, so there's no doc-sized file
         // to keep in sync with the binary version.
-        let _ = std::fs::write(&config_path, "paths:\n  cam:\n  all_others:\n");
+        let _ = std::fs::write(
+            &config_path,
+            "paths:\n  cam:\n  camvideo:\n  micaudio:\n  all_others:\n",
+        );
 
         while p.running.load(Ordering::Relaxed) {
             if !p.enabled.load(Ordering::Relaxed) {
@@ -504,7 +524,7 @@ async fn fetch_media_playlist_body() -> Option<String> {
         .lines()
         .rev()
         .find(|l| !l.is_empty() && !l.starts_with('#'))?;
-    http_get_local(&format!("/cam/{media_path}")).await
+    http_get_local(&format!("/camvideo/{media_path}")).await
 }
 
 async fn http_get_local(path: &str) -> Option<String> {
@@ -547,18 +567,10 @@ async fn http_get_local(path: &str) -> Option<String> {
 /// even by construction.
 pub const CAPTURE_FPS: u32 = 15;
 
-/// AAC encode parameters -- matches broadcast-api's _audio_conf defaults
-/// (AUDIO_BITRATE=96k, AUDIO_SAMPLE_RATE=48000, AUDIO_CHANNELS=2) exactly,
-/// so a room sounds the same bitrate/rate/channel-count regardless of
-/// which node published it.
-const AUDIO_BITRATE: &str = "96k";
-const AUDIO_SAMPLE_RATE: &str = "48000";
-const AUDIO_CHANNELS: &str = "2";
-
-fn capture_command(ffmpeg: &PathBuf, device_name: &str, audio: Option<(&str, &str)>) -> Command {
+fn capture_command(ffmpeg: &PathBuf, device_name: &str) -> Command {
     // Show: the real camera, unaltered beyond the fps/pixfmt normalisation
     // every source shares.
-    dshow_capture(ffmpeg, device_name, &format!("fps={CAPTURE_FPS},format=yuv420p"), audio)
+    dshow_capture(ffmpeg, device_name, &format!("fps={CAPTURE_FPS},format=yuv420p"))
 }
 
 /// Blur/"cloak" (run 6): the SAME real dshow capture as Show, but with an
@@ -574,13 +586,13 @@ fn capture_command(ffmpeg: &PathBuf, device_name: &str, audio: Option<(&str, &st
 /// shape Show and Hide already use. `boxblur=20:2` = radius-20, 2-pass
 /// (≈gaussian) heavy blur. The B&W modifier appends `hue=s=0`
 /// (full desaturation) before the pixfmt convert.
-fn cloak_command(ffmpeg: &PathBuf, device_name: &str, bw: bool, audio: Option<(&str, &str)>) -> Command {
+fn cloak_command(ffmpeg: &PathBuf, device_name: &str, bw: bool) -> Command {
     let vf = if bw {
         format!("fps={CAPTURE_FPS},boxblur=20:2,hue=s=0,format=yuv420p")
     } else {
         format!("fps={CAPTURE_FPS},boxblur=20:2,format=yuv420p")
     };
-    dshow_capture(ffmpeg, device_name, &vf, audio)
+    dshow_capture(ffmpeg, device_name, &vf)
 }
 
 /// Shared dshow-capture command shape (input side + x264 output side);
@@ -588,17 +600,12 @@ fn cloak_command(ffmpeg: &PathBuf, device_name: &str, bw: bool, audio: Option<(&
 /// params are anchored on broadcast-api's _writer_loop -- see the module
 /// history; unchanged from run 2.
 ///
-/// Audio, when present, rides the SAME dshow input as video
-/// (`video=X:audio=Y`, ffmpeg's own combined-capture syntax) rather than a
-/// second `-i` -- one process, one input, video and audio inherently in
-/// sync, same shape broadcast-api's single ffmpeg process already uses on
-/// Linux (camera + ALSA device, one -af chain, one rtsp push).
-fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str, audio: Option<(&str, &str)>) -> Command {
+/// Video-only, publishing to `camvideo` -- audio is a fully separate
+/// process now (audio_capture.rs). See this module's header comment for
+/// why: a combined dshow line meant an audio-side problem could stall or
+/// crash this whole process, taking video down with it too.
+fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str) -> Command {
     let mut cmd = Command::new(ffmpeg);
-    let input = match audio {
-        Some((adev, _)) => format!("video={device_name}:audio={adev}"),
-        None => format!("video={device_name}"),
-    };
     cmd.args([
         "-hide_banner",
         "-loglevel",
@@ -613,7 +620,7 @@ fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str, audio: Option<(&
         "30",
         "-i",
     ])
-    .arg(input)
+    .arg(format!("video={device_name}"))
     .args([
         "-c:v",
         "libx264",
@@ -632,9 +639,6 @@ fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str, audio: Option<(&
         "-g",
         "60",
     ]);
-    if let Some((_, af)) = audio {
-        cmd.args(["-af", af, "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE, "-ac", AUDIO_CHANNELS]);
-    }
     cmd.args(["-rtsp_transport", "tcp", "-f", "rtsp", RTSP_URL]);
     cmd
 }
@@ -657,13 +661,14 @@ fn dshow_capture(ffmpeg: &PathBuf, device_name: &str, vf: &str, audio: Option<(&
 /// this is the actual fix, not a cosmetic one. Flagged here because it's
 /// a divergence from "port verbatim" instructions, not because the
 /// change itself is in doubt.
-/// Video source here is synthetic (`lavfi`), so audio -- when present --
-/// rides a SECOND, genuinely separate dshow input rather than the combined
-/// `video=X:audio=Y` syntax `dshow_capture` uses; explicit `-map` picks
-/// video off input 0 and audio off input 1. Real mic audio still plays
-/// under Hide (broadcast-api: "notches+gain apply in every mode, hide
-/// included") -- Hide switches off the PICTURE, not the room.
-fn hide_command(ffmpeg: &PathBuf, audio: Option<(&str, &str)>) -> Command {
+/// Video-only, publishing to `camvideo`, same as capture_command/
+/// cloak_command -- audio (when present) runs entirely separately now
+/// (audio_capture.rs) and keeps playing under Hide regardless of what
+/// this process does (broadcast-api's rule still holds: "notches+gain
+/// apply in every mode, hide included" -- Hide switches off the PICTURE,
+/// not the room; it just no longer does so by carrying a second dshow
+/// input in the same process).
+fn hide_command(ffmpeg: &PathBuf) -> Command {
     let mut cmd = Command::new(ffmpeg);
     cmd.args([
         "-hide_banner",
@@ -675,9 +680,6 @@ fn hide_command(ffmpeg: &PathBuf, audio: Option<(&str, &str)>) -> Command {
         "-i",
         "color=black:s=1280x720:r=30",
     ]);
-    if let Some((adev, _)) = audio {
-        cmd.args(["-f", "dshow", "-i"]).arg(format!("audio={adev}"));
-    }
     cmd.args([
         "-c:v",
         "libx264",
@@ -696,12 +698,6 @@ fn hide_command(ffmpeg: &PathBuf, audio: Option<(&str, &str)>) -> Command {
         "-g",
         "60",
     ]);
-    if let Some((_, af)) = audio {
-        cmd.args([
-            "-map", "0:v", "-map", "1:a", "-af", af, "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", AUDIO_SAMPLE_RATE,
-            "-ac", AUDIO_CHANNELS,
-        ]);
-    }
     cmd.args(["-rtsp_transport", "tcp", "-f", "rtsp", RTSP_URL]);
     cmd
 }

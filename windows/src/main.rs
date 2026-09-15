@@ -37,14 +37,18 @@
 mod assets;
 mod audio_settings;
 mod autostart;
+mod audio_capture;
 mod binaries;
+mod cam_mux;
 mod cams;
 mod cv;
 mod diskhealth;
 mod gui;
 mod metrics;
 mod notches;
+mod mic_watchdog;
 mod pipeline;
+mod roomaudio;
 mod routes;
 mod state;
 mod talk;
@@ -105,6 +109,13 @@ fn main() {
     let ffmpeg_for_talk = ffmpeg.clone();
     // CV Mode pipes its render into ffmpeg to publish /cv (see cv.rs).
     let ffmpeg_for_cv = ffmpeg.clone();
+    // Two-way's WHEP inbound leg needs Opus, not /cam's AAC (see
+    // roomaudio.rs); this republishes /cam's audio for that leg alone.
+    let ffmpeg_for_roomaudio = ffmpeg.clone();
+    // This machine's mic array has a real, reproducible silent-drop fault
+    // (see mic_watchdog.rs) -- watches /cam's level and kicks the SST
+    // controller when it's convincingly stuck silent.
+    let ffmpeg_for_mic_watchdog = ffmpeg.clone();
 
     // Deferred egui-context handle for the preview tap's event-driven
     // repaint: the tap thread starts here (server thread) before eframe
@@ -126,6 +137,11 @@ fn main() {
             // Optional by construction -- returns a dark Cv rather than
             // failing if Python or the model is absent (see cv.rs).
             let cv = cv::Cv::start(state.dir().to_path_buf(), state.clone(), ffmpeg_for_cv);
+            roomaudio::spawn_supervisor(ffmpeg_for_roomaudio);
+            // Disabled 2026-09-11 per ron -- ran, but the PnP-cycle-based
+            // recovery didn't hold (see mic_watchdog.rs); pending code
+            // audit Monday before re-enabling or redesigning.
+            // mic_watchdog::spawn_supervisor(ffmpeg_for_mic_watchdog);
 
             let handle = tokio::runtime::Handle::current();
             if tx
